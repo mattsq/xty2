@@ -112,8 +112,12 @@ Every objective declares which rows it is entitled to:
 Rows = Literal["all", "t_observed", "t_missing", "y_observed"]
 ```
 
-The engine computes each index set once per batch and hands the objective only
-the eligible rows.
+The engine computes each index set once per batch and passes it to the
+objective as an explicit `RowIndex` (§4). It does **not** hand over a pre-sliced
+batch: `state` holds full-batch `[B, ...]` quantities, some of them distribution
+objects that are not generally sliceable, so pre-slicing the batch alone would
+silently misalign predictions against rows. Batch and state share one batch
+axis and one index.
 
 **Zero-eligible-row rule.** An objective with no eligible rows in a batch
 returns `LossTerm(value=0.0, n=0)` — never `NaN`, never a mean over an empty
@@ -131,7 +135,6 @@ Components exchange **named statistical quantities**, not architectures:
 class Port(str, Enum):
     # Raw inputs, supplied by the virtual source node (§2.2)
     X_RAW           = "x"
-    T_RAW           = "t"
     Y_RAW           = "y"
     # Computed quantities
     X_REPR          = "x_repr"
@@ -152,7 +155,6 @@ compile time and asserted in tests:
 | Port | Type | Contract |
 |---|---|---|
 | `X_RAW` | `Tensor` | `[B, D]`, as `batch.x` |
-| `T_RAW` | `Tensor` | `[B]` long, **valid only where `t_observed`** |
 | `Y_RAW` | `Tensor` | `[B, *Dy]`, as `batch.y` |
 | `X_REPR` | `Tensor` | `[B, H]` |
 | `T_GIVEN_X` | `TreatmentDistribution` | `probs: [B, K]`, rows sum to 1 |
@@ -169,9 +171,8 @@ an implementation detail** — it requires a second real consumer (§11).
 A component that reads `batch.x` directly cannot be checked: `requires` would
 name no dependency, the compiler could not order it, and the "reads only what it
 declares" rule would be an unenforceable claim. So the batch is not handed to
-components at all. A **virtual source node** provides `X_RAW`, `T_RAW` and
-`Y_RAW` from the batch, and every component declares them like any other
-dependency:
+components at all. A **virtual source node** provides `X_RAW` and `Y_RAW` from
+the batch, and every component declares them like any other dependency:
 
 - `mlp_encoder`: `{X_RAW}` → `{X_REPR}`
 - `xy_posterior`: `{X_RAW, Y_RAW}` → `{T_GIVEN_XY}`
@@ -188,12 +189,34 @@ members:
    transitive closure of the producing subgraph — instead of a boolean somebody
    remembered to set correctly (§7.2).
 
-`T_RAW` carries the mask discipline of §1.1: a component requiring it also
-receives `t_observed` on the source node and reading `t` where the mask is false
-is a bug. Objectives, by contrast, still receive the batch directly (§4) — a
-loss is by definition a function of data and predictions, and the row-population
-machinery already governs which rows it sees. The static guarantee is wanted on
-the *model graph*, which is what the leakage rule reasons about.
+**There is no `T_RAW` port**, and this is deliberate. No v1 component consumes
+the observed treatment: outcome heads receive candidate `t` through
+`log_prob(y, t)` (§3.1) rather than from the batch, the energy head emits one
+value per treatment, and propensity and posterior heads take representations and
+`Y_RAW`. A raw treatment port would therefore be a port with no consumer, which
+the two-consumer rule (§11) already forbids.
+
+It would also be the one port that cannot be typed honestly as a tensor. `t` is
+only valid where `t_observed` (§1.1), and a bare `Tensor` port carries no way to
+say so — a component could read arbitrary class indices on missing rows and
+nothing in the API or the compiler could stop it. If a future component genuinely
+needs the observed treatment, it arrives as a **masked type**, not a bare
+tensor:
+
+```python
+@dataclass(frozen=True)
+class MaskedTreatment:
+    def where_observed(self, fill: int) -> Tensor: ...
+    def observed_rows(self) -> Tensor: ...        # [n] indices
+    # no attribute returns raw values without the mask applied
+```
+
+so that the mask is impossible to drop rather than merely required. Adding it
+means adding the port, its `PortSpec` and its invariants together.
+
+Objectives, by contrast, still receive the batch directly (§4), because a loss
+is by definition a function of data and predictions. The static guarantee is
+wanted on the *model graph*, which is what the leakage rule reasons about.
 
 ### 2.1 Realisations: the same port under different conditions
 
@@ -290,6 +313,23 @@ implementation shipped in P1 that every outcome head is tested against.
 | `[B, *Dy]` | `[B]` | `[B]` | `out[i] = log p(y_i \| x_i, t_i)` |
 | `[B, *Dy]` | `[B, K]` | `[B, K]` | `out[i, k] = log p(y_i \| x_i, t[i, k])` |
 
+`mean` and `sample` take the same `t`, and need the same contract — the
+estimator and evaluation layers compute CATE from treatment-wise means, so a
+head that satisfies only the `log_prob` test can still return an ambiguously
+broadcast mean and corrupt every causal metric downstream:
+
+| method | `t` | returns |
+|---|---|---|
+| `mean(t)` | `[B]` | `[B, *Dy]` |
+| `mean(t)` | `[B, K]` | `[B, K, *Dy]` |
+| `sample(t, n)` | `[B]` | `[n, B, *Dy]` |
+| `sample(t, n)` | `[B, K]` | `[n, B, K, *Dy]` |
+
+The candidate axis is inserted **immediately after the batch axis**, and the
+sample axis leads. All three methods are covered by the Tier 0 conformance
+test: exact column agreement for `log_prob` and `mean`, and shape plus
+seed-determinism for `sample`.
+
 Two rules make this implementable:
 
 1. **`y` is passed unexpanded, always.** The caller never reshapes `y`; the head
@@ -312,12 +352,15 @@ categorical context to the flow, never a dimension inside the flow.**
 ## 4. Objectives: losses as independent objects
 
 ```python
+RowIndex = Tensor          # [n] long, indices into the shared batch axis
+
 class Objective(Protocol):
     name: str
     requires: frozenset[tuple[Port, Realisation]]
     rows: Rows
 
-    def compute(self, state: State, batch: XTYBatch, ctx: TrainContext) -> LossTerm: ...
+    def compute(self, state: State, batch: XTYBatch,
+                rows: RowIndex, ctx: TrainContext) -> LossTerm: ...
 
 @dataclass(frozen=True)
 class LossTerm:
@@ -333,12 +376,16 @@ Rules:
   logged raw value incomparable across runs.
 - An objective never calls `.backward()`, never mutates state, never touches
   parameters directly.
-- The reduction convention is **mean over eligible rows**, matching how papers
-  state their losses. The mixer offers `population_weighted=True` to instead
-  weight by `n / B`. Which one a recipe uses is a spec-card field (§4 of the
-  card), because this choice silently changes the effective weight of any
-  objective whose row population varies across batches — a classic
-  reimplementation discrepancy.
+- **`rows` is the eligible set, and the objective must gather by it.** `state`
+  and `batch` are both full-batch and share one batch axis, so the same `rows`
+  indexes both and alignment is automatic. `n == rows.numel()`. Reading
+  `batch.t` at ineligible positions is a bug of the same kind as reading it
+  where `t_observed` is false (§1.1); it is the objective's row declaration that
+  makes such a read meaningless, not the type.
+- The reduction convention is **mean over `rows`**, matching how papers state
+  their losses. Papers that sum, or that average over the whole batch, are
+  expressed by the mixer's reduction mode (§6.1) rather than by a different
+  objective, and which one a recipe uses is a required card field.
 
 ### 4.1 The objective that motivates the whole design
 
@@ -522,20 +569,42 @@ is **verifiable rather than declarative** — a label saying `out_of_fold` is
 worth nothing if nothing can check it:
 
 ```python
-PseudoLabels(
-    source_stage="joint_xty",
-    source_checkpoints={0: "ckpt_fold0", 1: "ckpt_fold1", ...},
-    used_y=True,                  # DERIVED from the graph, not set by hand (§2.2)
-    prediction_mode="out_of_fold",
-    predicted_by_fold=Tensor,     # [N] which fold's model produced each row
-    row_id=Tensor,                # [N] the rows predicted
-)
+@dataclass(frozen=True)
+class Checkpoint:
+    stage: str
+    fold: int | None
+    trained_on_row_ids: Tensor        # [M] exactly the rows this fit saw
 
-Checkpoint(
-    stage="joint_xty", fold=0,
-    trained_on_row_ids=Tensor,    # [M] exactly the rows this fit saw
-)
+@dataclass(frozen=True)
+class PseudoLabels:
+    source_stage: str
+    source_checkpoints: Mapping[int, Checkpoint]
+    predicted_by_fold: Tensor         # [N] which checkpoint produced each row
+    row_id: Tensor                    # [N] the rows predicted
+    labels: Tensor
+
+    # NOT constructor arguments — computed from the fields above
+    @property
+    def used_y(self) -> bool: ...            # Y_RAW reachability, from the plan
+    @property
+    def prediction_mode(self) -> str: ...    # from actual fold disjointness
 ```
+
+**The provenance fields are properties, not parameters.** An earlier draft of
+this section showed them as ordinary keyword arguments while the surrounding
+text called them derived facts, which would have let a producer write
+`used_y=False` on an outcome-dependent artifact, or claim `out_of_fold` without
+ever being checked — a guardrail that any caller can talk its way past is not a
+guardrail. Artifacts are therefore constructed only by executor factories:
+
+```python
+labels = cross_fit.emit_pseudo_labels(plan, checkpoints, predictions)
+```
+
+The factory takes the compiled plan, so `used_y` comes from graph reachability
+(§2.2); it takes the checkpoints, so `prediction_mode` is computed from the
+actual row sets and `out_of_fold` is *earned* by passing the disjointness check
+below rather than asserted. A direct constructor call is a type error.
 
 Two fields do the work. Each checkpoint records the row ids it was **fit on**;
 each prediction records **which checkpoint produced it**. `out_of_fold` is then
@@ -647,6 +716,48 @@ is the primary anti-drift rule for implementation agents.
 
 Recipes are Python functions. A thin dict/YAML loader exists for sweeps and is a
 shallow layer over the Python API, not a parallel surface.
+
+### 9.1 Canonical hyperparameter binding
+
+A recipe is arbitrary Python, so "CI checks the recipe sets every hyperparameter
+the card names" (`FIDELITY.md` §1.2) needs something to compare *against*. A
+card path on the `Recipe` is not enough: nothing maps `teacher.ema_decay` to a
+value, and nothing distinguishes a value the recipe set from one it inherited.
+Three pieces make it checkable.
+
+**1. The card key vocabulary is closed.** The keys in `FIDELITY.md` §2 are the
+whole namespace. Adding a key is a framework change, not a per-card decision, so
+cards cannot drift apart from each other or from the code.
+
+**2. Paper-governed fields bind to a canonical key and have no usable default.**
+
+```python
+@dataclass
+class EMATeacher(Component):
+    decay: float = REQUIRED       # sentinel: constructing without it raises
+    CARD_KEYS = {"decay": "teacher.ema_decay"}
+```
+
+The `REQUIRED` sentinel is what removes the "explicit or inherited?" ambiguity —
+not by tracking provenance, but by making inheritance impossible. Fields the
+paper does not govern keep ordinary defaults and no binding.
+
+**3. `compile()` emits the resolved values as flat data.**
+
+```python
+plan.hyperparameters: dict[str, Any]     # {"teacher.ema_decay": 0.999, ...}
+```
+
+CI then asserts that every card §4 key not marked `n/a` appears in
+`plan.hyperparameters` with a non-null value. The same flat dict is what makes
+the printed plan diffable against the card by eye.
+
+**What this does not do.** It checks *presence*, never *correctness*: CI can
+prove the recipe sets `teacher.ema_decay`, and cannot prove 0.999 is the number
+in the paper. Only the card review does that. The mechanism stops silent
+omission — the looptab failure — and nothing more; treating a green cross-check
+as evidence of fidelity would be exactly the over-trust this document exists to
+prevent.
 
 ---
 

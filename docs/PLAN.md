@@ -34,8 +34,11 @@ passes on an empty package.
 **Goal:** `XTYBatch`, `Schema`, `FeatureSpec`, `Port`, `PortSpec`, distribution
 protocols, row-population resolution.
 **Also ships:** an **executable reference implementation** of the
-candidate-treatment contract (`DESIGN.md` §3.1) — a trivial Gaussian head plus
-the conformance test every outcome head is later run against. Three separate
+candidate-treatment contract (`DESIGN.md` §3.1) covering `log_prob`, `mean` and
+`sample` — a trivial Gaussian head plus the conformance test every outcome head
+is later run against. `mean` matters as much as `log_prob`: CATE is computed
+from treatment-wise means, so a head that passes only the `log_prob` test can
+still corrupt every Tier 2 causal metric. Three separate
 attempts to state this contract in prose were wrong; it stops being a prose
 claim here.
 **Accept:** Tier 0 tests for mask semantics (no sentinels reachable), row
@@ -47,8 +50,11 @@ is acyclic and complete).
 
 ### P2 · Component protocol, graph, compiler
 **Goal:** `Component` (an `nn.Module` base class, per `DESIGN.md` §3),
-`ComponentGraph`, the virtual source node supplying `X_RAW`/`T_RAW`/`Y_RAW`,
-`Realisation`, `State`, `compile()`, and the printable execution plan.
+`ComponentGraph`, the virtual source node supplying `X_RAW` and `Y_RAW`,
+`Realisation`, `State`, `compile()`, the printable execution plan, and
+`plan.hyperparameters` — the flat canonical-key dict the card cross-check
+compares against (`DESIGN.md` §9.1), with `REQUIRED` sentinels on paper-governed
+fields.
 **Accept:** compile-time rejections all raise with actionable messages —
 unsatisfied port, unsatisfied realisation, unknown trainable name, dead trainable
 component, empty `Stage.rows ∩ Objective.rows`. `PortView` raises on undeclared
@@ -96,7 +102,10 @@ implement: `mlp_encoder`, `tarnet_head`, `categorical_propensity`, single stage.
 **Proves:** ports, outcome head, propensity, exact marginalisation, the whole
 Phase-A stack end to end.
 **Accept:** card at `smoke-passing`; Tier 1 assertions in `FIDELITY.md` §3 pass,
-including *marginalisation beats complete-case at 50% missing t*; Tier 2 queued.
+including *marginalisation beats complete-case at 50% missing t*; the card §4 ↔
+`plan.hyperparameters` cross-check runs and **fails when a card key is deleted
+from the recipe** — a cross-check that has never been seen to fail is not known
+to work; Tier 2 queued.
 **Watch for:** this is the first time the card→plan diff is exercised. If the
 diff is not genuinely informative, fix the plan printer now, not later.
 

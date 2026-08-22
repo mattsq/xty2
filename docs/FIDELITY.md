@@ -66,11 +66,17 @@ against it is explicitly unvalidated, and the registry says so at import time.
 
 Documentation rots because nothing checks it. Two mechanisms stop that:
 
-- **Checklist/recipe cross-check (CI, Tier 0).** Section 4 is YAML with stable
-  keys. A test parses every card and asserts that the recipe passes an explicit
-  value for every key the card names. A hyperparameter the paper governs may not
-  fall through to a framework default — if the card says the EMA decay is 0.999,
-  the recipe must set it, not inherit it.
+- **Checklist/recipe cross-check (CI, Tier 0).** Section 4 is YAML drawn from a
+  **closed** key vocabulary (§2), and each paper-governed field binds to one of
+  those keys and is declared `REQUIRED`, so it cannot fall through to a
+  framework default. `compile()` emits `plan.hyperparameters` as a flat
+  `{canonical_key: value}` dict, and the test asserts every card key not marked
+  `n/a` is present in it with a non-null value. The mechanics are in
+  `DESIGN.md` §9.1.
+  This checks **presence, not correctness** — it proves the recipe sets
+  `teacher.ema_decay`, never that 0.999 is the paper's number. Card review is
+  the only thing that establishes the latter, and a green cross-check must not
+  be read as fidelity.
 - **Plan diff (review).** `compile(recipe)` prints an execution plan
   (`DESIGN.md` §8). A reviewer diffs that plan against the card's §3 mapping
   table and §4 checklist. Objectives present in one and not the other are
