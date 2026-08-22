@@ -147,8 +147,15 @@ and apply to everything.
 
 - **Exact marginalisation** equals a brute-force loop over `k` in `range(K)`, to
   float tolerance.
-- **`log_prob` broadcast contract**: for every registered outcome head,
-  `log_prob(y, t[:, None].expand(B, K))[:, k] == log_prob(y, full(B, k))`.
+- **`log_prob` broadcast contract**: `log_prob` is elementwise in `t`, so for
+  any candidate matrix `M: [B, K]`, `log_prob(y, M)[:, k] == log_prob(y, M[:, k])`.
+  Build `M` from **candidate** treatments — `arange(K)[None, :].expand(B, K)` —
+  so column `k` is treatment `k` and the assertion becomes
+  `log_prob(y, M)[:, k] == log_prob(y, full(B, k))`, which is exactly the call
+  `MissingTreatmentMarginalNLL` makes.
+  Do *not* build `M` from the observed `t` (`t[:, None].expand(B, K)`): that
+  repeats `t_i` across every column, so the assertion would demand
+  treatment-insensitivity and fail every correct head.
 - **Normalisation**: `T_GIVEN_X.probs` rows sum to 1; `log_prob` agrees with
   `log(probs)`.
 - **Trainable isolation**: after `backward()` in a stage, parameters outside

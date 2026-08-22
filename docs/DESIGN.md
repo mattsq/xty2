@@ -209,8 +209,10 @@ class TreatmentDistribution(Protocol):
 
 **The broadcast contract is the load-bearing detail.** `Y_GIVEN_XT.log_prob`
 must accept `t` of shape `[B]` (→ returns `[B]`) *or* `[B, K]` (→ returns
-`[B, K]`, one column per candidate treatment). Every outcome head must satisfy
-this, and it is a Tier 0 test.
+`[B, K]`), and it is **elementwise in `t`**: `out[i, k] = log_prob(y_i, t[i, k])`.
+A caller wanting all candidates passes `arange(K)` broadcast across the batch;
+the port makes no assumption about what the caller put in `t`. Every outcome
+head must satisfy this, and it is a Tier 0 test.
 
 That single contract is what lets `MissingTreatmentMarginalNLL` (§4.1) work
 unchanged across a TARNet head, a Gaussian density head, a conditional flow and

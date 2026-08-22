@@ -42,18 +42,29 @@ populations, zero-eligible-row behaviour, and every `PortSpec` shape contract.
 printable execution plan.
 **Accept:** compile-time rejections all raise with actionable messages —
 unsatisfied port, unsatisfied realisation, unknown trainable name, dead trainable
-component, derived-column violation. `PortView` raises on undeclared reads. Plan
-printing is snapshot-tested.
-**Not in scope:** leakage rules (P10), views (P6), any real component.
+component. `PortView` raises on undeclared reads. Plan printing is
+snapshot-tested.
+**Not in scope:** leakage rules (P10), views (P6), any real component, and the
+derived-column rule — it can only be violated by a transform, so it has no
+expressible test surface until P6 owns it.
 
 ### P3 · Objectives, mixer, schedules, logging
 **Goal:** `Objective`, `LossTerm`, `LossMixer`, `Constant`/`Ramp`/`Step`, the
-§6.1 logging surface, and three objectives: `ObservedOutcomeNLL`,
+full §6.1 logging surface — including per-objective gradient norms and pairwise
+gradient cosines — and three objectives: `ObservedOutcomeNLL`,
 `ObservedTreatmentNLL`, `MissingTreatmentMarginalNLL`.
 **Accept:** exact marginalisation equals brute force over `k`; the broadcast
 contract test passes for a trivial Gaussian head; unweighted values and `n` are
-logged per objective; a zero-`n` term never reaches the total.
-**Not in scope:** consistency losses, gradient-cosine logging (seam only).
+logged per objective; a zero-`n` term never reaches the total; gradient cosines
+are verified against constructed objectives with analytically identical (≈ +1)
+and analytically opposed (≈ −1) gradients, and are off by default and off in CI.
+**Not in scope:** consistency losses (P6).
+
+> Gradient cosines land here, not at P9, for two reasons: they are mixer
+> machinery and belong beside the mixer, and `tarnet` (P5) already mixes three
+> objectives with a ramp, so objective conflict is observable two packets before
+> Mean Teacher needs it. Deterministic construction also makes them testable
+> here, which "turn it on and look at a run" never was.
 
 ### P4 · Gradient executor and artifacts
 **Goal:** single-stage `gradient` executor, training loop, run directory,
@@ -114,7 +125,8 @@ freezing by component name works.
 ### P9 · Recipe 3 — `mean_teacher` ★
 **Card first.** **Proves:** views + teacher realisation + multi-objective mixing
 + ramp schedules, together.
-**Accept:** gradient-cosine logging turned on for one run and inspected; ramp
+**Accept:** gradient-cosine logging (implemented in P3) enabled for one run,
+with the resulting objective-conflict trace recorded in the PR body; ramp
 lengths come from the card, not from a default; Tier 1 catches a deliberately
 mis-scheduled consistency weight (write that as a mutation test).
 
