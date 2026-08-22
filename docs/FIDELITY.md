@@ -98,7 +98,7 @@ teacher:
   teacher_requires_grad:  # must be false; asserted in Tier 0
 
 losses:
-  reduction:             # mean over eligible rows | sum | population-weighted
+  reduction:             # mean | sum | population — see DESIGN.md §6.1
   eligible_rows:         # per objective
   weights:               # per objective, with units
   schedules:             # ramp start/end/length, in steps or epochs — state which
@@ -147,15 +147,27 @@ and apply to everything.
 
 - **Exact marginalisation** equals a brute-force loop over `k` in `range(K)`, to
   float tolerance.
-- **`log_prob` broadcast contract**: `log_prob` is elementwise in `t`, so for
-  any candidate matrix `M: [B, K]`, `log_prob(y, M)[:, k] == log_prob(y, M[:, k])`.
-  Build `M` from **candidate** treatments — `arange(K)[None, :].expand(B, K)` —
-  so column `k` is treatment `k` and the assertion becomes
-  `log_prob(y, M)[:, k] == log_prob(y, full(B, k))`, which is exactly the call
-  `MissingTreatmentMarginalNLL` makes.
-  Do *not* build `M` from the observed `t` (`t[:, None].expand(B, K)`): that
-  repeats `t_i` across every column, so the assertion would demand
-  treatment-insensitivity and fail every correct head.
+- **Candidate-treatment contract** (`DESIGN.md` §3.1). `y` is passed
+  **unexpanded** in both calls; the head inserts the candidate axis. With
+  `M = arange(K)[None, :].expand(B, K)`:
+
+  ```python
+  out = head.log_prob(y, M)                 # [B, K]
+  assert out.shape == (B, K)
+  for k in range(K):
+      assert allclose(out[:, k], head.log_prob(y, full((B,), k)))   # [B]
+  ```
+
+  Run it with `B != K` — a test where `B == K` passes under accidental
+  broadcasting and proves nothing. Two ways to get this wrong, both of which
+  were written into earlier drafts of this document and are worth stating so
+  they are not rediscovered:
+  - building `M` from the observed `t` (`t[:, None].expand(B, K)`) repeats
+    `t_i` across every column, so the assertion demands treatment-insensitivity
+    and fails every correct head;
+  - expanding `y` at the call site and relying on ambient broadcasting —
+    `y: [B]` against `t: [B, K]` aligns `B` against `K` and raises for ordinary
+    batch sizes. Expansion is the head's job, per the contract.
 - **Normalisation**: `T_GIVEN_X.probs` rows sum to 1; `log_prob` agrees with
   `log(probs)`.
 - **Trainable isolation**: after `backward()` in a stage, parameters outside
@@ -166,6 +178,16 @@ and apply to everything.
   `value=0.0, n=0`, and no `NaN` reaches the total.
 - **View preservation**: a view declaring `preserves={"t","y"}` leaves `t` and
   `y` bit-identical; `mutable=False` columns are untouched; `bounds` hold.
+- **Batch immutability**: clone every input batch, run each registered
+  transform, assert the original is bit-identical afterwards. `frozen=True` does
+  not cover in-place writes to tensor leaves (`DESIGN.md` §1.1).
+- **Row-scope composition**: `Stage.rows ∩ Objective.rows` is computed as
+  specified in `DESIGN.md` §7.0, and a pairing empty by construction is a
+  compile error rather than a permanent `n = 0`.
+- **Fold disjointness**: for an `out_of_fold` artifact, every predicted row is
+  absent from `trained_on_row_ids` of the checkpoint that produced it
+  (`DESIGN.md` §7.1). This is run against real artifacts, not mocked
+  provenance — the point is that the label is checked, not trusted.
 - **Determinism**: same seed → identical loss trace to float tolerance.
 - **Port shape contracts**: every component's output matches its `PortSpec`.
 - **Compile-time rejections**: missing port, unknown trainable name, unsatisfied
@@ -190,7 +212,7 @@ Assertions are coarse and directional, chosen to be robust to seed noise:
 
 The last one is the load-bearing assertion: it fails if the marginalisation term
 is scheduled to zero, is masked to an empty row set, or is detached — the exact
-class of silent death that motivated the mixer logging in `DESIGN.md` §6.1.
+class of silent death that motivated the mixer logging in `DESIGN.md` §6.2.
 
 ### Tier 2 — published-number reproduction (nightly, per recipe)
 

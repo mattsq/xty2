@@ -5,7 +5,8 @@
 
 ## Shape of the plan
 
-Twelve work packets, each sized for a single focused session, each with explicit
+Thirteen work packets, P0 through P12 — five in Phase A, three in Phase B, four
+in Phase C, one in Phase D — each sized for a single focused session, each with explicit
 acceptance criteria and an explicit out-of-scope list. Packets are ordered so
 that **every second or third packet is a real recipe**, not more framework. The
 framework is only ever built to the depth the next recipe demands.
@@ -32,17 +33,28 @@ passes on an empty package.
 ### P1 · Core data types
 **Goal:** `XTYBatch`, `Schema`, `FeatureSpec`, `Port`, `PortSpec`, distribution
 protocols, row-population resolution.
+**Also ships:** an **executable reference implementation** of the
+candidate-treatment contract (`DESIGN.md` §3.1) — a trivial Gaussian head plus
+the conformance test every outcome head is later run against. Three separate
+attempts to state this contract in prose were wrong; it stops being a prose
+claim here.
 **Accept:** Tier 0 tests for mask semantics (no sentinels reachable), row
-populations, zero-eligible-row behaviour, and every `PortSpec` shape contract.
-`Schema` validates its own feature graph (`derived_from` is acyclic and complete).
+populations, zero-eligible-row behaviour, batch immutability under transforms,
+and every `PortSpec` shape contract. The candidate-treatment conformance test
+passes with `B != K`. `Schema` validates its own feature graph (`derived_from`
+is acyclic and complete).
 **Not in scope:** components, losses, anything that trains.
 
 ### P2 · Component protocol, graph, compiler
-**Goal:** `Component`, `ComponentGraph`, `Realisation`, `compile()`, and the
-printable execution plan.
+**Goal:** `Component` (an `nn.Module` base class, per `DESIGN.md` §3),
+`ComponentGraph`, the virtual source node supplying `X_RAW`/`T_RAW`/`Y_RAW`,
+`Realisation`, `State`, `compile()`, and the printable execution plan.
 **Accept:** compile-time rejections all raise with actionable messages —
 unsatisfied port, unsatisfied realisation, unknown trainable name, dead trainable
-component. `PortView` raises on undeclared reads. Plan printing is
+component, empty `Stage.rows ∩ Objective.rows`. `PortView` raises on undeclared
+reads, and components take no `XTYBatch` argument at all, so raw-input
+dependencies are declared or unavailable. The printed plan shows full data
+lineage including which components read `Y_RAW`. Plan printing is
 snapshot-tested.
 **Not in scope:** leakage rules (P10), views (P6), any real component, and the
 derived-column rule — it can only be violated by a transform, so it has no
@@ -50,7 +62,7 @@ expressible test surface until P6 owns it.
 
 ### P3 · Objectives, mixer, schedules, logging
 **Goal:** `Objective`, `LossTerm`, `LossMixer`, `Constant`/`Ramp`/`Step`, the
-full §6.1 logging surface — including per-objective gradient norms and pairwise
+full §6.2 logging surface — including per-objective gradient norms and pairwise
 gradient cosines — and three objectives: `ObservedOutcomeNLL`,
 `ObservedTreatmentNLL`, `MissingTreatmentMarginalNLL`.
 **Accept:** exact marginalisation equals brute force over `k`; the broadcast
@@ -131,12 +143,17 @@ lengths come from the card, not from a default; Tier 1 catches a deliberately
 mis-scheduled consistency weight (write that as a mutation test).
 
 ### P10 · Executors, cross-fitting, leakage rules
-**Goal:** `array_fit` and `cross_fit` executors, `PseudoLabels` artifact with
-provenance, and the `DESIGN.md` §7.2 compile-time leakage rejection.
-**Accept:** a program that pseudo-labels with `q(t|x,y)` in-sample and then fits
-`p(y|x,t)` on the same rows is **rejected**, and is accepted only under
-`purpose="predictive", allow_leakage=True`. Out-of-fold provenance is checked,
-not asserted.
+**Goal:** `array_fit` and `cross_fit` executors, `PseudoLabels` and `Checkpoint`
+artifacts carrying `trained_on_row_ids` / `predicted_by_fold`, and both halves of
+the `DESIGN.md` §7.2 guardrail.
+**Accept:** *Static* — a program that pseudo-labels with `q(t|x,y)` in-sample and
+then fits `p(y|x,t)` on intersecting rows is **rejected at compile time**, driven
+by `Y_RAW` reachability in the producing subgraph rather than a hand-set flag,
+and accepted only under `purpose="predictive"` with `allow_leakage=True` on the
+consuming stage. *Runtime* — loading an `out_of_fold` artifact executes the
+disjointness check of `DESIGN.md` §7.1 and **fails on a deliberately overlapping
+fold assignment**. That mutation test is the acceptance criterion; a provenance
+label that nothing can falsify is not "checked".
 
 ### P11 · Recipes 4 and 5 — `cycle_dual`, `ssdml` ★
 **Cards first.** `cycle_dual` exercises the posterior `q(t|x,y)`, staged

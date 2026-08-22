@@ -48,7 +48,7 @@ evidence would justify building it.
 ```python
 @dataclass(frozen=True)
 class XTYBatch:
-    x: Tensor                 # [B, D] or a dict for mixed types
+    x: Tensor                 # [B, D] float; mixed types encoded upstream
     t: Tensor                 # [B]  long, values in [0, K); arbitrary where unobserved
     y: Tensor                 # [B]  or [B, Dy]
     t_observed: Tensor        # [B]  bool
@@ -63,7 +63,20 @@ mask, never by `t == -1`. Sentinels leak into `nn.Embedding`, into `one_hot`,
 and into loss reductions, and every such leak is silent. Where `t_observed` is
 false, `t` holds an arbitrary valid class index and reading it is a bug.
 
-`XTYBatch` is frozen. Transforms produce new batches (see §5), they never mutate.
+**Rule: functional transforms.** `frozen=True` only prevents rebinding the
+dataclass fields — it does **not** make the tensor leaves read-only. An in-place
+write inside a transform would corrupt the source batch while still satisfying
+the type. Transforms are therefore required to be functional: they return a new
+`XTYBatch` and perform no in-place write on any tensor reachable from the input.
+This is enforced rather than trusted — a Tier 0 test clones every input batch,
+runs each registered transform, and asserts the original is bit-identical
+afterwards.
+
+**Rule: `x` is a single float tensor in v1.** Heterogeneous / mixed-type
+features are encoded upstream into `[B, D]`, which is what gives
+`RECONSTRUCTION` (§2) a well-defined shape and lets
+`MaskedFeatureReconstruction` have a portable output. A structured
+reconstruction contract is deferred until a recipe needs one (§11).
 
 ### 1.2 `Schema` and `FeatureSpec`
 
@@ -116,8 +129,12 @@ Components exchange **named statistical quantities**, not architectures:
 
 ```python
 class Port(str, Enum):
+    # Raw inputs, supplied by the virtual source node (§2.2)
+    X_RAW           = "x"
+    T_RAW           = "t"
+    Y_RAW           = "y"
+    # Computed quantities
     X_REPR          = "x_repr"
-    XY_REPR         = "xy_repr"
     Y_GIVEN_XT      = "p(y|x,t)"
     T_GIVEN_X       = "p(t|x)"
     T_GIVEN_XY      = "q(t|x,y)"
@@ -125,20 +142,58 @@ class Port(str, Enum):
     RECONSTRUCTION  = "reconstruction"
 ```
 
+`XY_REPR` appears in `SEED.md` but has no consumer among the five v1 recipes, so
+by the two-consumer rule (§11) it is not declared. A port with no `PortSpec` is
+a port the compiler cannot check.
+
 Each port has a `PortSpec` fixing its **type and shape contract**, checked at
 compile time and asserted in tests:
 
 | Port | Type | Contract |
 |---|---|---|
+| `X_RAW` | `Tensor` | `[B, D]`, as `batch.x` |
+| `T_RAW` | `Tensor` | `[B]` long, **valid only where `t_observed`** |
+| `Y_RAW` | `Tensor` | `[B, *Dy]`, as `batch.y` |
 | `X_REPR` | `Tensor` | `[B, H]` |
 | `T_GIVEN_X` | `TreatmentDistribution` | `probs: [B, K]`, rows sum to 1 |
 | `T_GIVEN_XY` | `TreatmentDistribution` | `probs: [B, K]` |
 | `Y_GIVEN_XT` | `OutcomeDistribution` | `log_prob(y, t)` broadcasts over t (§3.1) |
 | `JOINT_ENERGY` | `Tensor` | `[B, K]`, one energy per treatment value |
-| `RECONSTRUCTION` | `Tensor` | same shape as `x` |
+| `RECONSTRUCTION` | `Tensor` | `[B, D]`, matching `X_RAW` |
 
 Ports are the framework's vocabulary. **Adding a port is a design decision, not
 an implementation detail** — it requires a second real consumer (§11).
+
+### 2.2 Raw inputs are ports too
+
+A component that reads `batch.x` directly cannot be checked: `requires` would
+name no dependency, the compiler could not order it, and the "reads only what it
+declares" rule would be an unenforceable claim. So the batch is not handed to
+components at all. A **virtual source node** provides `X_RAW`, `T_RAW` and
+`Y_RAW` from the batch, and every component declares them like any other
+dependency:
+
+- `mlp_encoder`: `{X_RAW}` → `{X_REPR}`
+- `xy_posterior`: `{X_RAW, Y_RAW}` → `{T_GIVEN_XY}`
+
+Three things fall out of this, which is why it is worth the three extra enum
+members:
+
+1. **`requires` is the single dependency declaration.** One mechanism, one
+   compiler check, no second "declared batch fields" concept.
+2. **The execution plan shows full data lineage**, including which components
+   touch raw `y`.
+3. **`used_y` becomes derivable rather than declared.** Whether a pseudo-label
+   depends on the outcome is now a property of the graph — is `Y_RAW` in the
+   transitive closure of the producing subgraph — instead of a boolean somebody
+   remembered to set correctly (§7.2).
+
+`T_RAW` carries the mask discipline of §1.1: a component requiring it also
+receives `t_observed` on the source node and reading `t` where the mask is false
+is a bug. Objectives, by contrast, still receive the batch directly (§4) — a
+loss is by definition a function of data and predictions, and the row-population
+machinery already governs which rows it sees. The static guarantee is wanted on
+the *model graph*, which is what the leakage rule reasons about.
 
 ### 2.1 Realisations: the same port under different conditions
 
@@ -155,9 +210,19 @@ class Realisation:
 DEFAULT = Realisation()
 ```
 
-State is therefore `dict[Realisation, dict[Port, Any]]`, with `state.default`
-sugar for the common case. The compiler collects the set of realisations the
-objectives demand and plans exactly that many forward passes — no more.
+State is therefore keyed by realisation. It is a small wrapper, not a bare
+dict, because the default-realisation lookup is used constantly:
+
+```python
+class State:
+    def __getitem__(self, r: Realisation) -> Mapping[Port, Any]: ...
+    @property
+    def default(self) -> Mapping[Port, Any]:   # == self[DEFAULT]
+        ...
+```
+
+The compiler collects the set of realisations the objectives demand and plans
+exactly that many forward passes — no more.
 
 This is the one piece of machinery in v1 that exists for a model we have not
 written yet (Mean Teacher, P9). It is included because the alternative — letting
@@ -169,29 +234,34 @@ uncontrolled, untestable forward passes in the previous codebase.
 ## 3. Components: parameterisation only
 
 ```python
-class Component(Protocol):
+class Component(nn.Module):          # a base class, not a Protocol — see below
     name: str
     requires: frozenset[Port]
     provides: frozenset[Port]
 
-    def forward(self, state: PortView, batch: XTYBatch) -> dict[Port, Any]: ...
+    def forward(self, ports: PortView) -> dict[Port, Any]: ...
 ```
 
 Rules, all enforced rather than documented:
 
-- A component reads **only** the ports in `requires`. The engine passes a
-  `PortView` that raises on undeclared reads, so a component cannot quietly
-  reach for `batch.x` when it declared it consumes `X_REPR`.
+- A component reads **only** the ports in `requires`, including raw inputs
+  (§2.2). It is handed a `PortView` that raises on undeclared reads, and it is
+  handed nothing else — no `XTYBatch` argument exists, so there is no channel
+  through which an undeclared dependency can be taken.
 - A component writes **only** the ports in `provides`.
 - **A component never computes a loss.** No `loss()` method exists on the
-  Component protocol. This is the single largest departure from XTYLearner.
-- Parameters are owned by the component and addressed by `name`, so stages can
-  freeze/unfreeze by name without reaching into module internals.
+  Component base class. This is the single largest departure from XTYLearner.
+- **A component is an `nn.Module`.** This is a requirement, not an
+  implementation detail: stages must build optimiser param groups, freeze and
+  unfreeze by component name, and maintain EMA copies, and none of that is
+  expressible against a structural protocol with no parameter interface.
+  `named_parameters()`, `state_dict()` and `load_state_dict()` are the contract
+  the training layer depends on.
 
-Examples: `mlp_encoder` (x → `X_REPR`), `tarnet_head` (`X_REPR` → `Y_GIVEN_XT`),
-`categorical_propensity` (`X_REPR` → `T_GIVEN_X`), `conditional_flow`
-(`X_REPR` + categorical t as context → `Y_GIVEN_XT`), `xy_posterior`
-(x, y → `T_GIVEN_XY`).
+Examples: `mlp_encoder` (`X_RAW` → `X_REPR`), `tarnet_head`
+(`X_REPR` → `Y_GIVEN_XT`), `categorical_propensity` (`X_REPR` → `T_GIVEN_X`),
+`conditional_flow` (`X_REPR`, with categorical t as context → `Y_GIVEN_XT`),
+`xy_posterior` (`X_RAW`, `Y_RAW` → `T_GIVEN_XY`).
 
 ### 3.1 Distribution protocols
 
@@ -207,12 +277,30 @@ class TreatmentDistribution(Protocol):
     def log_prob(self, t: Tensor) -> Tensor: ...
 ```
 
-**The broadcast contract is the load-bearing detail.** `Y_GIVEN_XT.log_prob`
-must accept `t` of shape `[B]` (→ returns `[B]`) *or* `[B, K]` (→ returns
-`[B, K]`), and it is **elementwise in `t`**: `out[i, k] = log_prob(y_i, t[i, k])`.
-A caller wanting all candidates passes `arange(K)` broadcast across the batch;
-the port makes no assumption about what the caller put in `t`. Every outcome
-head must satisfy this, and it is a Tier 0 test.
+**The candidate-treatment contract is the load-bearing detail, and it is the
+single most error-prone thing in this document** — three separate mistakes were
+made stating it in prose before it was written down as a signature. It is
+therefore specified as a shape table, with an executable reference
+implementation shipped in P1 that every outcome head is tested against.
+
+`Y_GIVEN_XT.log_prob(y, t)`:
+
+| `y` | `t` | returns | meaning |
+|---|---|---|---|
+| `[B, *Dy]` | `[B]` | `[B]` | `out[i] = log p(y_i \| x_i, t_i)` |
+| `[B, *Dy]` | `[B, K]` | `[B, K]` | `out[i, k] = log p(y_i \| x_i, t[i, k])` |
+
+Two rules make this implementable:
+
+1. **`y` is passed unexpanded, always.** The caller never reshapes `y`; the head
+   inserts the candidate axis internally (`y[:, None]` for scalar outcomes,
+   `y[:, None, :]` for `[B, Dy]`). Relying on ambient tensor broadcasting does
+   **not** work here: `y: [B]` against `t: [B, K]` aligns trailing dimensions
+   `B` against `K` and fails for every batch where `B != K`.
+2. **The rank of `t` selects the mode**, and nothing else does. `t.ndim == 1` is
+   observed-treatment evaluation; `t.ndim == 2` is candidate evaluation.
+
+Every outcome head must satisfy this, and it is a Tier 0 test.
 
 That single contract is what lets `MissingTreatmentMarginalNLL` (§4.1) work
 unchanged across a TARNet head, a Gaussian density head, a conditional flow and
@@ -331,11 +419,37 @@ LossMixer([
 Schedules in v1: `Constant`, `Ramp` (linear), `Step`. Schedules are functions of
 `ctx.global_step` and are logged.
 
+### 6.1 Reduction
+
+Objectives always return the **mean over eligible rows** (§4). Papers do not
+always state their losses that way, so the reduction a paper prescribes is
+applied by the mixer, not by the objective:
+
+```python
+Weighted(obj, weight=1.0, reduction="mean" | "sum" | "population")
+```
+
+| Mode | Contribution | Use when |
+|---|---|---|
+| `mean` (default) | `value` | the paper averages over the term's own rows |
+| `sum` | `value * n` | the paper sums over rows |
+| `population` | `value * n / B` | the paper averages over the *whole* batch |
+
+Because `LossTerm` already carries `n`, all three are recoverable from the same
+objective with no change to the objective API, and the raw per-objective value
+stays comparable across runs and across modes.
+
+The distinction is not cosmetic. `sum` and `mean` differ by a factor that
+*varies per batch* whenever the row population varies — which is precisely the
+case for every `t_missing` objective — so choosing the wrong one produces a
+model that trains, looks reasonable, and weights its semi-supervised term
+differently from the paper. It is a required card field (`FIDELITY.md` §2).
+
 The mixer is the single place that later supports alternating updates, per-
 objective update frequency, loss normalisation, GradNorm and PCGrad. **None of
 those are implemented in v1** — the mixer just holds the seam.
 
-### 6.1 Mandatory logging
+### 6.2 Mandatory logging
 
 Per objective, per step: raw value, weight, weighted value, `n` eligible.
 Per objective, periodically (default every 200 steps, configurable, off in CI):
@@ -362,13 +476,29 @@ class Stage:
     objectives: list[Weighted] | None = None
     action: StageAction | None = None          # non-gradient stages
     trainable: list[str] = ()                  # component names
-    rows: Rows = "all"
+    rows: Rows = "all"                         # stage-level row scope (§7.0)
     initialise_from: str | None = None         # a previous stage's checkpoint
     inputs: list[str] = ()                     # artifacts from previous stages
     executor: Literal["gradient", "array_fit", "cross_fit"] = "gradient"
     optimiser: OptimiserSpec | None = None
     steps: int | None = None
+    allow_leakage: bool = False                # opt out of §7.2, predictive only
 ```
+
+### 7.0 How `Stage.rows` and `Objective.rows` compose
+
+Both exist, so the rule must be stated: the eligible set is the
+**intersection** of the stage scope and the objective's declared population.
+The stage says which rows this stage may touch at all; the objective says which
+of those it is entitled to.
+
+An intersection that is empty *by construction* — a `t_observed` stage
+containing a `t_missing` objective — is a **compile-time error**, not a
+silently zero term. Without that rule the objective would return `n = 0` on
+every batch forever, which is exactly the silently-dead-objective failure the
+zero-eligible-row rule (§1.3) exists to make visible. Emptiness that arises
+from the data in a particular batch remains a runtime `n = 0`, logged as
+coverage.
 
 `Program` is an **ordered list** of stages. Not a DAG. Stages run in sequence;
 `initialise_from` and `inputs` reference earlier stages by name. This covers the
@@ -387,16 +517,40 @@ teachers, pseudo-label tables, fold assignments. **No stage mutates the source
 dataset.** Pseudo-labels are a side table keyed by `row_id`, joined at load time
 by the consuming stage.
 
-Every generated artifact carries provenance:
+Every generated artifact carries provenance. The important property is that it
+is **verifiable rather than declarative** — a label saying `out_of_fold` is
+worth nothing if nothing can check it:
 
 ```python
 PseudoLabels(
     source_stage="joint_xty",
-    used_y=True,                       # was q(t|x,y) involved?
-    prediction_mode="out_of_fold",     # "in_sample" | "out_of_fold" | "held_out"
-    fold_ids=...,
+    source_checkpoints={0: "ckpt_fold0", 1: "ckpt_fold1", ...},
+    used_y=True,                  # DERIVED from the graph, not set by hand (§2.2)
+    prediction_mode="out_of_fold",
+    predicted_by_fold=Tensor,     # [N] which fold's model produced each row
+    row_id=Tensor,                # [N] the rows predicted
+)
+
+Checkpoint(
+    stage="joint_xty", fold=0,
+    trained_on_row_ids=Tensor,    # [M] exactly the rows this fit saw
 )
 ```
+
+Two fields do the work. Each checkpoint records the row ids it was **fit on**;
+each prediction records **which checkpoint produced it**. `out_of_fold` is then
+a claim with a decision procedure:
+
+```
+for every predicted row r:
+    assert r not in trained_on_row_ids[ predicted_by_fold[r] ]
+```
+
+The consuming stage runs that check when it loads the artifact, and `cross_fit`
+emits the fields to make it runnable. `prediction_mode` becomes a *summary of a
+verified fact* rather than an assertion the reader has to trust. `used_y` is
+likewise derived: it is true iff `Y_RAW` lies in the transitive closure of the
+subgraph that produced the labels (§2.2), so it cannot be set wrongly.
 
 ### 7.2 The causal guardrail, as a compile-time rule
 
@@ -410,11 +564,34 @@ Using `q(t|x,y)` to create pseudo-labels and then fitting `p(y|x,t)` on the same
 rows is a circular fit. It is coherent inside a joint likelihood or ELBO; as a
 *staged* procedure it needs out-of-fold predictions or another leakage control.
 
-The compiler therefore **rejects** a program in which a downstream stage trains
-a component providing `Y_GIVEN_XT` on rows whose pseudo-labels have
-`used_y=True` and `prediction_mode == "in_sample"` — unless the recipe declares
-`purpose="predictive"` and sets `allow_leakage=True`. Predictive experiments may
-opt in; causal estimation may not.
+This is enforced in two places, because the two halves are knowable at
+different times. Trying to do it all at compile time does not work: `used_y`
+and the fold assignment live on an artifact that does not exist until the
+producing stage has run.
+
+**Static, at `compile(recipe)` — from the declared graph and program:**
+
+`Recipe` carries `purpose: Literal["causal", "predictive"]` and `Stage` carries
+`allow_leakage: bool`. The compiler walks the program in order and rejects when
+all of the following hold and `purpose == "causal"`:
+
+1. a stage produces treatment labels from a subgraph whose transitive closure
+   contains `Y_RAW` (i.e. `used_y` will be true — derivable statically, §2.2);
+2. its `executor` is not `cross_fit` and its action does not declare a held-out
+   prediction source (so the labels will be in-sample);
+3. a later stage consumes that artifact, trains a component providing
+   `Y_GIVEN_XT`, and its row scope (§7.0) intersects the labelled rows.
+
+`purpose="predictive"` with `allow_leakage=True` on the consuming stage opts
+out. Predictive experiments may; causal estimation may not. The opt-out is
+per-stage and must be written down, so it appears in the execution plan and in
+the diff.
+
+**Runtime, at artifact load** — the fold-disjointness check of §7.1, which is
+the only place the *actual* row assignment can be tested. A `cross_fit` stage
+whose folds overlap fails here even though it compiled, and that is the correct
+division: the compiler rejects programs that are wrong by construction, the
+loader catches executions that are wrong in fact.
 
 ---
 
@@ -431,8 +608,11 @@ opt in; causal estimation may not.
 4. checks `trainable` names exist and that every trainable component is actually
    upstream of at least one active objective (catches dead-weight stages);
 5. validates views against the schema (mutability, bounds, derived columns);
-6. applies the leakage rules of §7.2;
-7. emits a **printable execution plan**.
+6. intersects `Stage.rows` with each `Objective.rows` and rejects any pairing
+   that is empty by construction (§7.0);
+7. applies the **static** half of the leakage rule (§7.2), the runtime half
+   being checked at artifact load;
+8. emits a **printable execution plan**.
 
 That last point matters for agent accuracy: the plan is a human-readable
 artifact listing, per stage, the forward passes, the active objectives with

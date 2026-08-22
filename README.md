@@ -10,7 +10,7 @@ framework, building on Lucas Beyer's approaches in MOAM etc.
 | [`SEED.md`](SEED.md) | The original architectural proposal this design derives from |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | Architecture: ports, components, objectives, views, loss mixer, program, recipes, compiler |
 | [`docs/FIDELITY.md`](docs/FIDELITY.md) | How reimplementations are kept honest: spec cards and three test tiers |
-| [`docs/PLAN.md`](docs/PLAN.md) | Twelve work packets, two review gates, risk register |
+| [`docs/PLAN.md`](docs/PLAN.md) | Thirteen work packets (P0–P12), two review gates, risk register |
 | [`docs/recipes/_TEMPLATE.md`](docs/recipes/_TEMPLATE.md) | The spec card every recipe must have before it is implemented |
 
 ## The one-paragraph version

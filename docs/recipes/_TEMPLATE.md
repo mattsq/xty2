@@ -68,7 +68,7 @@ teacher:
   teacher_requires_grad: false
 
 losses:
-  reduction:
+  reduction:             # mean | sum | population
   eligible_rows:
   weights:
   schedules:
