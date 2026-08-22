@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- xty2 ---
+# Run directories written by the training loop (P4 onward).
+runs/
+# CI installs CPU-only torch out of band, so a resolved lock would not match it.
+uv.lock

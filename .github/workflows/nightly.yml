@@ -1,0 +1,31 @@
+name: Nightly benchmarks
+
+# Tier 2 — published-number reproduction (docs/FIDELITY.md §3). Empty until
+# P12; the job goes green on an empty tier by design.
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  benchmarks:
+    name: Tier 2 — reproduction
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.11"
+      - uses: ./.github/actions/install
+      - name: Tier 2 — benchmarks
+        run: uv run --no-sync pytest tests/benchmarks --durations=0
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tier2-results
+          path: |
+            runs/
+          if-no-files-found: ignore

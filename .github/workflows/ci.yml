@@ -1,0 +1,62 @@
+name: CI
+
+# Tier 0 + Tier 1 on every PR (docs/FIDELITY.md §3). Tier 2 is nightly and
+# lives in nightly.yml.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Gradient-norm / cosine logging is off in CI by construction (DESIGN.md §6.2).
+  XTY2_GRADIENT_DIAGNOSTICS: "0"
+
+# `uv run --no-sync` throughout: the install step below puts CPU-only torch in
+# the venv, and a re-sync would replace it with the multi-gigabyte CUDA wheel
+# from PyPI.
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.11"
+      - name: Install
+        run: uv venv && uv pip install ruff
+      - name: ruff check
+        run: uv run --no-sync ruff check .
+      - name: ruff format --check
+        run: uv run --no-sync ruff format --check .
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.11"
+      - uses: ./.github/actions/install
+      - name: mypy --strict
+        run: uv run --no-sync mypy --strict
+
+  tests:
+    name: Tier 0 + Tier 1
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.11"
+      - uses: ./.github/actions/install
+      - name: Tier 0 — invariants
+        run: uv run --no-sync pytest tests/invariants
+      - name: Tier 1 — smoke
+        run: uv run --no-sync pytest tests/smoke

@@ -12,6 +12,7 @@ framework, building on Lucas Beyer's approaches in MOAM etc.
 | [`docs/FIDELITY.md`](docs/FIDELITY.md) | How reimplementations are kept honest: spec cards and three test tiers |
 | [`docs/PLAN.md`](docs/PLAN.md) | Thirteen work packets (P0–P12), two review gates, risk register |
 | [`docs/recipes/_TEMPLATE.md`](docs/recipes/_TEMPLATE.md) | The spec card every recipe must have before it is implemented |
+| [`CLAUDE.md`](CLAUDE.md) | The short rules for anyone — human or agent — writing code here |
 
 ## The one-paragraph version
 
@@ -33,3 +34,18 @@ in writing why it does not.
 **Scope of v1:** categorical treatment with small K, exact marginalisation over
 missing treatments, a linear list of training stages, Python-first recipes, and
 five ported models. See `docs/DESIGN.md` §11 for what is deliberately not built.
+
+## Development
+
+```bash
+uv venv
+uv pip install torch --index-url https://download.pytorch.org/whl/cpu  # optional: skips the CUDA wheel
+uv pip install -e ".[dev]"
+
+uv run pytest tests/invariants tests/smoke   # Tier 0 + Tier 1, what CI runs on a PR
+uv run ruff check . && uv run ruff format --check .
+uv run mypy --strict
+```
+
+Tier 2 (`tests/benchmarks`) runs nightly, not on PRs. Tests are marked
+`tier0`/`tier1`/`tier2` automatically by directory.
