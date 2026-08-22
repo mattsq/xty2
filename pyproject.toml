@@ -1,0 +1,85 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "xty2"
+version = "0.1.0"
+description = "Composable semi-supervised causal learning for tabular data"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "xty2 contributors" }]
+dependencies = [
+  "numpy>=1.26",
+  "torch>=2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.11",
+  "pytest>=8.0",
+  "ruff>=0.6",
+]
+
+[project.urls]
+Homepage = "https://github.com/mattsq/xty2"
+
+[tool.hatch.build.targets.wheel]
+packages = ["xty2"]
+
+# ---------------------------------------------------------------------------
+# pytest — three tiers, one per directory (FIDELITY.md §3)
+#
+#   tests/invariants   Tier 0   framework invariants, seconds, every PR
+#   tests/smoke        Tier 1   synthetic-DGP wiring fits, ~1 min/recipe, every PR
+#   tests/benchmarks   Tier 2   published-number reproduction, nightly
+#
+# The matching `tier0`/`tier1`/`tier2` markers are applied automatically by
+# directory in tests/conftest.py, so `-m tier1` and a path both work.
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+xfail_strict = true
+filterwarnings = ["error"]
+markers = [
+  "tier0: framework invariants (fast, every PR)",
+  "tier1: synthetic-DGP smoke fits (every PR)",
+  "tier2: published-number reproduction (nightly)",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+src = ["xty2", "tests"]
+# The design docs contain illustrative, deliberately non-runnable Python in
+# fenced blocks; ruff must not rewrite them.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = [
+  "E",    # pycodestyle errors
+  "W",    # pycodestyle warnings
+  "F",    # pyflakes
+  "I",    # import sorting
+  "UP",   # pyupgrade
+  "B",    # bugbear
+  "SIM",  # simplify
+  "ANN",  # missing annotations
+  "RUF",  # ruff-specific
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN401"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["xty2", "tests"]
+warn_unreachable = true
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
