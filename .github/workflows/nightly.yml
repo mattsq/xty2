@@ -18,6 +18,7 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.11"
+          cache-dependency-glob: "pyproject.toml"
       - uses: ./.github/actions/install
       - name: Tier 2 — benchmarks
         run: uv run --no-sync pytest tests/benchmarks --durations=0

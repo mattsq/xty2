@@ -27,8 +27,9 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.11"
+          cache-dependency-glob: "pyproject.toml"
       - name: Install
-        run: uv venv && uv pip install ruff
+        run: uv venv --clear && uv pip install ruff
       - name: ruff check
         run: uv run --no-sync ruff check .
       - name: ruff format --check
@@ -42,6 +43,7 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.11"
+          cache-dependency-glob: "pyproject.toml"
       - uses: ./.github/actions/install
       - name: mypy --strict
         run: uv run --no-sync mypy --strict
@@ -55,6 +57,7 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.11"
+          cache-dependency-glob: "pyproject.toml"
       - uses: ./.github/actions/install
       - name: Tier 0 — invariants
         run: uv run --no-sync pytest tests/invariants
