@@ -37,6 +37,7 @@ from xty2.core.ports import Port
 from xty2.core.rows import RowIndex, Rows, validate_population
 from xty2.core.schedules import Schedule, as_schedule
 from xty2.core.schema import Schema
+from xty2.core.views import ViewSpec
 
 if TYPE_CHECKING:  # pragma: no cover - the batch is only named in a signature
     from xty2.core.batch import XTYBatch
@@ -329,6 +330,8 @@ class Recipe:
         card: Path to the recipe's spec card. A recipe without one cannot be
             reviewed, so it is a required field rather than an optional
             annotation (`FIDELITY.md` §1).
+        views: Named data views available to objective realisations. The
+            untransformed ``identity`` view is built in and is not listed.
         purpose: `causal` or `predictive` (§7.2).
     """
 
@@ -338,9 +341,11 @@ class Recipe:
     program: tuple[Stage, ...]
     card: str
     purpose: Purpose = "causal"
+    views: tuple[ViewSpec, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "program", tuple(self.program))
+        object.__setattr__(self, "views", tuple(self.views))
         if not require_str("recipe name", self.name, error=CompileError).isidentifier():
             raise CompileError(f"recipe name {self.name!r} must be a Python identifier")
         if self.purpose not in ("causal", "predictive"):
@@ -362,6 +367,18 @@ class Recipe:
                 f"recipe {self.name!r} has more than one stage called "
                 f"{duplicates!r}; stages are referenced by name"
             )
+        for view in self.views:
+            if not isinstance(view, ViewSpec):
+                raise CompileError(
+                    f"recipe {self.name!r} holds {type(view)} in `views`; "
+                    "expected ViewSpec declarations (DESIGN.md §5)"
+                )
+        duplicate_views = _duplicates(tuple(view.name for view in self.views))
+        if duplicate_views:
+            raise CompileError(
+                f"recipe {self.name!r} has more than one view called "
+                f"{duplicate_views!r}; realisations resolve views by name"
+            )
 
     def stage(self, name: str) -> Stage:
         """The stage called `name`."""
@@ -371,6 +388,17 @@ class Recipe:
         raise CompileError(
             f"recipe {self.name!r} has no stage {name!r}; it has "
             f"{[stage.name for stage in self.program]!r}"
+        )
+
+    def view(self, name: str) -> ViewSpec:
+        """The declared view called ``name`` (identity is handled by the run)."""
+        for view in self.views:
+            if view.name == name:
+                return view
+        raise CompileError(
+            f"recipe {self.name!r} has no view {name!r}; it has "
+            f"{[view.name for view in self.views]!r} plus the built-in "
+            "'identity' view"
         )
 
 

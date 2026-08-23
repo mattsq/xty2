@@ -380,6 +380,11 @@ Rules:
   logged raw value incomparable across runs.
 - An objective never calls `.backward()`, never mutates state, never touches
   parameters directly.
+- An objective with an arithmetic choice that is not already visible through
+  its ports, realisations, rows, reduction, schedule or card keys emits that
+  choice through stable `plan_details()`. Those lines are part of the execution
+  plan digest, so two recipes that compute different losses cannot share a
+  provenance identity merely because their graph wiring is the same.
 - **A stop-gradient is declared, because it is invisible in the graph.**
   `requires` says a term *reads* `p(t|x)`, and the compiler plans the forward
   pass from that — but a `.detach()` inside `compute` means no gradient ever
@@ -446,6 +451,7 @@ ViewSpec(
     transforms=[FeatureMask(p=0.25),
                 BoundedJitter(columns=["KTAS", "TRQ", "FF"])],
     preserves={"t", "y"},
+    recompute_rules=[],  # required for any derived column made stale
 )
 ```
 
@@ -454,7 +460,10 @@ ViewSpec(
 - `preserves` is checked by test, not trusted: a view declaring
   `preserves={"t","y"}` that alters `t` or `y` fails Tier 0.
 - Transforms consult `FeatureSpec`. `mutable=False` columns are never touched;
-  `bounds` are respected; `perturbation_scale` is in natural units.
+  `bounds` are respected; `perturbation_scale` is in natural units. Their
+  returned batches are checked against `affected_columns`, so a custom
+  transform cannot bypass mutability or derived-column validation by
+  under-reporting its footprint.
 - Views are computed once per batch per name and cached for that step.
 
 A consistency objective names realisations, not transforms:
@@ -864,11 +873,11 @@ prevent.
 
 ```
 xty2/
-  core/        batch.py schema.py ports.py distributions.py rows.py
+  core/        batch.py schema.py ports.py distributions.py rows.py views.py
                graph.py card_keys.py loss.py schedules.py optimisation.py
                recipe.py compile.py
   components/  encoders/ outcome/ treatment/ posterior/ density/ energy/
-  views/       masking.py tabular.py perturbations.py
+  views/       masking.py perturbations.py
   objectives/  supervised.py marginal.py consistency.py generative.py causal.py
   training/    program.py loss_mixer.py executors.py artifacts.py
   recipes/     tarnet.py cnflow.py cycle_dual.py mean_teacher.py ssdml.py

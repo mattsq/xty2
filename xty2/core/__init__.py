@@ -7,7 +7,9 @@ printable execution plan (P2, `DESIGN.md` §2.1, §3, §7, §8, §9.1). `loss`,
 `schedules` and `optimisation` are the objective, weighting and descent
 contracts the compiler reads (P3, P4, §4, §6, §7) — they are in the leaf layer
 because `training/` imports `core/` and never the reverse, which is the same
-reason `DESIGN.md` §10 gives for `Stage`.
+reason `DESIGN.md` §10 gives for `Stage`. `views` holds the declarative
+``ViewSpec`` contract the compiler consumes (P6); concrete transforms remain
+in ``xty2.views``.
 """
 
 from xty2.core.batch import XTYBatch, assert_unchanged_by
@@ -26,6 +28,7 @@ from xty2.core.compile import (
     ExecutionPlan,
     ForwardPass,
     PlannedComponent,
+    PlannedView,
     compile,
     plan_digest_of,
 )
@@ -52,6 +55,7 @@ from xty2.core.errors import (
     PortContractError,
     SchemaError,
     TrainingError,
+    ViewError,
     Xty2Error,
 )
 from xty2.core.graph import (
@@ -125,6 +129,15 @@ from xty2.core.schedules import (
     as_schedule,
 )
 from xty2.core.schema import FeatureSpec, OutcomeSpec, Schema
+from xty2.core.views import (
+    PRESERVED_FIELDS,
+    FeatureValues,
+    PreservedField,
+    RecomputeFunction,
+    RecomputeRule,
+    ViewSpec,
+    ViewTransform,
+)
 
 __all__ = [
     "CARD_KEY_SECTIONS",
@@ -133,6 +146,7 @@ __all__ = [
     "IDENTITY_VIEW",
     "OPTIMISER_NAMES",
     "PORT_SPECS",
+    "PRESERVED_FIELDS",
     "REDUCTIONS",
     "REQUIRED",
     "ROW_POPULATIONS",
@@ -155,6 +169,7 @@ __all__ = [
     "ExecutionPlan",
     "ExponentialDecay",
     "FeatureSpec",
+    "FeatureValues",
     "ForwardPass",
     "GaussianOutcome",
     "GradientClipping",
@@ -168,15 +183,19 @@ __all__ = [
     "OutcomeSpec",
     "Params",
     "PlannedComponent",
+    "PlannedView",
     "Port",
     "PortContractError",
     "PortSpec",
     "PortValue",
     "PortView",
+    "PreservedField",
     "Purpose",
     "Ramp",
     "Realisation",
     "Recipe",
+    "RecomputeFunction",
+    "RecomputeRule",
     "Reduction",
     "RowIndex",
     "Rows",
@@ -190,6 +209,9 @@ __all__ = [
     "TrainingError",
     "TreatmentDistribution",
     "TreatmentMode",
+    "ViewError",
+    "ViewSpec",
+    "ViewTransform",
     "WeightDecay",
     "Weighted",
     "XTYBatch",

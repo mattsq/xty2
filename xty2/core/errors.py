@@ -38,6 +38,17 @@ class GraphError(Xty2Error):
     """
 
 
+class ViewError(Xty2Error):
+    """A data view or transform violates `DESIGN.md` §5.
+
+    This covers construction and execution facts local to the view itself:
+    invalid transform settings, an in-place write, a broken ``preserves``
+    declaration, or a recompute rule that does not produce one value per row.
+    Schema-dependent mistakes that make a recipe impossible are re-raised by
+    ``compile()`` as ``CompileError`` with the recipe and view named.
+    """
+
+
 class CardKeyError(Xty2Error):
     """A card-key binding is unusable (`DESIGN.md` §9.1).
 
