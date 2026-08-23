@@ -1,6 +1,6 @@
 # Recipe spec card: tarnet
 
-**Status:** `draft`
+**Status:** `reviewed`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 ---
@@ -74,7 +74,9 @@ For IHDP, `L` is squared error. The network uses a shared `Phi`, followed by
 separate hypotheses `h_0` and `h_1`; a row updates only the head selected by its
 observed treatment (paper section 4 and Figure 1).
 
-### 3.2 P5 semi-supervised extension
+### 3.2 Mapping to xty2
+
+#### P5 semi-supervised extension
 
 Let `m_i` indicate that treatment is observed. P5 fits the following three
 terms in one stage. These equations are xty2's observed-data likelihood, not
@@ -118,7 +120,7 @@ stop-gradient: it trains the encoder, outcome heads and propensity head. For
 arbitrary stored treatment value is never used to construct either weights or
 candidate treatments.
 
-### 3.3 Mapping to xty2
+#### Component and objective mapping
 
 | Paper / P5 symbol | Meaning | xty2 Port | xty2 Objective / Component |
 |---|---|---|---|
@@ -174,7 +176,7 @@ optimisation:
   optimiser: adam(betas=(0.9, 0.999), eps=1e-8)  # paper section 5; TF defaults in pinned ref impl
   lr: 0.001                                      # ref impl configs/example_ihdp.txt
   lr_schedule: staircase multiplier 0.97^floor(step/100)  # ref impl cfr_net_train.py:280-282
-  weight_decay: 0.0001 on matrix weights; norm and bias exempt  # ref impl p_lambda; see deviation 4
+  weight_decay: 0.0001 on tarnet_head matrices only; norm and bias exempt  # ref impl cfr/cfr_net.py:259-261, 305-306
   batch_size: n/a                                # external BatchSource; ref impl uses 100
   labelled_unlabelled_ratio: n/a                 # no fixed quota; Tier 1 applies 50% MCAR at dataset level
   total_steps_or_epochs: 3000 optimiser steps    # ref impl configs/example_ihdp.txt
@@ -226,8 +228,7 @@ benchmark runner must record those external mechanics alongside their results.
 | 1 | Add `categorical_propensity`, `ObservedTreatmentNLL` and `MissingTreatmentMarginalNLL`. | P5 is intended to prove exact treatment marginalisation through the Phase-A stack; published TARNet has no such terms. | The marginal term is inactive on fully observed IHDP, but the propensity loss still changes the shared encoder. Direction is unknown. |
 | 2 | Generalise two treatment heads to `K` categorical heads. | xty2 v1 is categorical-treatment-first and the candidate-treatment contract must work for `K != B`. | None when the IHDP benchmark runs with `K=2`; no published target exists for `K>2`. |
 | 3 | Represent each deterministic squared-error head as a unit-scale Gaussian and train by NLL. | `Y_GIVEN_XT` must satisfy the distribution protocol so the same marginal objective can later consume a flow head unchanged. | For complete cases the NLL differs from squared error only by a positive scale and constant, so it has the same optimum. It changes the scale of the added mixture likelihood. |
-| 4 | Apply `0.0001` decay to every matrix parameter, including encoder and propensity matrices; the reference code decays outcome-head matrices only. | P4's `WeightDecay` separates matrices from bias/norm parameters but is not component-scoped. Adding component-specific optimiser policy for one recipe would exceed the P5 packet. | Probably small, but the direction is unknown and it may prevent an exact `0.88` reproduction. |
-| 5 | Simulate 50% treatment missing completely at random in Tier 1. | This is the P5 acceptance condition in `PLAN.md` and `FIDELITY.md`, not part of the paper. | Not applicable to the fully observed published target; load-bearing for the smoke comparison. |
+| 4 | Simulate 50% treatment missing completely at random in Tier 1. | This is the P5 acceptance condition in `PLAN.md` and `FIDELITY.md`, not part of the paper. | Not applicable to the fully observed published target; load-bearing for the smoke comparison. |
 
 ## 6. Reproduction target
 
@@ -245,7 +246,7 @@ reproduction:
 ```
 
 This target is queued for Tier 2; P5 does not claim it from a smoke fit. Because
-deviations 1 and 4 remain active even when treatment is fully observed, a miss
+deviation 1 remains active even when treatment is fully observed, a miss
 outside tolerance must become `deviating` with an explanation unless the card is
 amended and reviewed before the run.
 
@@ -304,5 +305,5 @@ The first implementation is deliberately one graph and one stage:
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status -> `reviewed`) | | |
-| Plan diffed against section 3.3 and section 4 | | |
+| Card reviewed (status → `reviewed`) | mattsq | 2026-08-23 |
+| Plan diffed against §3.2 and §4 | | |
