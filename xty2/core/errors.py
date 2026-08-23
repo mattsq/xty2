@@ -64,6 +64,26 @@ class CompileError(Xty2Error):
     """
 
 
+class TrainingError(Xty2Error):
+    """An executor cannot run a stage the compiler accepted (`DESIGN.md` §7).
+
+    The compiler checks the recipe; this covers what only the run can know —
+    a batch source that runs dry before the stage's step count, a trainable
+    component whose parameters were frozen before the stage started, a state
+    the planned forward passes did not produce.
+    """
+
+
+class ArtifactError(Xty2Error):
+    """An artifact's contract is violated (`DESIGN.md` §7.1).
+
+    Artifacts are immutable and their provenance is derived rather than
+    declared, so this covers a direct constructor call that bypasses the
+    executor factory, a write that would overwrite an existing artifact, and
+    a run directory asked to reuse one.
+    """
+
+
 def require_str(label: str, value: object, *, error: type[Xty2Error]) -> str:
     """Runtime type check for a field the annotations already promise is a `str`.
 

@@ -29,7 +29,6 @@ from xty2.core import (
     PortValue,
     Recipe,
     Schema,
-    Stage,
     State,
     TrainContext,
     Weighted,
@@ -53,6 +52,7 @@ from tests.invariants.conftest import (
     backward,
     make_batch,
     make_schema,
+    stage,
 )
 
 # `B != K` throughout, and asserted here rather than assumed: a test with
@@ -259,8 +259,7 @@ def test_the_gradient_path_reaches_the_plan_as_a_card_key() -> None:
             [ToyEncoder(width=HIDDEN), ToyOutcomeHead(), ToyPropensity()]
         ),
         program=(
-            Stage(
-                name="fit",
+            stage(
                 objectives=(
                     Weighted(
                         MissingTreatmentMarginalNLL(grad_path="propensity"),

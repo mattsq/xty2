@@ -16,7 +16,7 @@ is a snapshot test rather than a set of substring assertions: a change to the
 format is a change to the review surface and should show up in a diff as one.
 """
 
-from xty2.core import ComponentGraph, Port, Ramp, Recipe, Stage, Step, compile
+from xty2.core import ComponentGraph, Port, Ramp, Recipe, Step, compile
 
 from tests.invariants.conftest import (
     HIDDEN,
@@ -26,6 +26,7 @@ from tests.invariants.conftest import (
     ToyPropensity,
     make_schema,
     objective,
+    stage,
     two_head_recipe,
 )
 
@@ -49,6 +50,13 @@ data lineage
 
 stage fit
   rows: all
+  steps: 3
+  optimisation
+    optimiser     sgd(momentum=0.0, nesterov=False)
+    lr            0.05
+    lr schedule   constant 1.0
+    weight decay  none
+    clipping      none
   forward passes (1)
     view=identity params=student: encoder -> outcome_head -> propensity
   objectives
@@ -62,7 +70,8 @@ stage fit
     encoder, outcome_head, propensity
 
 hyperparameters
-  architecture.widths_depths = 5
+  architecture.widths_depths         = 5
+  gradients.gradient_clipping        = 'none'
   losses.eligible_rows
     fit.outcome_nll   = 'y_observed'
     fit.treatment_nll = 't_observed'
@@ -75,6 +84,11 @@ hyperparameters
   losses.weights
     fit.outcome_nll   = 1.0
     fit.treatment_nll = 1.0
+  optimisation.lr                    = 0.05
+  optimisation.lr_schedule           = 'constant 1.0'
+  optimisation.optimiser             = 'sgd(momentum=0.0, nesterov=False)'
+  optimisation.total_steps_or_epochs = 3
+  optimisation.weight_decay          = 'none'
 """
 
 POSTERIOR_PLAN = """\
@@ -97,6 +111,13 @@ data lineage
 
 stage infer
   rows: t_observed
+  steps: 3
+  optimisation
+    optimiser     sgd(momentum=0.0, nesterov=False)
+    lr            0.05
+    lr schedule   constant 1.0
+    weight decay  none
+    clipping      none
   forward passes (1)
     view=identity params=student: encoder -> propensity -> posterior
   objectives
@@ -110,7 +131,8 @@ stage infer
     encoder, propensity, posterior
 
 hyperparameters
-  architecture.widths_depths = 5
+  architecture.widths_depths         = 5
+  gradients.gradient_clipping        = 'none'
   losses.eligible_rows
     infer.posterior_kl  = 't_observed'
     infer.treatment_nll = 't_observed'
@@ -123,6 +145,11 @@ hyperparameters
   losses.weights
     infer.posterior_kl  = 1.0
     infer.treatment_nll = 1.0
+  optimisation.lr                    = 0.05
+  optimisation.lr_schedule           = 'constant 1.0'
+  optimisation.optimiser             = 'sgd(momentum=0.0, nesterov=False)'
+  optimisation.total_steps_or_epochs = 3
+  optimisation.weight_decay          = 'none'
 """
 
 
@@ -134,7 +161,7 @@ def _posterior_recipe() -> Recipe:
             [ToyEncoder(width=HIDDEN), ToyPropensity(), ToyPosterior()]
         ),
         program=(
-            Stage(
+            stage(
                 name="infer",
                 objectives=(
                     objective("posterior_kl", Port.T_GIVEN_XY),
@@ -193,8 +220,7 @@ def test_the_weight_schedule_and_reduction_reach_the_plan() -> None:
     # something else.
     recipe = two_head_recipe(
         program=(
-            Stage(
-                name="fit",
+            stage(
                 objectives=(
                     objective(
                         "outcome_nll",
