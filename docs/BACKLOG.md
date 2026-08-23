@@ -1167,3 +1167,345 @@ updates change what another objective sees, while the resulting execution plan
 still makes every dependency and training signal understandable. ReMixMatch,
 CoMatch and Meta Pseudo Labels + UDA are the three deliberate reference stress
 tests for that claim.
+
+---
+
+## 18. Adjacent research directions worth investigating
+
+The SSL backlog above mostly assumes the supervision state is binary: a treatment
+label is either observed or missing, and unlabeled rows contribute through
+likelihoods, pseudo-labels, consistency or representation objectives. Several
+adjacent literatures suggest a broader question: **what information do we
+actually possess about an apparently unlabeled treatment, and what is the
+statistically legitimate way to use each kind of information?**
+
+These directions may ultimately matter more than adding another pseudo-label
+variant.
+
+### 18.1 Rich / weak supervision rather than observed-vs-missing labels
+
+Real supervision can be weaker than an exact class label without being absent.
+Useful research families include:
+
+- partial-label learning: the true treatment is known to lie in a candidate set;
+- complementary-label learning: a row is known *not* to belong to one or more
+  treatment classes;
+- positive-unlabeled and class-specific partially observed labels;
+- pairwise same/different-treatment constraints;
+- triplet or ranking constraints;
+- noisy heuristic / labeling-function supervision in the Snorkel / data-
+  programming tradition;
+- multiple noisy annotators or operational rules with different coverage and
+  accuracy;
+- learning from label proportions or aggregate treatment frequencies;
+- combinations of partial labels and completely unlabeled examples.
+
+**xty2 experiment:** do not immediately collapse weak evidence to one pseudo-label.
+Let separate objectives consume the evidence in its native form where possible.
+For small `K`, partial-treatment likelihoods are particularly natural: sum or
+normalise probability mass over the admissible candidate set rather than choosing
+one class.
+
+**Potential boundary:** v1 `XTYBatch` only carries exact observed treatment plus a
+boolean mask. Do not widen it to a generic supervision object in advance. First
+specify at least two concrete rich-supervision recipes and identify the minimum
+typed representation they genuinely share.
+
+### 18.2 Learning Using Privileged Information / teacher-only variables
+
+LUPI and generalized distillation study variables available during training but
+unavailable to the deployed predictor. This gives another interpretation of
+`q(t|x,y)` and of operational datasets with expensive or post-hoc information.
+
+Possible privileged information includes:
+
+- `y` when the deployed propensity model must use `x` only;
+- high-resolution sensor channels available only for a subset;
+- future observations or maintenance findings available retrospectively;
+- engineering calculations too expensive for production inference;
+- manually derived features or expert annotations available only in training;
+- richer data sources used by a teacher but absent from the student input.
+
+Candidate programmes:
+
+- rich-view teacher -> `x`-only student distillation;
+- posterior `q(t|x,y)` -> propensity `p(t|x)` distillation with leakage rules
+  explicit;
+- privileged representation pretraining -> deployable representation student;
+- privileged teacher + Mean Teacher / Noisy Student style iteration;
+- cross-fitted privileged-information distillation for causal use.
+
+This direction is valuable because it separates **information used to learn**
+from **information required at prediction time** rather than treating every
+training-only variable as forbidden leakage.
+
+### 18.3 Missing-treatment causal inference as its own research branch
+
+Do not reduce missing treatment to ordinary semi-supervised classification.
+There is a causal-inference literature deriving estimators whose target remains a
+causal estimand while treatment is missing, sometimes allowing missingness to
+depend on observed outcomes.
+
+Priority topics:
+
+- efficient influence-function estimators for ATE with partially missing
+  treatment;
+- CATE and policy-learning estimators with missing treatment;
+- MAR / MCCAR missing-treatment estimators;
+- double- and multiply-robust estimators;
+- MTRNet-style representation balancing across both treatment groups and
+  treatment-observation groups;
+- outcome-assisted multiple imputation of missing treatment;
+- multiple-imputation pooling rather than single pseudo-label substitution;
+- semi-supervised estimation when both treatment and outcome have gold-standard
+  labels only on a subset and noisy surrogates exist for everyone;
+- sensitivity analysis for misspecified or MNAR treatment missingness.
+
+**Important distinction:** using `y` to infer missing `t` is not inherently
+invalid for causal estimation. What matters is the estimating procedure and its
+assumptions. The naive programme
+
+```text
+q(t|x,y) -> hard treatment label -> pretend observed -> ordinary outcome fit
+```
+
+is different from an estimator derived to remain valid while integrating or
+imputing missing treatment using outcome information.
+
+This branch should therefore have its own Tier 2 targets and statistical cards,
+not merely reuse predictive SSL benchmarks.
+
+### 18.4 Safe SSL and open-environment SSL
+
+Unlabeled data can hurt. Distribution shift, unseen classes, violations of the
+cluster assumption and contaminated unlabeled pools all undermine the usual
+intuition that more unlabeled data is automatically useful.
+
+Research directions:
+
+- safe SSL methods designed not to underperform the supervised baseline;
+- open-set / open-world SSL with unknown treatment classes or contaminating
+  observations;
+- OOD detection before pseudo-label admission;
+- robust pseudo-labeling under unlabeled distribution shift;
+- covariate/label/treatment-prior shift correction;
+- uncertainty- or conformity-gated use of unlabeled rows;
+- self-supervised objectives for suspicious rows while excluding them from
+  treatment pseudo-label losses;
+- per-objective robustness: a row may be unsafe for pseudo-label CE but still
+  useful for reconstruction or contrastive learning.
+
+**xty2 experiment:** make "unlabeled data hurts" a first-class benchmark outcome.
+For every composite recipe, compare against the supervised-only baseline and log
+which objective changes sign or becomes conflicting as contamination increases.
+
+### 18.5 Expectation constraints, posterior regularisation and aggregate knowledge
+
+Some supervision applies to populations or expectations rather than individual
+rows. Generalized Expectation / posterior-regularisation style methods can train
+from statements such as:
+
+- treatment class frequencies should approximately match a known marginal;
+- a regime should almost never contain treatment class `k`;
+- treatment distribution conditional on a known group should satisfy a prior
+  proportion;
+- a feature/treatment relationship should be monotone or directionally
+  constrained;
+- aggregate totals from an operational reporting system are trusted even when
+  row-level labels are not;
+- domain rules specify moments or inequalities rather than labels.
+
+Candidate objectives:
+
+- marginal treatment-proportion matching;
+- group-conditional proportion losses;
+- expectation constraints on propensity predictions;
+- moment matching / maximum-entropy constraints;
+- posterior regularisation;
+- weak monotonicity or ordering constraints;
+- calibration to external fleet/site/period totals.
+
+This is a genuinely different way to use "unlabeled" data: impose knowledge on
+the distribution of predictions without inventing per-row labels.
+
+### 18.6 Graph and manifold SSL across observations
+
+The current view machinery mostly relates multiple versions of one row. Graph SSL
+adds structure **between rows**.
+
+Possible graphs:
+
+- nearest neighbours in raw or learned operating-condition space;
+- same-tail / nearby-flight relationships;
+- route-aircraft-regime similarity;
+- neighbourhoods on an estimated physical/performance manifold;
+- graphs from representation similarity updated during training;
+- domain/expert-defined adjacency.
+
+Candidate methods:
+
+- label propagation;
+- graph Laplacian / smoothness regularisation;
+- graph contrastive learning;
+- GNN propensity or posterior components;
+- graph-based pseudo-label refinement;
+- co-training between row-local and neighbourhood predictors.
+
+**Leakage warning:** graph construction can leak test rows, future observations,
+repeated-aircraft information or outcome-derived similarity. Any graph artifact
+needs explicit provenance and fold-aware construction before causal use.
+
+### 18.7 Set-valued, credal and conformal pseudo-supervision
+
+Hard pseudo-labels throw away uncertainty. Soft labels retain probabilities but
+still commit to one estimated distribution. Partial-label, credal and conformal
+methods suggest intermediate supervision objects.
+
+Candidate directions:
+
+- conformal candidate-treatment sets;
+- partial-label objectives over candidate sets;
+- credal pseudo-labels / sets of admissible probability distributions;
+- conformal admission rules instead of fixed confidence thresholds;
+- weak-supervision conformal prediction;
+- semi-supervised conformal calibration using unlabeled scores;
+- treatment prediction sets used as inputs to downstream multiple-imputation or
+  robust causal procedures.
+
+With small categorical `K`, this is especially attractive: a row can remain
+explicitly `{1, 2}` rather than becoming class 1 at probability 0.71 because an
+arbitrary threshold was crossed.
+
+### 18.8 Automatic search over validated objectives, views and programs
+
+Once xty2 has a meaningful library of independently validated pieces, the object
+of optimisation can become the **training recipe itself**, not just ordinary
+hyperparameters.
+
+Possible search dimensions:
+
+```text
+objective subset
+x view / augmentation family
+objective weights
+warm-up / introduction times
+eligible-row policies
+pseudo-label thresholds or weighting rules
+pretrain-vs-joint-vs-staged ordering
+parameter freezing / update frequencies
+```
+
+Relevant research includes AutoSSL, meta-learning of unlabeled-example weights,
+neural architecture/search ideas applied to SSL, and automatic composition of
+self-supervised pretext tasks.
+
+Guardrails:
+
+- search only over components/objectives/views that already have their own
+  invariants or fidelity evidence;
+- use a genuine outer validation split so recipe search does not become another
+  route to benchmark overfitting;
+- record the complete compiled program as the searchable object;
+- distinguish searching weights inside one card from discovering a genuinely new
+  recipe whose mechanics need their own card;
+- do not make the search engine a privileged way to bypass the two-consumer rule.
+
+Long term, this is one of the clearest payoffs of decomposing XTYLearner: the
+search space becomes structured and inspectable instead of "choose one of forty
+monolithic classes."
+
+### 18.9 Tabular foundation models and synthetic-task pretraining
+
+TabPFN and successors suggest a different scaling direction: pretrain across a
+distribution of synthetic tabular learning problems, then amortise inference on
+new datasets.
+
+Possible xty2-adjacent work:
+
+- benchmark TabPFN/TabICL/other tabular foundation models as propensity or
+  outcome nuisance learners;
+- use tabular foundation models as teachers for smaller xty2 components;
+- generate synthetic semi-supervised tasks from structural causal models;
+- pretrain encoders across synthetic `(X,T,Y)` DGPs with varied confounding,
+  missing-treatment mechanisms, heterogeneity and noise;
+- investigate an "XTY-PFN" style model amortising inference across families of
+  causal/semi-supervised tasks;
+- self-supervised task generation from one real table, followed by transfer to
+  related tables.
+
+This is probably a separate research programme rather than a v1 framework
+extension. Treat PFN/foundation models first as external components/baselines.
+
+### 18.10 Incomplete multi-view learning
+
+If `x` eventually consists of multiple semantically distinct data sources rather
+than one fully observed `[B,D]` tensor, the incomplete-multi-view literature is
+more relevant than simply concatenating columns and imputing missing values.
+
+Potential views:
+
+- flight/QAR dynamics;
+- flight-plan or dispatch variables;
+- weather;
+- loadsheet information;
+- aircraft history / maintenance;
+- airport/network context;
+- manually reviewed engineering features.
+
+Candidate mechanisms:
+
+- cross-view reconstruction;
+- view-specific encoders with shared latent space;
+- contrastive alignment across available views;
+- graph propagation between partially observed view combinations;
+- privileged-view distillation;
+- missing-view completion;
+- consistency losses only over pairs of views actually observed for each row.
+
+This would genuinely challenge v1's single-tensor input contract. Do not widen
+`XTYBatch` until two concrete multi-view recipes require it and the semantics of
+missing views are specified.
+
+### 18.11 Fully generative semi-supervised models
+
+The Kingma M2 / auxiliary deep generative-model lineage treats labels as latent
+variables inside a joint generative model rather than attaching pseudo-labels to
+a discriminative classifier.
+
+Potential directions:
+
+- M2-style latent-treatment generative model;
+- auxiliary-variable variational models;
+- explicit joint modelling of `p(x,t,y)`;
+- normalising-flow or diffusion-based tabular joint models;
+- generative missing-treatment imputation integrated with likelihood training;
+- posterior predictive uncertainty over treatment and outcome jointly.
+
+xty2 already has much of the probabilistic vocabulary needed for
+`p(t|x)`, `q(t|x,y)` and `p(y|x,t)`. A fully generative `p(x|...)` path should
+still be added only when real recipes justify the additional semantic quantities.
+
+### 18.12 Priority order for adjacent research
+
+If choosing research questions rather than filling a taxonomy, prioritise:
+
+1. **Missing-treatment causal inference** — changes what is statistically valid,
+   not merely which SSL trick performs best.
+2. **Rich / weak treatment supervision** — exploits information currently thrown
+   away by a binary observed/missing representation.
+3. **Expectation and aggregate constraints** — uses domain knowledge without
+   manufacturing row labels.
+4. **Privileged-information learning** — formalises training-only information and
+   clarifies the role of `q(t|x,y)`.
+5. **Conformal / set-valued supervision** — preserves ambiguity instead of
+   thresholding it away.
+6. **Safe/open-environment SSL** — asks when unlabeled data should *not* influence
+   a given objective.
+7. **Automatic recipe search** — becomes compelling only after the component
+   library has genuine independently validated breadth.
+8. **Graph, multi-view and foundation-model directions** — potentially large
+   programmes, best pursued when a concrete dataset/use case demands them.
+
+The shared principle is broader than semi-supervised classification: **preserve
+the form of evidence you actually have for as long as possible, and let each
+objective consume only the information its statistical assumptions justify.**
