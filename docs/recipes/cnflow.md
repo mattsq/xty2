@@ -207,7 +207,7 @@ optimisation:
 architecture:
   widths_depths:
     mlp_encoder: [128, 128]                      # old XTYLearner cond_net
-    conditional_flow: 5 RQ-NSF autoregressive transforms, each hidden=128 with 2 residual blocks, 8 bins, tail_bound=3; random permutation after each transform
+    conditional_flow: 5 RQ-NSF autoregressive transforms, each hidden=128 with 2 residual blocks, 8 bins, tails="linear", tail_bound=3; random permutation after each transform
     categorical_propensity: linear 128 -> K
   activation:
     mlp_encoder: relu                            # old XTYLearner cond_net
@@ -226,7 +226,7 @@ architecture:
     conditional_flow: nflows 0.14 defaults
     categorical_propensity: normal std=0.1/sqrt(fan_in), bias=0  # existing shared component
   output_parameterisation:
-    conditional_flow: StandardNormal base -> 5 conditional RQ-NSF(AR) transforms over flattened continuous Y; categorical t is one-hot context; 100 fixed-antithetic draws approximate mean
+    conditional_flow: StandardNormal base -> 5 conditional RQ-NSF(AR) transforms with explicit linear tails outside [-3, 3] over flattened continuous Y; categorical t is one-hot context; 100 fixed-antithetic draws approximate mean
     categorical_propensity: K softmax logits
 
 data:
@@ -250,7 +250,7 @@ an external `BatchSource` and cannot honestly claim to enforce them.
 |---|---|---|---|
 | 1 | Condition an outcome flow on covariates and categorical treatment, and add a propensity head plus missing-treatment likelihood. | Durkan et al. provide the density primitive, not a causal recipe. These additions are the P7 purpose. | No direct comparison with the paper's unconditional UCI likelihood numbers is valid. |
 | 2 | Use five autoregressive spline transforms with random permutations and hidden width 128, rather than the paper's ten steps with LU linear transforms and dataset-specific widths. | These are the pinned XTYLearner defaults; P7 ports the project-local recipe rather than reproducing an NSF table. | Lower capacity and cheaper sampling; direction on the project-local benchmark is unknown. |
-| 3 | Use `tail_bound=3` for every continuous outcome dimension; old XTYLearner inherited the `nflows` default of 1. | The paper reports `B=3` as robust in `[1,5]`, and the value must be explicit rather than inherited. | Likely improves flexibility for standardised outcomes outside `[-1,1]`; direction otherwise unknown. |
+| 3 | Keep the old XTYLearner `tails="linear"` setting and use `tail_bound=3` for every continuous outcome dimension instead of its inherited `nflows` default of 1. | `nflows` v0.14 otherwise defaults `tails=None`, which selects the bounded spline and makes `tail_bound` ineffective. The paper defines linear tails and reports `B=3` as robust in `[1,5]`; both arguments must therefore be explicit. | Preserves unrestricted support and likely improves flexibility for standardised outcomes outside `[-1,1]`; direction otherwise unknown. |
 | 4 | Use RQ-NSF autoregressive transforms for every continuous event dimension. Old XTYLearner switched to affine MAF when `D_y > 1`. | One declared parameterisation avoids an outcome-rank branch and tests the same distribution contract for scalar and vector outcomes. | More flexible but slower for vector outcomes. |
 | 5 | Replace the old missing-label `logsumexp_k p(y|x,k)` with the existing propensity-weighted `logsumexp_k p(t=k|x)p(y|x,k)`. | The old expression omits the treatment prior and is not the observed-data likelihood. P7 exists to prove the generic objective can supply the correct calculation unchanged. | Changes both optimum and gradient path on missing-treatment data; expected to improve a correctly specified DGP, not guaranteed under misspecification. |
 | 6 | Omit training-time outcome jitter, the optional MMD branch and optional inverse-propensity weighting from `CNFlowModel.loss`. | Losses must remain independent of parameterisation. MMD was inactive by default; jitter would make repeated `log_prob` calls disagree; row weights already belong to `XTYBatch.weight`. | MMD omission has no default effect; jitter omission may reduce regularisation; explicit row weights retain their normal effect. |
@@ -262,24 +262,142 @@ an external `BatchSource` and cannot honestly claim to enforce them.
 There is no paper-level `cnflow` result to reproduce. Substituting an RQ-NSF
 UCI density number would test a different, unconditional model; calling the old
 single-run XTYLearner ledger entry "published" would be equally misleading.
-P12 should therefore run a predeclared project-local discrimination benchmark:
-a scalar-outcome DGP whose true `p(y | x,t)` is heteroskedastic and bimodal,
-with exactly 50% treatment MCAR. The flow and a fixed-scale Gaussian TARNet
-baseline use the same encoder, propensity head, batches, optimiser steps and
-seeds. The benchmark succeeds if the flow's mean held-out NLL is at least
-`0.10` nat/row lower and its `sqrt_PEHE` is no worse by more than `0.10`.
+P12 must instead run the fully fixed project-local discrimination benchmark
+below. Nothing in the DGP, preprocessing, fit, checkpoint selection or metric
+may be changed after observing results.
+
+### 6.1 Fixed DGP
+
+Run ten paired replicates indexed by `r in {0, ..., 9}`. Replicate `r` has base
+seed `s_r = 70000 + 100*r`. All generation uses CPU `torch.Generator` instances
+and `float32`. Independent train, validation and test populations have 4,096,
+2,048 and 4,096 rows and use seeds `s_r+1`, `s_r+2` and `s_r+3`. Within each
+population, draw tensors in this exact order: `X`, `U_T`, `U_S`, `epsilon`.
+For every row, with six independent standard-normal covariates,
+
+$$
+X_j \overset{\mathrm{iid}}{\sim} \mathcal N(0,1), \qquad j=1,\ldots,6,
+$$
+
+$$
+e(x)=0.1+0.8\,\operatorname{sigmoid}
+\left(1.25x_1-x_2+0.5x_3\right), \qquad
+T=\mathbb 1\{U_T<e(x)\}, \quad U_T\sim\operatorname{Uniform}(0,1),
+$$
+
+$$
+b(x)=0.8x_1+0.5(x_2^2-1)-0.6x_3x_4+0.3\sin(2x_5),
+\qquad
+\tau(x)=1+0.5\tanh(x_1),
+$$
+
+and, for candidate treatment `t in {0,1}`,
+
+$$
+q_t(x)=0.2+0.6\,\operatorname{sigmoid}(0.75x_5-0.5x_6+0.5t),
+\qquad
+\sigma_t(x)=0.15+0.10\,\operatorname{sigmoid}(x_6)+0.05t.
+$$
+
+Finally draw `U_S ~ Uniform(0,1)` and `epsilon ~ N(0,1)`, independently, and
+set
+
+$$
+S=\mathbb 1\{U_S<q_T(x)\}, \qquad
+Y=b(x)+T\tau(x)+1.5\{S-q_T(x)\}+\sigma_T(x)\epsilon.
+$$
+
+Thus the analytic conditional mean is
+`mu_t(x) = b(x) + t*tau(x)`, the CATE is `tau(x)`, and the exact conditional
+density is
+
+$$
+q_t\,\mathcal N\!\left(\mu_t+1.5(1-q_t),\sigma_t^2\right)
++(1-q_t)\,\mathcal N\!\left(\mu_t-1.5q_t,\sigma_t^2\right).
+$$
+
+Every outcome is observed. In the training population only, generate
+`torch.randperm(4096)` with seed `s_r+4`; the first 2,048 indices have missing
+treatment and the rest have observed treatment. Validation and test treatments
+remain fully observed. This is exact 50% training-treatment MCAR and is
+independent of `X`, `T` and `Y`.
+
+Use `X` without preprocessing. From all 4,096 training outcomes, including
+rows whose treatment is hidden, compute the population moments
+`y_bar = mean(Y)` and `s_y = sqrt(mean((Y-y_bar)^2))`. Both fits consume
+`Z=(Y-y_bar)/s_y`; the same training moments transform validation/test
+outcomes and convert predicted means back to original outcome units. No row or
+treatment-group weights are supplied.
+
+### 6.2 Fixed fit and evaluation
+
+The flow fit is exactly the section 4 recipe. The comparator uses the same
+two-layer 128-wide ReLU encoder, categorical propensity head, three objectives,
+objective weights, Adam settings and no weight decay, but replaces
+`conditional_flow` with the P5-style `tarnet_head`: two independent treatment
+heads, each `[100, 100, 100]` with ELU activation, no normalisation or dropout,
+`normal std=0.1/sqrt(fan_in), bias=0` initialisation, and
+`Normal(mean_k, 1.0)` output in standardised-outcome units. Reset the global
+CPU Torch RNG to `s_r+6`, initialise the shared encoder and propensity once,
+and copy them bit-for-bit to both fits. Reset it to `s_r+7` immediately before
+initialising the flow head (including its permutations) and to `s_r+8`
+immediately before initialising the Gaussian outcome head.
+
+Before either fit, use seed `s_r+5` to precompute 3,000 batches. Batch `j` is
+the first 256 indices of a fresh `torch.randperm(4096)` call; both fits consume
+the identical ordered batch-index table. Run both fits on CPU with Torch
+deterministic algorithms enabled, train for exactly 3,000 optimiser steps and
+evaluate the final checkpoint. The validation population is logged only as a
+diagnostic: it cannot select a checkpoint, tune a parameter or change this
+protocol. The test population is evaluated once after both fits.
+
+For model `M`, the primary per-replicate metric is the **conditional outcome
+NLL** on the fully labelled test population,
+
+$$
+\operatorname{NLL}^{(r)}_M
+=-\frac{1}{4096}\sum_i
+\log p_{M,Y}(Y_i\mid X_i,T_i),
+\qquad
+\log p_{M,Y}(y\mid x,t)
+=\log p_{M,Z}((y-\bar y)/s_y\mid x,t)-\log s_y.
+$$
+
+This is neither joint outcome-treatment NLL nor missing-treatment marginal
+NLL. The guardrail is test-set
+
+$$
+\sqrt{\operatorname{PEHE}}^{(r)}_M
+=\sqrt{\frac{1}{4096}\sum_i
+\left[\{\widehat\mu_{M,1}(X_i)-\widehat\mu_{M,0}(X_i)\}
+-\tau(X_i)\right]^2},
+$$
+
+in original outcome units. The flow uses its fixed 100-draw antithetic mean;
+the Gaussian comparator uses its analytic head means. Define paired
+differences `d_NLL^(r) = NLL_flow^(r) - NLL_Gaussian^(r)` and
+`d_PEHE^(r) = sqrt_PEHE_flow^(r) - sqrt_PEHE_Gaussian^(r)`. The benchmark
+passes only when the ten-replicate means satisfy
+`mean(d_NLL) <= -0.10` nat/row and `mean(d_PEHE) <= 0.10`. Report each model's
+mean plus the paired differences; every standard error is the sample standard
+deviation across replicates divided by `sqrt(10)`.
 
 ```yaml
 reproduction:
   dataset: xty2 analytic non-Gaussian outcome DGP
-  variant: scalar Y; heteroskedastic two-component noise; binary confounded T; exactly 50% treatment MCAR
-  split: fixed train/validation/test populations; paired flow and Gaussian fits use identical data, batches and initial shared parameters
-  metric: held_out_nll_primary_and_sqrt_PEHE_guardrail
+  variant: section 6.1 scalar-Y equations; six Gaussian X; binary confounded T; centred heteroskedastic two-component outcome mixture
+  samples: {train: 4096, validation: 2048, test: 4096}
+  missingness: exactly 2048 training treatments MCAR; all outcomes and all validation/test treatments observed
+  preprocessing: raw X; population-standardise Y from all training outcomes; evaluate in original Y units
+  pairing: identical populations, missingness mask, ordered batches and bit-identical initial shared parameters
+  training: batch_size=256; 3000 final-checkpoint Adam steps; validation is diagnostic only
+  primary_metric: test conditional outcome NLL p(Y|X,T), explicitly not joint or missing-treatment marginal NLL
+  guardrail: test sqrt_PEHE against analytic tau(X)
   published: n/a                         # project-local recipe; no published causal result exists
   published_source: n/a                  # threshold is predeclared below, not attributed to Durkan et al.
-  tolerance: flow NLL <= Gaussian NLL - 0.10 nat/row; flow sqrt_PEHE <= Gaussian sqrt_PEHE + 0.10
-  seeds: 10
-  report: mean_and_stderr
+  tolerance: mean paired d_NLL <= -0.10 nat/row; mean paired d_PEHE <= 0.10
+  seeds: r=0..9 with base 70000+100*r and fixed stream offsets from sections 6.1-6.2
+  report: per-model means plus paired-difference means and sample stderrs over 10 replicates
 ```
 
 Passing this target can validate the project-local claim but cannot turn it
@@ -287,13 +405,13 @@ into a reproduction of Durkan et al.; the result ledger must say that plainly.
 The eventual status vocabulary may need a project-local `validated` state. P7
 does not add one: that is a fidelity-system decision, not flow implementation.
 
-### 6.1 Result ledger
+### 6.3 Result ledger
 
 | Date | Commit | Metric | Value +/- stderr | Within tolerance? |
 |---|---|---|---|---|
 | | | | | |
 
-### 6.2 P7 and Gate 1 acceptance
+### 6.4 P7 and Gate 1 acceptance
 
 1. The graph contains exactly `mlp_encoder` (`X_RAW -> X_REPR`),
    `conditional_flow` (`X_REPR -> Y_GIVEN_XT`) and the existing
@@ -319,7 +437,8 @@ does not add one: that is a fidelity-system decision, not flow implementation.
 6. The card-to-plan cross-check covers every non-`n/a` section 4 key, including
    `data.treatment_encoding`, the flow architecture and the per-objective
    settings. A mutation that removes the flow head or replaces categorical
-   context with a flow coordinate fails a named invariant.
+   context with a flow coordinate, removes `tails="linear"`, or changes
+   `tail_bound=3` fails a named invariant.
 7. Gate 1 is recorded in the implementation PR: no objective changed; the
    recipe contains no conditional; and the real P5 review discrepancy already
    caught in PR #7 (component-scoped decay and per-component architecture plan
@@ -334,12 +453,12 @@ does not add one: that is a fidelity-system decision, not flow implementation.
 | Unspecified in source | Our choice | Basis |
 |---|---|---|
 | There is no paper defining `cnflow` as a causal method. | Treat XTYLearner as the recipe source and NSF as the flow primitive; state every causal addition as project-local. | Avoids transferring claims from an unconditional density paper. |
-| The old code did not make spline tail bound explicit. | `B=3`. | Durkan et al. section 5 report robustness over `[1,5]` and fix `B=3`. |
+| The old code set `tails="linear"` but did not make the spline tail bound explicit. | Preserve `tails="linear"` and set `B=3`; both constructor arguments are machine-checked. | `nflows` v0.14 defaults `tails=None`, so stating only `B` does not request the unconstrained wrapper. Durkan et al. define linear tails and fix `B=3`. |
 | The old code used spline transforms only for scalar outcomes. | Use the same RQ-NSF(AR) parameterisation for any flattened continuous event shape. | The transform supports it, removes an architecture branch and exercises the protocol more strongly. |
 | The old code estimated means with 100 new random draws. | 100 fixed antithetic standard-normal draws, generated independently of the global RNG and shared by every candidate. | Preserves the reference budget while satisfying deterministic, column-consistent means. |
 | Flow sampling returns a library-specific axis order. | The distribution wrapper always returns `[n, B, *Dy]` or `[n, B, C, *Dy]`. | `DESIGN.md` section 3.1 is authoritative at the port boundary. |
 | The old model's training budget was owned by whichever trainer called it. | 3,000 Adam steps at `1e-3`, constant rate, no decay or clipping. | Matches P5's smoke budget and the old benchmark learning rate while keeping the P7 stage explicit. |
-| No published result exists. | Predeclare the paired non-Gaussian synthetic target in section 6 and do not call it a paper reproduction. | A directional capability test is more honest than borrowing an unrelated NSF UCI number or a noisy legacy ledger row. |
+| No published result exists. | Predeclare the complete seed-locked non-Gaussian DGP, paired fit and exact evaluation calculation in section 6, and do not call it a paper reproduction. | A directional capability test is more honest than borrowing an unrelated NSF UCI number or a noisy legacy ledger row, and the threshold cannot be tuned by changing an underspecified benchmark. |
 | Whether a project-local result needs a new card status. | Leave the status vocabulary unchanged in P7 and flag the question for the Gate 1 review. | Changing the fidelity system is not required to test the outcome-head abstraction. |
 | Whether the shared encoder should retain TARNet's ELU/L2 configuration. | Use the XTYLearner cnflow encoder: two ReLU layers of width 128 with no normalisation. | The graph component is shared; its recipe configuration remains method-specific and is explicitly visible in the plan. |
 
