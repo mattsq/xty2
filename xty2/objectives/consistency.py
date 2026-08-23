@@ -95,6 +95,10 @@ class ConsistencyLoss:
             return frozenset({(self.port, self.right)})
         return frozenset()
 
+    def plan_details(self) -> tuple[str, ...]:
+        """Arithmetic choices that must change the plan and its digest."""
+        return (f"divergence = {self.divergence!r}",)
+
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
     ) -> LossTerm:

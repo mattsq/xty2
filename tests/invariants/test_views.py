@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Literal
 
 import pytest
 import torch
@@ -198,6 +199,32 @@ class _InPlaceTransform:
         return "in-place write"
 
 
+@dataclass(frozen=True)
+class _FeatureWrite:
+    target: str
+    value: float
+    declared: tuple[str, ...] = ()
+
+    def validate(self, schema: Schema) -> None:
+        schema.feature(self.target)
+
+    def affected_columns(self, schema: Schema) -> frozenset[str]:
+        del schema
+        return frozenset(self.declared)
+
+    def apply(
+        self, batch: XTYBatch, schema: Schema, *, generator: torch.Generator
+    ) -> XTYBatch:
+        del generator
+        index = schema.index_of(self.target)
+        x = batch.x.clone()
+        x[:, index] = self.value
+        return batch.replace(x=x)
+
+    def describe(self) -> str:
+        return f"write {self.target}"
+
+
 def test_a_transform_that_writes_into_its_input_is_rejected() -> None:
     batch = _batch()
     before = batch.clone()
@@ -206,7 +233,25 @@ def test_a_transform_that_writes_into_its_input_is_rejected() -> None:
     assert batch.equal_to(before)
 
 
-def _consistency_recipe() -> Recipe:
+def test_a_transform_cannot_hide_an_immutable_feature_write() -> None:
+    transform = _FeatureWrite("site", 1.0)
+    with pytest.raises(ViewError, match=r"undeclared feature column.*site"):
+        _view("bad_x", transform).apply(_batch(), _schema(), rng_key=0)
+
+
+def test_a_transform_cannot_hide_a_derived_dependency_write() -> None:
+    transform = _FeatureWrite("mass", 6.0)
+    with pytest.raises(ViewError, match=r"undeclared feature column.*mass"):
+        _view("bad_x", transform).apply(_batch(), _schema(derived=True), rng_key=0)
+
+
+def test_a_custom_transform_must_respect_declared_feature_bounds() -> None:
+    transform = _FeatureWrite("mass", 11.0, declared=("mass",))
+    with pytest.raises(ViewError, match=r"mass.*outside its inclusive bounds"):
+        _view("bad_x", transform).apply(_batch(), _schema(), rng_key=0)
+
+
+def _consistency_recipe(*, divergence: Literal["kl", "mse"] = "kl") -> Recipe:
     weak = _view("weak_x", FeatureMask(0.25, columns=("mass",)))
     strong = _view("strong_x", FeatureMask(0.75, columns=("mass",)))
     left = Realisation(view="weak_x")
@@ -216,7 +261,7 @@ def _consistency_recipe() -> Recipe:
             port=Port.T_GIVEN_X,
             left=left,
             right=right,
-            divergence="kl",
+            divergence=divergence,
             stop_grad="left",
             rows="all",
         ),
@@ -264,6 +309,14 @@ def test_the_plan_prints_validated_view_mechanics() -> None:
     assert "views\n  weak_x" in rendered
     assert "transform  FeatureMask" in rendered
     assert "preserves  row_id, t, t_observed, y, y_observed" in rendered
+
+
+def test_consistency_divergence_changes_the_plan_and_its_digest() -> None:
+    kl = compile(_consistency_recipe(divergence="kl")).plan
+    mse = compile(_consistency_recipe(divergence="mse")).plan
+    assert "      setting   divergence = 'kl'" in kl.render()
+    assert "      setting   divergence = 'mse'" in mse.render()
+    assert kl.digest != mse.digest
 
 
 def test_an_undeclared_view_is_still_an_unsatisfied_realisation() -> None:

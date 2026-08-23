@@ -206,11 +206,19 @@ class ViewSpec:
 
     def validate(self, schema: Schema) -> None:
         """Validate transforms and the derived-column rule against ``schema``."""
+        self._validated_transform_columns(schema)
+
+    def _validated_transform_columns(
+        self, schema: Schema
+    ) -> tuple[frozenset[str], ...]:
+        """Validate the view and return each transform's declared footprint."""
         affected: set[str] = set()
         known = set(schema.feature_names)
+        declarations: list[frozenset[str]] = []
         for transform in self.transforms:
             transform.validate(schema)
-            columns = set(transform.affected_columns(schema))
+            columns = frozenset(transform.affected_columns(schema))
+            declarations.append(columns)
             unknown = sorted(columns - known)
             if unknown:
                 raise ViewError(
@@ -264,6 +272,7 @@ class ViewSpec:
                 f"view {self.name!r} registers recompute rule(s) for "
                 f"{redundant!r}, but none of their dependencies are perturbed"
             )
+        return tuple(declarations)
 
     def affected_columns(self, schema: Schema) -> frozenset[str]:
         """Every column the final view may replace, including recomputes."""
@@ -280,7 +289,7 @@ class ViewSpec:
         if type(rng_key) is not int:
             raise ViewError(f"rng_key must be an int, got {type(rng_key)}")
         schema.validate_batch(batch)
-        self.validate(schema)
+        declarations = self._validated_transform_columns(schema)
         original = batch.clone()
         generator = torch.Generator(device=batch.device)
         generator.manual_seed(_view_seed(rng_key, self.name))
@@ -289,7 +298,7 @@ class ViewSpec:
         # still rejects an in-place implementation, while the user's source
         # batch remains intact even on that failing path.
         current = batch.clone()
-        for transform in self.transforms:
+        for transform, declared in zip(self.transforms, declarations, strict=True):
             before = current.clone()
             result = transform.apply(current, schema, generator=generator)
             if not current.equal_to(before):
@@ -304,6 +313,14 @@ class ViewSpec:
                     f"returned {type(result)}, expected XTYBatch"
                 )
             schema.validate_batch(result)
+            _validate_transform_columns(
+                before,
+                result,
+                schema,
+                declared=declared,
+                transform=transform,
+                view=self.name,
+            )
             current = result
 
         for rule in _ordered_rules(schema, self.recompute_rules):
@@ -390,6 +407,46 @@ def _field_equal(left: object, right: object) -> bool:
     if isinstance(left, Tensor) and isinstance(right, Tensor):
         return bool(torch.equal(left, right))
     return left == right
+
+
+def _validate_transform_columns(
+    before: XTYBatch,
+    result: XTYBatch,
+    schema: Schema,
+    *,
+    declared: frozenset[str],
+    transform: ViewTransform,
+    view: str,
+) -> None:
+    """Enforce a transform's declared feature footprint on its actual result."""
+    changed = {
+        spec.name
+        for index, spec in enumerate(schema.features)
+        if not torch.equal(before.x[:, index], result.x[:, index])
+    }
+    undeclared = sorted(changed - set(declared))
+    if undeclared:
+        raise ViewError(
+            f"transform {transform.describe()!r} in view {view!r} changed "
+            f"undeclared feature column(s) {undeclared!r}. affected_columns() "
+            "is a runtime contract: undeclared writes can bypass immutable and "
+            "derived-column checks."
+        )
+
+    for name in sorted(changed):
+        spec = schema.feature(name)
+        if spec.bounds is None or result.batch_size == 0:
+            continue
+        low, high = spec.bounds
+        index = schema.index_of(name)
+        before_values = before.x[:, index]
+        values = result.x[:, index]
+        produced = values[values != before_values]
+        if not bool(((produced >= low) & (produced <= high)).all()):
+            raise ViewError(
+                f"transform {transform.describe()!r} in view {view!r} produced "
+                f"feature {name!r} outside its inclusive bounds {spec.bounds!r}"
+            )
 
 
 def _duplicates(names: tuple[str, ...]) -> list[str]:

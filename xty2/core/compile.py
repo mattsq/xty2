@@ -27,7 +27,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from xty2.core.batch import XTYBatch
 from xty2.core.card_keys import card_hyperparameters
@@ -95,6 +95,7 @@ class CompiledObjective:
 
     weighted: Weighted
     rows: tuple[Rows, ...]
+    plan_details: tuple[str, ...]
 
     @property
     def objective(self) -> Objective:
@@ -111,6 +112,13 @@ class CompiledObjective:
     @property
     def reduction(self) -> Reduction:
         return self.weighted.reduction
+
+
+@runtime_checkable
+class _ObjectiveWithPlanDetails(Protocol):
+    """Optional stable mechanics an objective needs the plan to fingerprint."""
+
+    def plan_details(self) -> tuple[str, ...]: ...
 
 
 @dataclass(frozen=True)
@@ -287,6 +295,8 @@ class ExecutionPlan:
                 f"  reduction {objective.reduction}"
             )
             lines.append(f"      weight    {objective.weight.describe()}")
+            for detail in objective.plan_details:
+                lines.append(f"      setting   {detail}")
             lines.append(f"      requires  {requires or 'nothing'}")
             # A stop-gradient is invisible in `requires`, and which side a
             # paper detaches is exactly the one-line detail card §4 exists to
@@ -479,7 +489,13 @@ def _compile_stage(
             _check_realisation(realisation, realisable, objective, where)
             demanded.setdefault(realisation, set()).add(port)
         trained |= {port for port, _ in _check_detaches(objective, where)}
-        objectives.append(CompiledObjective(weighted=weighted, rows=rows))
+        objectives.append(
+            CompiledObjective(
+                weighted=weighted,
+                rows=rows,
+                plan_details=_objective_plan_details(objective, where),
+            )
+        )
 
     passes = tuple(
         ForwardPass(realisation=realisation, components=graph.subgraph_for(ports))
@@ -523,6 +539,28 @@ def _effective_rows(stage: Stage, objective: Objective, where: str) -> tuple[Row
         if rows != "all" and rows not in populations:
             populations.append(rows)
     return tuple(populations) or ("all",)
+
+
+def _objective_plan_details(objective: Objective, where: str) -> tuple[str, ...]:
+    """Snapshot stable, non-card mechanics that affect objective arithmetic."""
+    if not isinstance(objective, _ObjectiveWithPlanDetails):
+        return ()
+    raw_details: object = objective.plan_details()
+    if not isinstance(raw_details, tuple):
+        raise CompileError(
+            f"objective {objective.name!r} in {where} returned "
+            f"{type(raw_details)} from plan_details(), expected a tuple of strings"
+        )
+    details: list[str] = []
+    for detail in raw_details:
+        if not isinstance(detail, str) or not detail or "\n" in detail:
+            raise CompileError(
+                f"objective {objective.name!r} in {where} returned invalid "
+                f"stable plan detail {detail!r}; each must be a non-empty "
+                "single line"
+            )
+        details.append(detail)
+    return tuple(details)
 
 
 def _check_detaches(
