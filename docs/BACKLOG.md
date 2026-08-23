@@ -1509,3 +1509,99 @@ If choosing research questions rather than filling a taxonomy, prioritise:
 The shared principle is broader than semi-supervised classification: **preserve
 the form of evidence you actually have for as long as possible, and let each
 objective consume only the information its statistical assumptions justify.**
+
+---
+
+## 19. Framework and composability research
+
+Detailed architectural notes belong in `PRIOR_ART.md`; this section records only
+framework-related research tasks that could affect the post-P12 programme.
+
+### 19.1 Source-code studies
+
+Study these frameworks before inventing a new xty2 abstraction in the same area:
+
+1. **PyTorch Metric Learning** — strongest current precedent for semantic
+   intermediate contracts (`miner -> distance -> loss -> reducer`) and explicit
+   compatibility/conversion rules between independently reusable pieces.
+2. **MosaicML Composer** — strongest execution precedent for independently
+   composable, stateful interventions attached to declared training events.
+3. **VISSL** — strong precedent for assembling SSL tasks from trunks, heads,
+   losses, transforms, schedules and lifecycle hooks rather than one monolithic
+   method class.
+4. **OpenMixup** — larger-scale registry/config composition across supervised,
+   self-supervised and semi-supervised research.
+5. **LightlySSL** — reusable SSL primitives and persistent mechanisms such as
+   memory banks, momentum models and neighbour structures.
+6. **solo-learn / Dassl** — useful negative/control cases for the common
+   "shared trainer + algorithm subclass" equilibrium also seen in SemiLearn.
+7. **WRENCH** — relevant if rich/weak supervision becomes concrete, because it
+   treats supervision/label models as a separate layer from downstream models.
+
+For each study, record observations in `PRIOR_ART.md`, not `DESIGN.md`. Promote
+only a binding decision supported by real xty2 consumers.
+
+### 19.2 Harmony-style crowded objective composition
+
+Harmony (TMLR 2025) deliberately combines weak supervision, discriminative
+self-supervision, generative self-supervision and EMA soft targets, with multiple
+objectives active at once and subsets available for ablation.
+
+Reference: https://openreview.net/forum?id=IcOBCufqFO
+
+This is a useful scientific template for a future XTY composite recipe:
+
+- supervised treatment signal;
+- exact missing-treatment likelihood;
+- discriminative representation SSL;
+- generative/reconstruction SSL;
+- EMA teacher soft targets;
+- optionally causal/outcome objectives.
+
+The goal is not to reproduce Harmony's vision setup. It is to reproduce the
+**experimental structure**: independently meaningful signals, arbitrary subsets,
+and diagnostics that show which combinations cooperate or interfere.
+
+### 19.3 Composition interaction and order effects
+
+The ICLR 2025 *Composable Interventions for Language Models* work is relevant to
+the science of combination even though it is outside SSL. It treats interaction
+and ordering between independently developed interventions as measurable objects
+and finds that composition can be non-commutative and mutually interfering.
+
+Reference:
+https://proceedings.iclr.cc/paper_files/paper/2025/hash/7f5f9a88c6516469c83d074c6f2976fb-Abstract-Conference.html
+
+Possible xty2 research questions:
+
+- Does objective A help alone but hurt when B is active?
+- Is `pretrain(A) -> joint(B,C)` different from `joint(A,B,C)` at matched compute?
+- Does the order in which objectives are introduced matter after controlling for
+  total optimization steps?
+- Do gradient-cosine conflicts predict actual negative transfer?
+- Does a stateful mediator change another objective's effective row population
+  enough to explain gains/losses?
+- Are interactions stable across labeled fractions and missing-treatment
+  mechanisms?
+
+This is one reason to retain raw per-objective losses, coverage, gradient norms
+and gradient cosines even when a composite recipe appears to work.
+
+### 19.4 Framework-abstraction decision checklist
+
+When a post-P12 recipe appears to need a new framework concept, compare the
+failure against existing framework precedents before adding it:
+
+| Suspected missing concept | Prior art to inspect first |
+|---|---|
+| stateful prediction transform / policy | SemiLearn, Composer |
+| memory bank / neighbour state | LightlySSL, SemiLearn |
+| semantic intermediate object | PyTorch Metric Learning |
+| config/recipe composition | VISSL, OpenMixup |
+| rich supervision object | WRENCH |
+| lifecycle/event hook | Composer, VISSL, SemiLearn |
+| method subclass pressure | solo-learn, Dassl, SemiLearn |
+
+The question is not whether another framework has the abstraction. The question
+is whether that framework's experience reveals a stable contract that **two real
+xty2 recipes also require**.
