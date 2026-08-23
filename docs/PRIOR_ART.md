@@ -435,3 +435,227 @@ post-P12 methods:
 
 Record answers here as evidence accumulates. Promote an answer into
 `DESIGN.md` only when it becomes a binding architectural decision.
+
+---
+
+## 3. Broader framework prior art
+
+SemiLearn is not the only attempt to move reuse below a named method. Other
+frameworks attack different parts of the same decomposition problem. None is a
+direct template for xty2; the useful question is which boundary each project
+chooses and where it eventually falls back to imperative method code.
+
+### 3.1 VISSL
+
+Repository: https://github.com/facebookresearch/vissl
+
+VISSL was FAIR's modular framework for self-supervised learning. Its task
+configuration independently selected model trunks, heads, losses, transforms,
+optimizers/schedulers and lifecycle hooks. The explicit design goal was that
+components developed for one SSL task could be reused in another.
+
+Architecturally, this is much closer to xty2 than SemiLearn because the method is
+assembled from lower-level pieces rather than represented only by an algorithm
+subclass. VISSL also exposes fine-grained lifecycle hook points around forward,
+loss, backward and parameter update.
+
+**xty2 lesson:** study VISSL as prior art for config/recipe composition and
+lifecycle separation, but retain xty2's stronger semantic contracts. VISSL's
+interfaces are mostly software/architectural contracts rather than typed
+statistical quantities. The project was archived in 2024, so treat it as design
+history rather than a dependency candidate.
+
+### 3.2 OpenMixup / OpenMMLab-style composition
+
+Repository: https://github.com/Westlake-AI/openmixup
+
+OpenMixup supports supervised, self-supervised and semi-supervised learning using
+OpenMMLab registries and configuration. Configs separately name model type,
+backbone, neck, head, loss, augmentation and runtime/schedule pieces.
+
+This is strong precedent for making a named method mostly configuration over
+registered components. It also shows the limits of that pattern: the reusable
+vocabulary is primarily architectural (`backbone`, `neck`, `head`) rather than
+statistical (`p(t|x)`, `p(y|x,t)`, candidate-treatment distributions, row
+eligibility).
+
+**xty2 lesson:** keep the good part — thin recipes and resolved registries —
+without collapsing ports into generic neural-network module roles.
+
+### 3.3 LightlySSL
+
+Repository: https://github.com/lightly-ai/lightly
+
+LightlySSL is a useful "box of Lego" precedent. It exposes transforms, view/data
+utilities, projection/prediction heads, SSL losses, momentum-model helpers and
+memory-bank machinery as independent PyTorch pieces. Full methods are then wired
+in ordinary training code.
+
+A particularly relevant pattern is reusable memory-bank state. The same loss or
+neighbour mechanism can be paired with or without a memory bank rather than
+requiring a completely different monolithic algorithm class.
+
+**xty2 lesson:** this supports keeping objectives and state mechanisms
+independent where their contracts genuinely recur. Lightly does not solve the
+execution-plan problem: composition ultimately lives in imperative
+`training_step` code, which is exactly the boundary xty2 is trying to push past.
+
+### 3.4 solo-learn and Dassl
+
+Repositories:
+
+- https://github.com/vturrisi/solo-learn
+- https://github.com/KaiyangZhou/Dassl.pytorch
+
+These are useful comparison cases because they converge on a pattern similar to
+SemiLearn: substantial shared infrastructure plus a method-specific subclass.
+solo-learn separates losses, augmentations and momentum utilities but full
+methods still inherit from `BaseMethod`/`BaseMomentumMethod` and override the
+training step. Dassl similarly provides registries and common trainers, while
+SSL/domain methods implement their own `forward_backward` logic.
+
+**xty2 lesson:** several independent framework efforts have found this a useful
+engineering equilibrium, but it is also a clear composability ceiling. Shared
+trainers remove repetition without making the learning programme itself a
+first-class inspectable object.
+
+### 3.5 MosaicML Composer
+
+Repository: https://github.com/mosaicml/composer
+
+Composer is not an SSL framework, but it is important execution prior art. Its
+core idea is that training interventions should be independently composable
+algorithms attached to explicit events. An algorithm effectively answers:
+
+```text
+match(event, state) -> bool
+apply(event, state)
+```
+
+with events around dataloading, forward, loss, backward and parameter updates.
+Multiple interventions can therefore modify batches, models, losses or training
+dynamics without being hard-coded into one trainer.
+
+This is the strongest prior art found so far for xty2's unresolved post-P12
+"stateful mediator/policy" question. A mechanism such as distribution alignment,
+adaptive thresholding or an in-training state update can be understood as a
+state transition at a declared point in execution.
+
+**xty2 lesson:** do not copy a generic event bus into the public recipe API.
+Composer gains flexibility by weakening semantic typing and allowing broad state
+mutation. But its event/state model is worth studying if two xty2 recipes force
+a reusable mechanism that cannot honestly be represented as a component,
+objective, view, schedule or stage.
+
+### 3.6 PyTorch Metric Learning
+
+Repository: https://github.com/KevinMusgrave/pytorch-metric-learning
+
+PyTorch Metric Learning is unusually relevant because its decomposition is
+semantic rather than merely architectural. It separates concepts such as:
+
+```text
+sampler -> miner -> distance -> loss -> reducer
+```
+
+and provides explicit conversion/compatibility semantics between the structures
+these pieces exchange. A miner and a loss need not have been designed as one
+named algorithm to compose correctly.
+
+This is close to the philosophical target for xty2: identify meaningful
+intermediate objects, give them contracts, and let independent mechanisms
+consume them.
+
+A possible future analogy, if real recipes justify it, is:
+
+```text
+TreatmentDistribution
+    -> alignment/calibration
+    -> eligibility/weighting
+    -> target construction
+    -> objective
+    -> reduction
+```
+
+**xty2 lesson:** this is perhaps the strongest precedent for semantic interface
+design. It argues for resisting generic `Tensor -> Tensor` helpers when a stable
+statistical object can be named and checked instead.
+
+### 3.7 WRENCH and weak-supervision frameworks
+
+Repository: https://github.com/JieyuZ2/wrench
+
+WRENCH decomposes weak-supervision systems into supervision/label models,
+downstream end models and joint models. It is useful prior art if xty2 expands
+beyond exact-vs-missing treatment labels into labeling functions, partial labels
+or other rich supervision.
+
+**xty2 lesson:** supervision itself may eventually deserve typed structure rather
+than being collapsed into a target tensor. Do not import that abstraction until
+concrete rich-supervision recipes satisfy the two-consumer rule.
+
+### 3.8 Harmony and compositional SSL research
+
+Harmony (TMLR 2025) is scientifically important even though it is not a general
+software framework. It deliberately combines weak supervision, discriminative
+self-supervision, generative self-supervision and EMA soft targets, training
+multiple objectives simultaneously and allowing subsets to be enabled for
+ablation.
+
+Reference: https://openreview.net/forum?id=IcOBCufqFO
+
+This is close to the scientific use case xty2 is intended to make cheap:
+construct a crowded but inspectable recipe from independently meaningful
+signals, then study which combinations help and which interfere.
+
+### 3.9 Composable Interventions and interaction science
+
+The ICLR 2025 work on *Composable Interventions for Language Models* is adjacent
+rather than SSL-specific, but it addresses an important downstream question:
+once interventions become composable, their order and interaction effects become
+scientific objects in their own right. Independently useful methods can
+interfere, and composition can be non-commutative.
+
+Reference:
+https://proceedings.iclr.cc/paper_files/paper/2025/hash/7f5f9a88c6516469c83d074c6f2976fb-Abstract-Conference.html
+
+**xty2 lesson:** objective-level raw losses, coverage, gradient norms and gradient
+cosines are not merely debugging conveniences. They provide the beginnings of an
+experimental language for asking what happens when independently validated
+mechanisms are combined.
+
+### 3.10 Comparison matrix
+
+| Concern | Strong prior art | Typical boundary |
+|---|---|---|
+| shared SSL trainer + reusable utilities | SemiLearn, solo-learn, Dassl | method subclass still owns training logic |
+| composable architecture/head/loss/view pieces | VISSL, OpenMixup | software contracts more than statistical semantics |
+| reusable SSL primitives and memory state | LightlySSL | full method remains imperative |
+| event-driven training interventions | Composer | very flexible shared-state mutation |
+| semantic intermediate contracts | PyTorch Metric Learning | domain-specific but strongly typed composition |
+| weak-supervision pipeline decomposition | WRENCH | label/end-model pipeline rather than XTY programme |
+| multi-objective SSL composition | Harmony | research recipe, not general compiler |
+| interaction/order effects of composed methods | Composable Interventions | analysis framework in a different domain |
+
+No framework found so far combines all of xty2's intended pieces: semantic
+statistical ports, explicit views and row populations, independently reusable
+objectives, staged programmes, leakage/provenance checks, a printable compiled
+execution plan, and card/reproduction-based fidelity. That does not establish
+novelty, but it does identify the specific combination for which existing prior
+art is currently thin.
+
+### 3.11 Source-study priorities
+
+If further source-code study is worth the time, prioritise:
+
+1. **PyTorch Metric Learning** — semantic intermediate contracts and conversion
+   rules.
+2. **Composer** — state/event lifecycle and composition ordering.
+3. **VISSL** — task/config decomposition across model, losses, transforms and
+   lifecycle hooks.
+4. **OpenMixup** — registry/config composition at larger research-framework
+   scale.
+5. **LightlySSL** — reusable stateful SSL primitives such as memory banks.
+
+As with SemiLearn, record observations here first. Promote them into
+`DESIGN.md` only when a real xty2 implementation decision makes them binding.
