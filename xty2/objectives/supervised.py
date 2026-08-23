@@ -50,6 +50,11 @@ class ObservedOutcomeNLL:
     def requires(self) -> frozenset[tuple[Port, Realisation]]:
         return frozenset({(Port.Y_GIVEN_XT, DEFAULT)})
 
+    @property
+    def detaches(self) -> frozenset[tuple[Port, Realisation]]:
+        """Nothing: the term trains the head whose density it evaluates."""
+        return frozenset()
+
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
     ) -> LossTerm:
@@ -81,6 +86,11 @@ class ObservedTreatmentNLL:
     @property
     def requires(self) -> frozenset[tuple[Port, Realisation]]:
         return frozenset({(Port.T_GIVEN_X, DEFAULT)})
+
+    @property
+    def detaches(self) -> frozenset[tuple[Port, Realisation]]:
+        """Nothing: the term trains the propensity head it evaluates."""
+        return frozenset()
 
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext

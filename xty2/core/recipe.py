@@ -72,6 +72,29 @@ class Objective(Protocol):
         is the objective's half of that.
         """
 
+    @property
+    def detaches(self) -> frozenset[tuple[Port, Realisation]]:
+        """The subset of `requires` this objective reads but does not train.
+
+        A stop-gradient is invisible to the graph: `requires` says a term
+        *reads* `p(t|x)`, and the compiler orders the forward pass from that,
+        but a `.detach()` inside `compute` means no gradient ever reaches the
+        component that produced it. Without this declaration the dead-trainable
+        check (§8.4) accepts a stage whose sole trainable is the detached side
+        — which compiles, trains, and makes every optimiser step a no-op.
+
+        It is a required member rather than an optional attribute for the
+        reason §7.1 gives about provenance: a declaration the compiler falls
+        back to a default for is a declaration that can be forgotten, and
+        forgetting this one restores exactly the hole it exists to close.
+
+        Return the empty set when the term backpropagates through everything it
+        reads, which is the ordinary case. Where a card field governs the
+        stop-gradient — `gradients.marginal_nll_grad_path`,
+        `gradients.stop_gradients` — derive this from that field rather than
+        stating it twice.
+        """
+
     def compute(
         self,
         state: State,
@@ -123,11 +146,12 @@ class Weighted:
         if not isinstance(candidate, Objective):
             missing = [
                 member
-                for member in ("name", "requires", "rows", "compute")
+                for member in ("name", "requires", "rows", "detaches", "compute")
                 if not hasattr(candidate, member)
             ]
             raise CompileError(
-                f"Weighted holds an Objective — name, requires, rows, compute — "
+                f"Weighted holds an Objective — name, requires, rows, detaches, "
+                f"compute — "
                 f"got {type(candidate)}, which is missing {missing!r} "
                 "(DESIGN.md §4)."
             )
@@ -154,6 +178,11 @@ class Weighted:
     def rows(self) -> Rows:
         """The wrapped objective's row population."""
         return self.objective.rows
+
+    @property
+    def detaches(self) -> frozenset[tuple[Port, Realisation]]:
+        """The wrapped objective's stop-gradients."""
+        return self.objective.detaches
 
     @property
     def schedule(self) -> Schedule:

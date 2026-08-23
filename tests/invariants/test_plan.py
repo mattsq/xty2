@@ -63,6 +63,18 @@ stage fit
 
 hyperparameters
   architecture.widths_depths = 5
+  losses.eligible_rows
+    fit.outcome_nll   = 'y_observed'
+    fit.treatment_nll = 't_observed'
+  losses.reduction
+    fit.outcome_nll   = 'mean'
+    fit.treatment_nll = 'mean'
+  losses.schedules
+    fit.outcome_nll   = 'constant 1.0'
+    fit.treatment_nll = 'constant 1.0'
+  losses.weights
+    fit.outcome_nll   = 1.0
+    fit.treatment_nll = 1.0
 """
 
 POSTERIOR_PLAN = """\
@@ -99,6 +111,18 @@ stage infer
 
 hyperparameters
   architecture.widths_depths = 5
+  losses.eligible_rows
+    infer.posterior_kl  = 't_observed'
+    infer.treatment_nll = 't_observed'
+  losses.reduction
+    infer.posterior_kl  = 'mean'
+    infer.treatment_nll = 'mean'
+  losses.schedules
+    infer.posterior_kl  = 'constant 1.0'
+    infer.treatment_nll = 'constant 1.0'
+  losses.weights
+    infer.posterior_kl  = 1.0
+    infer.treatment_nll = 1.0
 """
 
 

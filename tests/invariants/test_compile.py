@@ -19,6 +19,7 @@ from xty2.core import (
     ComponentGraph,
     LossTerm,
     Port,
+    Ramp,
     Realisation,
     Recipe,
     RowIndex,
@@ -291,7 +292,19 @@ def test_looking_up_a_stage_that_does_not_exist_says_what_does() -> None:
 
 def test_the_plan_carries_the_resolved_hyperparameters() -> None:
     plan = compile(two_head_recipe()).plan
-    assert plan.hyperparameters == {"architecture.widths_depths": HIDDEN}
+    assert plan.hyperparameters == {
+        "architecture.widths_depths": HIDDEN,
+        "losses.eligible_rows": {
+            "fit.outcome_nll": "y_observed",
+            "fit.treatment_nll": "t_observed",
+        },
+        "losses.reduction": {"fit.outcome_nll": "mean", "fit.treatment_nll": "mean"},
+        "losses.schedules": {
+            "fit.outcome_nll": "constant 1.0",
+            "fit.treatment_nll": "constant 1.0",
+        },
+        "losses.weights": {"fit.outcome_nll": 1.0, "fit.treatment_nll": 1.0},
+    }
 
 
 @dataclass(frozen=True)
@@ -303,6 +316,10 @@ class _WidthBindingObjective:
     width: int
     rows: Rows = "all"
     CARD_KEYS: ClassVar[Mapping[str, str]] = {"width": "architecture.widths_depths"}
+
+    @property
+    def detaches(self) -> frozenset[tuple[Port, Realisation]]:
+        return frozenset()
 
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
@@ -347,9 +364,7 @@ def test_two_owners_agreeing_on_a_card_key_is_not_a_conflict() -> None:
             ),
         )
     )
-    assert compile(recipe).plan.hyperparameters == {
-        "architecture.widths_depths": HIDDEN
-    }
+    assert compile(recipe).plan.hyperparameters["architecture.widths_depths"] == HIDDEN
 
 
 # ---------------------------------------------------------------------------
@@ -378,3 +393,198 @@ def test_the_plan_records_which_components_reach_the_raw_outcome() -> None:
     assert planned["posterior"].reads_raw_outcome
     assert planned["posterior"].outcome_dependent
     assert not planned["propensity"].outcome_dependent
+
+
+# ---------------------------------------------------------------------------
+# The dead-trainable rule sees through a stop-gradient (DESIGN.md §4, §8.4)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _DetachingObjective:
+    """Requires two ports and backpropagates through only one of them."""
+
+    name: str
+    trains: Port
+    detached: Port
+    rows: Rows = "all"
+
+    @property
+    def requires(self) -> frozenset[tuple[Port, Realisation]]:
+        return frozenset({(self.trains, DEFAULT), (self.detached, DEFAULT)})
+
+    @property
+    def detaches(self) -> frozenset[tuple[Port, Realisation]]:
+        return frozenset({(self.detached, DEFAULT)})
+
+    def compute(
+        self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
+    ) -> LossTerm:
+        del state, ctx
+        return reduce_rows(torch.zeros(batch.batch_size), rows)
+
+
+def _detaching_recipe(*, trainable: tuple[str, ...]) -> Recipe:
+    return two_head_recipe(
+        program=(
+            _stage(
+                weighted(
+                    _DetachingObjective(
+                        name="marginal_nll",
+                        trains=Port.T_GIVEN_X,
+                        detached=Port.Y_GIVEN_XT,
+                    )
+                ),
+                trainable=trainable,
+            ),
+        )
+    )
+
+
+def test_a_trainable_reached_only_through_a_stop_gradient_is_rejected() -> None:
+    # The hole a stop-gradient opens in the §8.4 check: `outcome_head` runs in
+    # the forward pass, so it passes the "no active objective depends on it"
+    # test, and still receives no gradient. Without this the stage compiles,
+    # trains, and every optimiser step is a no-op.
+    with pytest.raises(CompileError, match="through a stop-gradient"):
+        compile(_detaching_recipe(trainable=("encoder", "outcome_head")))
+
+
+def test_a_trainable_the_objective_does_backpropagate_into_is_accepted() -> None:
+    run = compile(_detaching_recipe(trainable=("encoder", "propensity")))
+    assert run.stage("fit").trainable == ("encoder", "propensity")
+
+
+def test_the_detached_side_still_runs_in_the_forward_pass() -> None:
+    # It is read, just not trained: the pass has to compute it or the term
+    # cannot be evaluated at all.
+    passes = compile(_detaching_recipe(trainable=("encoder", "propensity")))
+    assert "outcome_head" in passes.stage("fit").passes[0].components
+
+
+def test_an_objective_that_detaches_everything_it_requires_is_rejected() -> None:
+    # A term with no gradient path contributes a constant to the total.
+    recipe = two_head_recipe(
+        program=(
+            _stage(
+                weighted(
+                    _DetachingObjective(
+                        name="constant_term",
+                        trains=Port.Y_GIVEN_XT,
+                        detached=Port.Y_GIVEN_XT,
+                    )
+                ),
+                trainable=("encoder", "outcome_head"),
+            ),
+        )
+    )
+    with pytest.raises(CompileError, match="detaches every port it requires"):
+        compile(recipe)
+
+
+def test_detaching_a_port_the_objective_does_not_require_is_rejected() -> None:
+    @dataclass(frozen=True)
+    class _Stray:
+        name: str = "stray"
+        rows: Rows = "all"
+
+        @property
+        def requires(self) -> frozenset[tuple[Port, Realisation]]:
+            return frozenset({(Port.Y_GIVEN_XT, DEFAULT)})
+
+        @property
+        def detaches(self) -> frozenset[tuple[Port, Realisation]]:
+            return frozenset({(Port.T_GIVEN_X, DEFAULT)})
+
+        def compute(
+            self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
+        ) -> LossTerm:
+            del state, ctx
+            return reduce_rows(torch.zeros(batch.batch_size), rows)
+
+    recipe = two_head_recipe(
+        program=(_stage(weighted(_Stray()), trainable=("encoder", "outcome_head")),)
+    )
+    with pytest.raises(CompileError, match="which it does not require"):
+        compile(recipe)
+
+
+def test_the_plan_prints_the_stop_gradient() -> None:
+    # Which side a paper detaches is a card §4 field, so the review artifact
+    # has to say it rather than leave it implied by `requires`.
+    plan = compile(_detaching_recipe(trainable=("encoder", "propensity"))).plan
+    assert "      detaches  p(y|x,t) @ view=identity params=student" in plan.render()
+
+
+def test_an_objective_that_detaches_nothing_prints_no_detaches_line() -> None:
+    assert "detaches" not in compile(two_head_recipe()).plan.render()
+
+
+# ---------------------------------------------------------------------------
+# The four per-objective `losses.*` keys (FIDELITY.md §2, DESIGN.md §9.1)
+# ---------------------------------------------------------------------------
+
+
+def test_the_weighted_settings_reach_plan_hyperparameters() -> None:
+    # The card cross-check reads `plan.hyperparameters`, not the stage text, so
+    # a recipe that supplies a weight and a reduction has to appear there or
+    # the check reports its own mechanism rather than the recipe.
+    recipe = two_head_recipe(
+        program=(
+            _stage(
+                objective(
+                    "outcome_nll",
+                    Port.Y_GIVEN_XT,
+                    rows="y_observed",
+                    weight=Ramp(0.0, 0.5, steps=5_000),
+                    reduction="sum",
+                ),
+                trainable=("encoder", "outcome_head"),
+            ),
+        )
+    )
+    hyperparameters = compile(recipe).plan.hyperparameters
+    assert hyperparameters["losses.weights"] == {"fit.outcome_nll": 0.5}
+    assert hyperparameters["losses.schedules"] == {
+        "fit.outcome_nll": "ramp 0.0 -> 0.5 over 5000 steps"
+    }
+    assert hyperparameters["losses.reduction"] == {"fit.outcome_nll": "sum"}
+    assert hyperparameters["losses.eligible_rows"] == {"fit.outcome_nll": "y_observed"}
+
+
+def test_the_weight_key_carries_the_number_the_paper_states() -> None:
+    # A paper states "λ = 0.5, ramped over the first 5,000 steps" as two facts.
+    # `losses.weights` is the λ; `losses.schedules` is the ramp.
+    recipe = two_head_recipe(
+        program=(
+            _stage(
+                objective(
+                    "outcome_nll",
+                    Port.Y_GIVEN_XT,
+                    weight=Ramp(0.0, 0.5, steps=5_000),
+                ),
+                trainable=("encoder", "outcome_head"),
+            ),
+        )
+    )
+    assert compile(recipe).plan.hyperparameters["losses.weights"] == {
+        "fit.outcome_nll": 0.5
+    }
+
+
+def test_the_eligible_rows_key_reports_the_intersected_set() -> None:
+    # What the term is actually given (DESIGN.md §7.0), not the objective's
+    # half of it: a card describing only the objective's population would not
+    # describe what runs.
+    recipe = two_head_recipe(
+        program=(
+            _stage(
+                objective("outcome_nll", Port.Y_GIVEN_XT, rows="y_observed"),
+                rows="t_observed",
+                trainable=("encoder", "outcome_head"),
+            ),
+        )
+    )
+    assert compile(recipe).plan.hyperparameters["losses.eligible_rows"] == {
+        "fit.outcome_nll": "t_observed & y_observed"
+    }

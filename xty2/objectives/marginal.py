@@ -94,6 +94,21 @@ class MissingTreatmentMarginalNLL:
     def requires(self) -> frozenset[tuple[Port, Realisation]]:
         return frozenset({(Port.T_GIVEN_X, DEFAULT), (Port.Y_GIVEN_XT, DEFAULT)})
 
+    @property
+    def detaches(self) -> frozenset[tuple[Port, Realisation]]:
+        """Whichever side `grad_path` stops the gradient on.
+
+        Derived from the card-governed field rather than stated a second time,
+        so the compiler's view of this term and the arithmetic in `compute`
+        cannot disagree. This is what lets the dead-trainable check (§8.4) see
+        that a stage training only the detached head is a no-op.
+        """
+        if self.grad_path == "propensity":
+            return frozenset({(Port.Y_GIVEN_XT, DEFAULT)})
+        if self.grad_path == "outcome":
+            return frozenset({(Port.T_GIVEN_X, DEFAULT)})
+        return frozenset()
+
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
     ) -> LossTerm:

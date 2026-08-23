@@ -357,6 +357,7 @@ RowIndex = Tensor          # [n] long, indices into the shared batch axis
 class Objective(Protocol):
     name: str
     requires: frozenset[tuple[Port, Realisation]]
+    detaches: frozenset[tuple[Port, Realisation]]    # subset of `requires`
     rows: Rows
 
     def compute(self, state: State, batch: XTYBatch,
@@ -376,6 +377,21 @@ Rules:
   logged raw value incomparable across runs.
 - An objective never calls `.backward()`, never mutates state, never touches
   parameters directly.
+- **A stop-gradient is declared, because it is invisible in the graph.**
+  `requires` says a term *reads* `p(t|x)`, and the compiler plans the forward
+  pass from that — but a `.detach()` inside `compute` means no gradient ever
+  reaches the component that produced it. `detaches` names that subset, so the
+  dead-trainable rule (§8.4) can tell a component that is merely executed from
+  one that is actually trained. Without it a stage whose sole trainable is the
+  detached side compiles, trains, and makes every optimiser step a no-op — the
+  dead-weight stage §8.4 exists to reject, hidden behind a detach rather than
+  behind the wiring. It is a required member rather than an optional attribute
+  for the reason §7.1 gives about provenance: a declaration with a fallback is
+  one that can be forgotten, and forgetting this one restores the hole. Where a
+  card field governs the stop-gradient — `gradients.marginal_nll_grad_path`,
+  `ConsistencyLoss.stop_grad` — derive `detaches` from that field rather than
+  stating it twice. An objective that detaches *everything* it requires
+  contributes a constant to the total and is rejected.
 - **`rows` is the eligible set, and the objective must gather by it.** `state`
   and `batch` are both full-batch and share one batch axis, so the same `rows`
   indexes both and alignment is automatic. `n == rows.numel()`. Reading
@@ -682,7 +698,9 @@ loader catches executions that are wrong in fact.
 3. topologically orders components per realisation and plans the minimum number
    of forward passes;
 4. checks `trainable` names exist and that every trainable component is actually
-   upstream of at least one active objective (catches dead-weight stages);
+   upstream of at least one active objective **through a port that objective
+   backpropagates through** (catches dead-weight stages, including the ones
+   hidden behind a `detaches` declaration);
 5. validates views against the schema (mutability, bounds, derived columns);
 6. intersects `Stage.rows` with each `Objective.rows` and rejects any pairing
    that is empty by construction (§7.0);
@@ -758,6 +776,17 @@ plan.hyperparameters: dict[str, Any]     # {"teacher.ema_decay": 0.999, ...}
 CI then asserts that every card §4 key not marked `n/a` appears in
 `plan.hyperparameters` with a non-null value. The same flat dict is what makes
 the printed plan diffable against the card by eye.
+
+**Per-objective keys are derived, not bound.** Four of the §2 keys —
+`losses.weights`, `losses.schedules`, `losses.reduction`, `losses.eligible_rows`
+— are annotated "per objective", and a canonical key names one value. `compile()`
+therefore aggregates them over the whole program into one mapping each, keyed by
+`"<stage>.<objective>"`, rather than having each `Weighted` bind them and
+collide. The values come from what the term actually runs with: the schedule's
+nominal weight, its description, its reduction mode, and the *effective* row set
+after the §7.0 intersection. They are derived because there is nothing for a
+recipe to declare twice — it already supplied every one of them by constructing
+the `Weighted`.
 
 **What this does not do.** It checks *presence*, never *correctness*: CI can
 prove the recipe sets `teacher.ema_decay`, and cannot prove 0.999 is the number

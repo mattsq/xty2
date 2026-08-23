@@ -175,6 +175,11 @@ class ToyObjective:
     rows: Rows = "all"
     CARD_KEYS: ClassVar[Mapping[str, str]] = {}
 
+    @property
+    def detaches(self) -> frozenset[tuple[Port, Realisation]]:
+        """Nothing. A double that detached would need to say so (§4)."""
+        return frozenset()
+
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
     ) -> LossTerm:

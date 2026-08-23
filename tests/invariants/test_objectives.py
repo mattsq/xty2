@@ -268,15 +268,17 @@ def test_the_gradient_path_reaches_the_plan_as_a_card_key() -> None:
                         reduction="mean",
                     ),
                 ),
-                trainable=("encoder", "outcome_head", "propensity"),
+                # `grad_path="propensity"` detaches the outcome side, so the
+                # outcome head is deliberately *not* trainable here — the
+                # dead-trainable check rejects a stage that names it.
+                trainable=("encoder", "propensity"),
             ),
         ),
         card="docs/recipes/marginal.md",
     )
-    assert compile(recipe).plan.hyperparameters == {
-        "architecture.widths_depths": HIDDEN,
-        "gradients.marginal_nll_grad_path": "propensity",
-    }
+    hyperparameters = compile(recipe).plan.hyperparameters
+    assert hyperparameters["gradients.marginal_nll_grad_path"] == "propensity"
+    assert hyperparameters["architecture.widths_depths"] == HIDDEN
 
 
 # ---------------------------------------------------------------------------

@@ -90,6 +90,10 @@ class ScaledRepr:
     def requires(self) -> frozenset[tuple[Port, Realisation]]:
         return frozenset({(Port.X_REPR, DEFAULT)})
 
+    @property
+    def detaches(self) -> frozenset[tuple[Port, Realisation]]:
+        return frozenset()
+
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
     ) -> LossTerm:
@@ -113,6 +117,10 @@ class Constantly:
     def requires(self) -> frozenset[tuple[Port, Realisation]]:
         return frozenset({(Port.X_REPR, DEFAULT)})
 
+    @property
+    def detaches(self) -> frozenset[tuple[Port, Realisation]]:
+        return frozenset()
+
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
     ) -> LossTerm:
@@ -133,6 +141,10 @@ class Misreporting:
     def requires(self) -> frozenset[tuple[Port, Realisation]]:
         return frozenset({(Port.X_REPR, DEFAULT)})
 
+    @property
+    def detaches(self) -> frozenset[tuple[Port, Realisation]]:
+        return frozenset()
+
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
     ) -> LossTerm:
@@ -150,6 +162,10 @@ class NotATerm:
     @property
     def requires(self) -> frozenset[tuple[Port, Realisation]]:
         return frozenset({(Port.X_REPR, DEFAULT)})
+
+    @property
+    def detaches(self) -> frozenset[tuple[Port, Realisation]]:
+        return frozenset()
 
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
