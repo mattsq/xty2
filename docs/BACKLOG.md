@@ -25,61 +25,397 @@ The intended post-P12 workflow is therefore:
 The point of this backlog is increasingly **combinatorial** experimentation. It
 should not turn into a project to port the other ~35 XTYLearner model classes.
 
+A useful way to read the SSL literature is as three generations:
+
+1. **Isolated mechanisms** — pseudo-labelling, entropy minimisation, VAT,
+   Pi-model consistency, Mean Teacher, rotation prediction.
+2. **Composite recipes** — S4L, MixMatch, UDA, ReMixMatch, FixMatch, Noisy
+   Student: the method is increasingly a deliberate bundle of mechanisms.
+3. **Interacting/adaptive systems** — CoMatch, SimMatch, Meta Pseudo Labels,
+   FlexMatch, FreeMatch, SoftMatch, SequenceMatch and related work: one mechanism
+   changes the rows, targets, thresholds, augmentation strengths or optimisation
+   trajectory seen by another.
+
+The third category is the most interesting post-P12 stress test. xty2 should
+first try to express these methods using ordinary components, objectives, views,
+schedules, artifacts and stages. Do **not** invent a generic `Policy` abstraction
+in advance. If the same missing concept appears independently in two real
+recipes, then the two-consumer rule has supplied the evidence for one.
+
 ---
 
-## 1. High-priority first tranche
+## 1. High-priority post-P12 tranche
 
-These are attractive early post-P12 implementations because each tests whether
-xty2 can express a recognisable method mostly through recombination rather than
-new framework machinery.
+These are attractive early implementations because each tests whether xty2 can
+express a recognisable method mostly through recombination rather than new
+framework machinery.
 
 | Approach | What it exercises | Expected fit |
 |---|---|---|
+| ReMixMatch | MixMatch + distribution alignment + adaptive strong augmentation + anchoring + rotation | major composite-recipe stress test |
+| CoMatch | pseudo-labelling + contrastive learning + graph regularisation with mutual interaction | semantic-interaction stress test |
+| Meta Pseudo Labels + UDA | teacher/student meta-update plus a full auxiliary SSL recipe | executor/optimisation boundary test |
+| SimMatch | semantic and instance similarity, memory banks, mutual pseudo-label refinement | state/artifact interaction test |
+| DoubleMatch | confidence-gated pseudo-labelling plus self-supervised loss for rejected rows | row-population composability |
+| UDA | weak/strong consistency + confidence masking + sharpening + TSA | mostly recipe/objectives |
+| MixMatch | augmentation averaging + sharpening + MixUp + pseudo-labels | deliberate row-synthesis boundary test |
 | FixMatch | weak/strong views, confidence pseudo-labels, consistency | mostly recipe/objective |
-| FlexMatch | FixMatch plus class-specific curriculum thresholds | pseudo-label policy/objective |
-| FreeMatch | self-adaptive confidence thresholding | objective/policy |
-| SoftMatch | soft confidence weighting of pseudo-labels | objective/policy |
-| UDA | weak/strong augmentation plus distribution consistency | mostly recipe |
-| VAT | adversarial local consistency | adversarial view/objective |
-| Pi-model | consistency across stochastic realisations | recipe |
-| Temporal Ensembling | consistency to historical predictions | artifact/objective |
-| Noisy Student | staged teacher -> pseudo-label -> noisy student | existing Program/artifacts |
+| FlexMatch | FixMatch plus class-specific curriculum thresholds | adaptive pseudo-label policy |
+| FreeMatch | self-adaptive global/class thresholds + fairness regularisation | adaptive objective/policy |
+| SoftMatch | continuous confidence weighting + distribution alignment | objective/policy |
+| PAWS | labeled support representations + view consistency + soft nearest-neighbour labels | metric/pseudo-label composition |
+| SelfMatch | contrastive pretraining followed by consistency SSL | existing staged Program |
+| SsCL | classification and contrastive branches that co-calibrate one another | semantic-interaction stress test |
+| Semi-supervised clustering | supervised class prototypes + self-supervised clustering objective | prototype/objective interaction |
+| Noisy Student | teacher -> pseudo-label -> noisy/larger student, iterated | existing Program/artifacts |
+| SimCLRv2 | SSL pretrain -> supervised fine-tune -> unlabeled distillation | existing staged Program |
 | SCARF | tabular corruption plus representation contrast | view + contrastive objective |
 | SubTab | feature-subset views plus reconstruction | view + reconstruction |
 | VIME | corruption mask prediction plus reconstruction | likely one new semantic output |
-| SimCLR-style tabular SSL | two views plus contrastive representation loss | objective |
+| VAT | adversarial local consistency | adversarial view/objective |
+| Pi-model | consistency across stochastic realisations | recipe |
+| Temporal Ensembling | consistency to historical predictions | artifact/objective |
 | VICReg | invariance/variance/covariance regularisation | objective |
 | Barlow Twins | redundancy-reduction representation learning | objective |
 | S4L-style joint training | several SSL and supervised objectives jointly | composite recipe |
-| MixMatch | augmentation averaging, sharpening, MixUp, pseudo-labels | deliberate boundary test |
-| ReMixMatch | MixMatch plus distribution alignment and anchoring | deliberate boundary test |
 | hard/soft EM | alternate latent-treatment inference and fitting | stages/objectives |
 | variational latent-treatment model | q(t|x,y), p(t|x), p(y|x,t), ELBO | existing core quantities |
 | DragonNet | propensity, outcome and targeted regularisation | components/objective |
 | CFRNet | outcome learning plus representation balancing | balancing objective |
 
-A useful initial sequence would be:
+### Recommended stress-test sequence
 
-1. SCARF
-2. FixMatch
-3. VIME
-4. CFRNet
-5. DragonNet
-6. MixMatch
-7. FlexMatch
-8. variational latent-treatment / ELBO
-9. explicit treatment-observation/missingness model
-10. an S4L-style composite XTY recipe
+A useful sequence after P12 is:
 
-The tenth experiment is the intended payoff: combine several independently
-validated pieces and use xty2's per-objective loss, coverage, gradient norm and
-gradient cosine diagnostics to determine whether they actually cooperate.
+1. **SCARF** — establish an independently validated representation objective.
+2. **FixMatch** — establish confidence-gated weak/strong pseudo-labelling.
+3. **DoubleMatch** — show that rows rejected by pseudo-labelling can still train
+   through another objective.
+4. **ReMixMatch** — deliberately crowd the recipe with interacting mechanisms.
+5. **CoMatch** — test whether representation and pseudo-label quantities can
+   influence one another without procedural recipe code.
+6. **SimMatch** — test memory/stateful cross-space pseudo-label refinement.
+7. **Meta Pseudo Labels + UDA** — test the optimisation/executor boundary.
+8. **variational latent-treatment / ELBO** — exploit all three native XTY
+   probabilistic quantities.
+9. **explicit treatment-observation/missingness model** — deliberate statistical
+   vocabulary boundary test.
+10. **an S4L-style XTY composite** combining independently validated pieces and
+    using raw loss, coverage, gradient norms and gradient cosines to determine
+    which objectives cooperate.
+
+The point of this sequence is not to reproduce a leaderboard progression. It is
+to make each new recipe probe a different architectural claim.
 
 ---
 
-## 2. Semi-supervised treatment-label methods
+## 2. Composite SSL lineage
 
-### 2.1 Pseudo-labelling and self-training
+This section records methods whose contribution is explicitly or effectively the
+combination of several reusable SSL mechanisms. These are particularly important
+for xty2 because they test the premise that a named algorithm can remain a thin
+recipe over independently reusable pieces.
+
+### 2.1 S4L
+
+S4L combines supervised learning with self-supervised pretext objectives such as
+rotation prediction. The important architectural lesson is that self-supervision
+is an auxiliary objective over the same underlying representation rather than a
+separate monolithic model family.
+
+**xty2 experiment:** treatment NLL + outcome NLL + missing-treatment marginal NLL
++ one or more representation pretexts, first separately and then jointly.
+
+Reference: Zhai et al., *S4L: Self-Supervised Semi-Supervised Learning* (ICCV
+2019), https://arxiv.org/abs/1905.03670
+
+### 2.2 MixMatch
+
+MixMatch deliberately combines:
+
+- multiple augmentations of an unlabeled example;
+- prediction averaging;
+- temperature sharpening / entropy minimisation;
+- pseudo-labels;
+- MixUp between labeled and pseudo-labeled examples;
+- supervised and unsupervised objectives.
+
+The method is useful because it is already a statement that these mechanisms
+should be composed rather than treated as mutually exclusive model families.
+
+**xty2 boundary:** MixUp synthesises rows and often targets, which is not
+obviously a `ViewSpec`. Do not pretend otherwise. If a second real recipe also
+needs row synthesis, consider a first-class mechanism at that point.
+
+Reference: Berthelot et al., *MixMatch* (NeurIPS 2019),
+https://arxiv.org/abs/1905.02249
+
+### 2.3 ReMixMatch ★
+
+ReMixMatch is one of the strongest direct tests of the xty2 thesis. It layers
+onto MixMatch:
+
+- distribution alignment;
+- augmentation anchoring from weak to strong views;
+- multiple strong augmentations;
+- CTAugment / adaptive augmentation;
+- an additional pre-MixUp unlabeled loss;
+- an S4L-style rotation-prediction objective;
+- the existing MixMatch sharpening and MixUp machinery.
+
+This is almost the canonical "many useful things at once" recipe. A successful
+xty2 implementation should be declarative enough that each of the above remains
+identifiable in the execution plan and diagnostics.
+
+**Stress test:** if ReMixMatch requires procedural branching inside the recipe,
+record exactly which interaction cannot be represented. Do not immediately
+patch around it. Compare that missing concept against CoMatch, SimMatch and MPL
+before deciding whether a framework extension has two consumers.
+
+Reference: Berthelot et al., *ReMixMatch* (ICLR 2020),
+https://arxiv.org/abs/1911.09785
+
+### 2.4 UDA
+
+Unsupervised Data Augmentation combines more than its name suggests:
+
+- supervised cross-entropy;
+- weak/strong augmentation consistency;
+- detached targets;
+- confidence masking;
+- temperature sharpening;
+- large unlabeled batches;
+- EMA in the vision setup;
+- Training Signal Annealing, which dynamically suppresses sufficiently easy
+  labeled examples.
+
+TSA is especially interesting in xty2 terms: it is effectively a dynamic row
+eligibility rule for a supervised objective.
+
+Reference: Xie et al., *Unsupervised Data Augmentation for Consistency Training*
+(NeurIPS 2020), https://arxiv.org/abs/1904.12848
+
+### 2.5 FixMatch and adaptive descendants
+
+FixMatch compresses much of the previous generation into a simple core:
+weak-view prediction -> confidence threshold -> hard pseudo-label -> strong-view
+cross-entropy. Its descendants then modify or add mechanisms around that core:
+
+- **FlexMatch** — class-specific curriculum thresholds based on learning
+  progress.
+- **FreeMatch** — self-adaptive global and class-specific thresholds plus
+  fairness/class-balancing regularisation.
+- **SoftMatch** — continuous confidence weighting rather than a binary gate,
+  together with distribution alignment.
+- **ConMatch** — confidence estimation and multiple strong views.
+- **SequenceMatch** — weak/medium/strong views and different consistency rules
+  for high- and low-confidence examples.
+- **ShrinkMatch** — reduced class-space consistency for uncertain examples.
+- **InfoMatch** — pseudo-supervision + consistency + information/contrastive
+  regularisation.
+- **AllMatch** — adds a second training signal so rejected unlabeled examples
+  can still contribute.
+- **CGMatch** — partitions examples by learning state and applies different
+  regularisation to easy/ambiguous/hard subsets.
+
+This family repeatedly expresses the same principle: **if a row is unsuitable
+for mechanism A, find mechanism B whose assumptions it does satisfy instead of
+throwing the row away.** That principle maps naturally onto xty2 row populations.
+
+For missing-treatment data, one observation might simultaneously be:
+
+- too uncertain for hard pseudo-label CE;
+- valid for exact marginal likelihood;
+- valid for augmentation consistency;
+- valid for reconstruction or contrastive SSL;
+- later eligible for pseudo-labeling once its posterior sharpens.
+
+References:
+
+- FixMatch: https://arxiv.org/abs/2001.07685
+- FlexMatch: https://arxiv.org/abs/2110.08263
+- FreeMatch: https://arxiv.org/abs/2205.07246
+- SoftMatch: https://arxiv.org/abs/2301.10921
+- SequenceMatch: https://arxiv.org/abs/2310.15787
+- ShrinkMatch: https://arxiv.org/abs/2308.06777
+- InfoMatch: https://arxiv.org/abs/2404.11003
+- AllMatch: https://arxiv.org/abs/2406.15763
+
+### 2.6 DoubleMatch
+
+DoubleMatch pairs FixMatch-style pseudo-supervision on confident rows with a
+self-supervised representation objective that still uses the low-confidence
+rows the pseudo-label branch rejects.
+
+This is a particularly clean test of `Objective.rows`:
+
+```text
+ObservedTreatmentNLL        t_observed
+PseudoLabelTreatmentLoss    t_missing & confident
+SelfSupervisedLoss          all
+```
+
+The exact row-selector syntax may differ, but the semantic test is clear: row
+eligibility for one loss must not determine eligibility for all losses.
+
+Reference: *DoubleMatch: Improving Semi-Supervised Learning with Self-Supervision*,
+https://arxiv.org/abs/2205.05575
+
+### 2.7 CoMatch ★
+
+CoMatch combines:
+
+- pseudo-label/self-training;
+- supervised classification;
+- self-supervised contrastive representation learning;
+- graph-based regularisation;
+- weak/strong consistency.
+
+The important difference from simple weighted multitask learning is that the
+parts **interact**. Representation similarity constrains class-probability
+pseudo-labels, while the pseudo-label graph determines relationships used by the
+contrastive branch.
+
+This is a valuable post-P12 test because it asks whether outputs of one learning
+mechanism can become structured targets for another without embedding control
+flow in the recipe.
+
+Reference: Li et al., *CoMatch: Semi-supervised Learning with Contrastive Graph
+Regularization* (ICCV 2021),
+https://arxiv.org/abs/2011.11183
+
+### 2.8 SsCL
+
+Semi-supervised Contrastive Learning similarly maintains classification and
+contrastive branches that co-calibrate one another: class predictions affect
+neighbour/positive relationships and representation similarity can in turn
+calibrate classification predictions.
+
+**Architectural question:** does the shared concept with CoMatch justify a
+reusable similarity/relationship mechanism, or can both remain ordinary
+objectives over existing `X_REPR` and treatment distributions? Implement first;
+abstract second.
+
+Reference: https://arxiv.org/abs/2105.07387
+
+### 2.9 SimMatch ★
+
+SimMatch jointly maintains semantic/class similarity and instance/representation
+similarity. Its full recipe includes:
+
+- consistency across augmented views at both levels;
+- pseudo-label propagation between semantic and instance spaces;
+- labeled feature and label memory banks;
+- EMA teacher or temporal ensembling depending on the setting.
+
+This is an important state/artifact test. A memory bank should not automatically
+become a new framework primitive. First determine whether it can be expressed as
+an explicit artifact/state owned by an objective or stage. Compare the answer to
+other methods that need memory before generalising.
+
+Reference: Zheng et al., *SimMatch* (CVPR 2022),
+https://arxiv.org/abs/2203.06915
+
+### 2.10 PAWS
+
+PAWS uses labeled support representations to construct soft class assignments
+for unlabeled examples and trains augmented views to agree on those assignments.
+It combines metric/nearest-neighbour ideas, self-supervised representation
+learning and supervised label information without requiring a conventional
+classifier-generated pseudo-label.
+
+This may translate unusually well to tabular XTY data because the core mechanism
+is representation similarity rather than image-specific augmentation structure.
+
+Reference: Assran et al., *Semi-Supervised Learning of Visual Features by
+Non-Parametrically Predicting View Assignments with Support Samples* (ICCV 2021),
+https://arxiv.org/abs/2104.13963
+
+### 2.11 Meta Pseudo Labels + UDA ★
+
+Meta Pseudo Labels already contains a teacher/student feedback loop:
+
+1. teacher generates pseudo-labels;
+2. student updates on them;
+3. student's improvement on labeled data is measured;
+4. that improvement supplies a meta-gradient/update signal to the teacher.
+
+The high-performing recipe then jointly trains the teacher with ordinary
+supervised learning and **the full UDA objective** as auxiliary signals.
+
+This is more than several losses sharing a forward pass: one learner's update
+changes the optimisation signal of another learner. It is therefore a deliberate
+boundary test for the `gradient` executor and linear `Program`, and one of the
+strongest candidates for exposing a genuinely missing post-v1 abstraction.
+
+Do not build bilevel/meta-learning machinery before attempting the card and
+identifying the exact required execution semantics.
+
+Reference: Pham et al., *Meta Pseudo Labels* (CVPR 2021),
+https://arxiv.org/abs/2003.10580
+
+### 2.12 SelfMatch, SimCLRv2 and Noisy Student
+
+These show the same compositional instinct across **stages** rather than within
+one simultaneous objective set.
+
+- **SelfMatch:** contrastive self-supervised pretraining -> augmentation-
+  consistency semi-supervised fine-tuning.
+- **SimCLRv2:** self-supervised pretraining -> supervised fine-tuning ->
+  distillation/self-training over unlabeled data.
+- **Noisy Student:** supervised teacher -> pseudo-label unlabeled data -> train
+  an equal-or-larger noisy student with augmentation/dropout/stochastic depth ->
+  promote student to teacher -> repeat.
+
+These should mostly validate `Program`, immutable stage artifacts and
+initialisation between stages rather than require framework changes.
+
+References:
+
+- SelfMatch: https://arxiv.org/abs/2101.06480
+- SimCLRv2: https://arxiv.org/abs/2006.10029
+- Noisy Student: https://arxiv.org/abs/1911.04252
+
+### 2.13 Semi-supervised clustering / shared prototypes
+
+Fini et al. show a different S4L-like direction: merge supervised class
+prototypes and self-supervised clustering machinery into one multi-task system,
+rather than treating supervised and self-supervised representation objectives as
+separate stages.
+
+This is relevant if xty2 eventually has at least two real consumers for
+prototype/cluster-assignment semantics.
+
+Reference: Fini et al., *Semi-Supervised Learning Made Simple with
+Self-Supervised Clustering* (CVPR 2023),
+https://arxiv.org/abs/2306.07483
+
+### 2.14 SemiLearn / USB as software prior art
+
+The USB/SemiLearn project is worth studying independently of any one algorithm.
+It provides a unified implementation of many SSL methods and factors out reusable
+algorithmic utilities/hooks such as:
+
+- distribution alignment;
+- pseudo-label generation;
+- thresholding;
+- MixUp;
+- EMA updates;
+- SSL losses.
+
+That is direct engineering prior art for moving reuse below the named-algorithm
+level. xty2 should remain more semantically/statistically explicit, but before
+inventing a new post-P12 concept check whether SemiLearn has already encountered
+the same decomposition problem.
+
+Reference: Wang et al., *USB: A Unified Semi-supervised Learning Benchmark*,
+https://arxiv.org/abs/2208.07204
+
+---
+
+## 3. Semi-supervised treatment-label methods
+
+### 3.1 Pseudo-labelling and self-training
 
 - Plain self-training from `p(t|x)`.
 - EMA-teacher self-training.
@@ -97,6 +433,7 @@ gradient cosine diagnostics to determine whether they actually cooperate.
 - Curriculum pseudo-labelling from high to lower confidence.
 - Per-class curriculum thresholds.
 - Self-adaptive thresholds.
+- Continuous confidence weighting instead of hard rejection.
 - Calibration-aware thresholds.
 - Entropy-based abstention.
 - Ensemble-disagreement abstention.
@@ -106,10 +443,16 @@ gradient cosine diagnostics to determine whether they actually cooperate.
 - Iterative pseudo-label/refit programs.
 - Multiple treatment imputation rather than one hard pseudo-label.
 - Posterior-sampled treatment imputation.
+- Easy/ambiguous/hard row partitions with subset-specific objectives.
+- Reduced-class-space consistency for uncertain rows.
+- Binary/coarse consistency objectives for rows rejected by multiclass
+  pseudo-labelling.
 
-### 2.2 Consistency methods
+### 3.2 Consistency methods
 
 - Weak/strong consistency.
+- Weak/medium/strong consistency.
+- Multi-strong-view consistency.
 - VAT.
 - Pi-model consistency.
 - Temporal Ensembling.
@@ -124,8 +467,33 @@ gradient cosine diagnostics to determine whether they actually cooperate.
 - Jensen-Shannon propensity/posterior matching.
 - Consistency of treatment-wise outcome means under permissible views.
 - Consistency of CATE estimates across views.
+- Consistency between semantic and instance-level pseudo-labels.
 
-### 2.3 Entropy, posterior and latent-variable objectives
+### 3.3 Dynamic eligibility and adaptive mechanisms
+
+These are deliberately listed as **mechanisms**, not a request for a generic
+framework `Policy` type.
+
+- Confidence-threshold row selection.
+- Class-specific curriculum thresholds.
+- Self-adaptive global/class thresholds.
+- Continuous confidence weights.
+- Training Signal Annealing for labeled rows.
+- Distribution alignment.
+- Class-fairness regularisation.
+- Adaptive augmentation strength.
+- Learning-state partitions (easy/ambiguous/hard).
+- Memory-bank label propagation.
+- Pseudo-label sharpening/temperature adaptation.
+- Neighbour-graph construction from current representations.
+- Relationship graphs derived from current pseudo-labels.
+
+Implement these in the smallest local place each recipe permits. If two or more
+recipes independently require the same stateful mediation semantics and local
+implementations become duplicated or unreviewable, revisit the abstraction
+boundary then.
+
+### 3.4 Entropy, posterior and latent-variable objectives
 
 - Entropy minimisation on missing-treatment rows.
 - Entropy maximisation where uncertainty should be preserved.
@@ -145,7 +513,7 @@ gradient cosine diagnostics to determine whether they actually cooperate.
 - Free-bits style posterior regularisation if collapse appears.
 - Importance-weighted missing-treatment marginal likelihood.
 
-### 2.4 Multi-model SSL
+### 3.5 Multi-model SSL
 
 - Co-training with distinct encoders/views.
 - Tri-training.
@@ -155,10 +523,12 @@ gradient cosine diagnostics to determine whether they actually cooperate.
 - Cross-pseudo-supervision.
 - Co-regularised propensity models.
 - Co-regularised outcome heads.
+- Meta Pseudo Labels.
+- Teacher trained with auxiliary UDA/supervised objectives.
 
 ---
 
-## 3. Explicit modelling of treatment-label availability
+## 4. Explicit modelling of treatment-label availability
 
 The v1 framework distinguishes observed and missing `t` but does not model why
 `t` is observed. This is a deliberately deferred direction and may eventually
@@ -184,25 +554,30 @@ it. Specify at least two real consumers first.
 
 ---
 
-## 4. Self-supervised representation learning
+## 5. Self-supervised representation learning
 
-### 4.1 Contrastive and redundancy-reduction methods
+### 5.1 Contrastive, clustering and redundancy-reduction methods
 
 - SCARF.
 - SimCLR-style contrastive pretraining.
 - Supervised contrastive learning on observed-treatment rows.
 - Semi-supervised contrastive learning using pseudo-labels.
+- CoMatch-style contrastive graph regularisation.
+- SsCL-style classification/contrastive co-calibration.
+- SimMatch-style instance/semantic similarity learning.
+- PAWS-style support-sample assignments.
 - VICReg.
 - Barlow Twins.
 - BYOL-style representation prediction.
 - SimSiam.
 - DINO-style self-distillation.
 - DeepCluster-style clustering.
+- Shared supervised/self-supervised prototypes.
 - Prototype consistency.
 - Neighbour consistency.
 - Contrastive predictive coding adapted to tabular views where meaningful.
 
-### 4.2 Reconstruction and corruption methods
+### 5.2 Reconstruction and corruption methods
 
 - Denoising autoencoder.
 - Masked feature reconstruction.
@@ -216,23 +591,29 @@ it. Specify at least two real consumers first.
 - Multi-task reconstruction of raw and derived quantities.
 - Treatment-conditioned reconstruction where causally appropriate.
 
-### 4.3 Composite pretraining recipes
+### 5.3 Composite pretraining and joint recipes
 
 - SCARF pretrain -> joint marginal-likelihood fit.
 - Masked reconstruction -> TARNet/propensity fit.
 - SCARF -> FixMatch.
 - SCARF -> Mean Teacher.
+- SelfMatch-style contrastive pretrain -> consistency SSL.
+- SimCLRv2-style SSL pretrain -> supervised fit -> unlabeled distillation.
 - Reconstruction + VAT + missing-treatment marginal likelihood.
 - Contrastive learning + propensity supervision.
 - Contrastive learning + outcome supervision.
 - Contrastive learning + propensity + outcome + marginalisation jointly.
 - Masked reconstruction + weak/strong consistency + pseudo-labelling.
+- DoubleMatch-style pseudo-label loss + self-supervised loss over rejected rows.
 - Contrastive pretrain -> Mean Teacher -> OOF pseudo-label refit.
 - Multi-pretext S4L-style training where several SSL objectives run together.
+- ReMixMatch-style rotation + consistency + pseudo-label + distribution-alignment
+  bundle.
+- Shared prototype/classification + clustering objective.
 
 ---
 
-## 5. Views and augmentation strategies
+## 6. Views and augmentation strategies
 
 These should remain schema-aware and functional. Physical/tabular constraints
 matter more than reproducing image-augmentation APIs.
@@ -252,7 +633,11 @@ matter more than reproducing image-augmentation APIs.
 - Manifold perturbation in `X_REPR`.
 - Adversarial perturbation.
 - Weak/strong augmentation pairs.
+- Weak/medium/strong augmentation chains.
+- Multiple independent strong views.
 - Random compositions of valid transforms, analogous to tabular RandAugment.
+- Adaptive augmentation strength analogous to CTAugment where a tabular analogue
+  can be defined without violating schema constraints.
 - Primitive-feature perturbation followed by recomputation of derived columns.
 - Domain-informed perturbations preserving physical identities.
 - Simulated missing-feature patterns.
@@ -260,7 +645,7 @@ matter more than reproducing image-augmentation APIs.
 - Feature permutation where scientifically defensible.
 - Counterfactual-valid transformations that preserve treatment/outcome semantics.
 
-### 5.1 Row-mixing methods as an explicit boundary test
+### 6.1 Row-mixing methods as an explicit boundary test
 
 - MixUp.
 - Manifold MixUp.
@@ -275,9 +660,9 @@ recipes need row synthesis, design that concept explicitly.
 
 ---
 
-## 6. Causal representation and treatment-effect methods
+## 7. Causal representation and treatment-effect methods
 
-### 6.1 Neural causal representation learners
+### 7.1 Neural causal representation learners
 
 - TARNet variants.
 - CFRNet with MMD balancing.
@@ -294,7 +679,7 @@ recipes need row synthesis, design that concept explicitly.
 - Balancing-neural-network variants.
 - Treatment-specific adapters or experts.
 
-### 6.2 Meta-learners and orthogonal estimators
+### 7.2 Meta-learners and orthogonal estimators
 
 - S-learner.
 - T-learner.
@@ -309,7 +694,7 @@ recipes need row synthesis, design that concept explicitly.
 - Doubly robust pseudo-outcome regression.
 - Multi-treatment extensions where compatible with categorical small-K v1.
 
-### 6.3 Array/cross-fit estimators
+### 7.3 Array/cross-fit estimators
 
 Good candidates for the existing `array_fit` and `cross_fit` executors:
 
@@ -325,7 +710,7 @@ Good candidates for the existing `array_fit` and `cross_fit` executors:
 - Overlap weighting.
 - Propensity truncation strategies.
 
-### 6.4 Semi-supervised causal combinations
+### 7.4 Semi-supervised causal combinations
 
 - DragonNet + missing-treatment marginal likelihood.
 - CFRNet + missing-treatment marginal likelihood.
@@ -336,10 +721,13 @@ Good candidates for the existing `array_fit` and `cross_fit` executors:
 - Propensity/posterior agreement gating before causal fitting.
 - SSL-pretrained encoder -> causal forest on learned representation.
 - Mean Teacher propensity -> cross-fit causal nuisance pipeline.
+- DoubleMatch-style representation objective + marginal likelihood + causal fit.
+- CoMatch/SimMatch-style representation-pseudo-label interaction followed by
+  cross-fit causal estimation, with leakage rules explicit.
 
 ---
 
-## 7. Alternative outcome parameterisations
+## 8. Alternative outcome parameterisations
 
 Once `cnflow` proves the `OutcomeDistribution` protocol, these should mostly be
 component swaps. `MissingTreatmentMarginalNLL` should remain untouched.
@@ -371,7 +759,7 @@ objectives.
 
 ---
 
-## 8. Encoder and parameterisation swaps
+## 9. Encoder and parameterisation swaps
 
 These are components, not new framework concepts.
 
@@ -400,7 +788,7 @@ These are components, not new framework concepts.
 
 ---
 
-## 9. Multi-objective optimisation and scheduling
+## 10. Multi-objective optimisation and scheduling
 
 P3's raw-loss, coverage, gradient-norm and gradient-cosine diagnostics make this
 an especially useful experimental axis.
@@ -426,22 +814,36 @@ an especially useful experimental axis.
 - Nash-MTL.
 - Gradient clipping per objective.
 - Gradient clipping per component group.
+- Training Signal Annealing / dynamic supervised-row eligibility.
 
 A particularly useful experiment is PCGrad versus a conventional weighted sum
-on an intentionally crowded S4L-style recipe, with gradient-cosine traces used
-to test whether conflict resolution is solving a real observed problem.
+on an intentionally crowded S4L/ReMixMatch-style recipe, with gradient-cosine
+traces used to test whether conflict resolution is solving a real observed
+problem.
+
+### 10.1 Bilevel/meta-learning boundary
+
+Meta Pseudo Labels is qualitatively different from ordinary weighting: a student
+update changes the signal used to update a teacher. Other future methods may do
+the same.
+
+Do not generalise the executor before a card exists. First write the exact
+sequence of forward/update/evaluation/meta-update operations. If a second real
+recipe needs the same execution semantics, that is evidence for a reusable
+bilevel/meta-gradient executor.
 
 ---
 
-## 10. Distillation, ensembling and uncertainty
+## 11. Distillation, ensembling and uncertainty
 
-### 10.1 Distillation
+### 11.1 Distillation
 
 - Ordinary knowledge distillation.
 - Self-distillation.
 - Mean Teacher variants.
 - Born-Again Networks.
 - Noisy Student.
+- SimCLRv2-style post-finetune unlabeled distillation.
 - Snapshot distillation.
 - Propensity -> posterior distillation.
 - Posterior -> propensity distillation where leakage semantics permit it.
@@ -449,7 +851,7 @@ to test whether conflict resolution is solving a real observed problem.
 - Representation distillation.
 - Outcome-distribution distillation.
 
-### 10.2 Ensembles and approximate posterior uncertainty
+### 11.2 Ensembles and approximate posterior uncertainty
 
 - Deep ensembles.
 - Bootstrap ensembles.
@@ -465,7 +867,20 @@ Do not immediately widen `Realisation.params` into an arbitrary ensemble axis.
 Independent recipe fits outside one compiled program may be the correct solution
 until two genuine recipes need ensemble members inside the framework.
 
-### 10.3 Calibration and abstention
+### 11.3 Memory banks and historical state
+
+- Temporal Ensembling prediction histories.
+- SimMatch labeled feature/label memory banks.
+- Prototype banks.
+- Neighbour queues for contrastive learning.
+- Teacher-generated cached pseudo-label tables.
+
+Treat these first as explicit objective/stage state or immutable artifacts. If
+at least two recipes require the same lifecycle semantics (initialise, update,
+checkpoint, restore, provenance), then consider whether a first-class stateful
+artifact abstraction is warranted.
+
+### 11.4 Calibration and abstention
 
 - Temperature scaling.
 - Isotonic regression.
@@ -482,7 +897,7 @@ until two genuine recipes need ensemble members inside the framework.
 
 ---
 
-## 11. Domain robustness and adaptation
+## 12. Domain robustness and adaptation
 
 These may require explicit domain/group metadata not present in v1, so keep them
 below the abstraction line until concrete experiments justify that data concept.
@@ -507,7 +922,7 @@ below the abstraction line until concrete experiments justify that data concept.
 
 ---
 
-## 12. Active learning and label acquisition
+## 13. Active learning and label acquisition
 
 These close the loop with an external labelling process and therefore may sit
 outside `Program` rather than forcing acquisition into the training abstraction.
@@ -531,13 +946,13 @@ outside `Program` rather than forcing acquisition into the training abstraction.
 
 ---
 
-## 13. Composite experiments enabled by xty2
+## 14. Composite experiments enabled by xty2
 
 These are more important than faithfully porting every named method. They test
 the claim that components, objectives, views and stages can be mixed without
 rewriting monolithic model classes.
 
-### Representation + semi-supervision
+### 14.1 Representation + semi-supervision
 
 - SCARF + FixMatch.
 - SCARF + Mean Teacher.
@@ -547,8 +962,23 @@ rewriting monolithic model classes.
 - Masked reconstruction + FixMatch.
 - VICReg + pseudo-labelling.
 - Contrastive pretraining + posterior/propensity matching.
+- DoubleMatch-style self-supervision for low-confidence rows.
+- PAWS-style support assignment + exact marginal likelihood.
 
-### Semi-supervision + causal regularisation
+### 14.2 Interacting representation/pseudo-label systems
+
+- CoMatch-style representation graph + treatment pseudo-label graph.
+- SsCL-style representation similarity calibrating treatment predictions and
+  treatment predictions determining contrastive relationships.
+- SimMatch-style instance/semantic mutual refinement.
+- Shared supervised/self-supervised prototypes for treatment classes.
+- Propensity/posterior agreement graph driving representation positives.
+
+These are deliberately stronger tests than simply adding two loss values. They
+ask whether one semantic quantity can shape the targets/relationships used by
+another objective while keeping the recipe declarative.
+
+### 14.3 Semi-supervision + causal regularisation
 
 - FixMatch + CFRNet.
 - Mean Teacher + CFRNet.
@@ -557,8 +987,9 @@ rewriting monolithic model classes.
 - Exact marginalisation + representation balancing.
 - Exact marginalisation + orthogonal/R-loss objective.
 - Posterior/propensity agreement + targeted regularisation.
+- ReMixMatch-style treatment SSL + causal outcome regularisation.
 
-### Staged programs
+### 14.4 Staged programs
 
 - SSL pretrain -> joint XTY fit -> EMA teacher -> OOF pseudo-labels -> refit.
 - SSL pretrain -> marginal-likelihood fit -> cross-fit causal estimator.
@@ -566,54 +997,111 @@ rewriting monolithic model classes.
 - Mean Teacher -> calibrated pseudo-label table -> DR-learner.
 - Contrastive pretrain -> FixMatch -> cross-fit DML.
 - VIME pretrain -> DragonNet -> TMLE/AIPW post-fit correction.
+- SimCLRv2-style pretrain -> supervised XTY fit -> unlabeled distillation.
+- Noisy Student-style iterative teacher/student promotion.
 
-### Intentionally crowded S4L-style recipes
+### 14.5 Intentionally crowded S4L/ReMixMatch-style recipes
 
 - Reconstruction + treatment NLL + outcome NLL + missing-treatment marginal NLL.
 - Contrastive representation loss + supervised treatment loss + marginal NLL.
 - Reconstruction + VAT + weak/strong consistency + marginal NLL.
 - Contrastive + reconstruction + Mean Teacher + pseudo-label loss.
 - Posterior KL + marginal NLL + supervised treatment NLL + outcome NLL.
+- Distribution alignment + weak/strong consistency + pseudo-labeling +
+  self-supervised reconstruction/contrastive loss.
+- Multi-view augmentation + pseudo-label sharpening + exact marginal likelihood +
+  representation pretext.
 - One of the above with PCGrad/GradNorm to test measured objective conflict.
+
+### 14.6 Row-utilisation experiments
+
+A recurring lesson of DoubleMatch, AllMatch, ShrinkMatch, SequenceMatch and
+related work is that confidence should decide **which objective a row is eligible
+for**, not simply whether the row is discarded.
+
+Construct recipes where missing-treatment rows move through tiers such as:
+
+```text
+all missing-t rows
+    -> marginal likelihood + representation SSL
+high-confidence rows
+    -> + hard/soft pseudo-label CE
+ambiguous rows
+    -> + coarse/reduced-space consistency
+very uncertain rows
+    -> no hard pseudo-label, retain reconstruction/contrastive signal
+```
+
+This is a particularly natural place to test the row-population design.
 
 ---
 
-## 14. Deliberate framework stress tests
+## 15. Deliberate framework stress tests
 
 Some recipes are valuable specifically because they may reveal that a v1
 abstraction is too narrow. Treat these as experiments, not automatic feature
 requests.
 
-### MixUp / synthetic-row semantics
+### 15.1 MixUp / synthetic-row semantics
 
-If MixMatch and another real recipe both require row interpolation, consider a
-first-class synthetic-row mechanism rather than pretending row mixing is a
-normal `ViewSpec`.
+If MixMatch and ReMixMatch (or another real recipe) both require row
+interpolation, consider a first-class synthetic-row mechanism rather than
+pretending row mixing is a normal `ViewSpec`.
 
-### Explicit missingness mechanism
+### 15.2 Stateful mediation between objectives
+
+CoMatch, SimMatch, FlexMatch/FreeMatch and related methods introduce things such
+as dynamic thresholds, relationship graphs, distribution alignment and memory
+banks. Initially keep each mechanism local and explicit.
+
+Only consider a reusable mediator/policy abstraction if at least two real recipes
+need the same lifecycle and semantics. The evidence should be duplicated or
+unreviewable implementation, not aesthetic similarity.
+
+### 15.3 Bilevel/meta-gradient execution
+
+Meta Pseudo Labels is the strongest candidate. If a second method genuinely
+requires "update learner A, evaluate consequence through learner B, backpropagate
+that consequence into A", consider a dedicated executor. Do not contort this
+into an ordinary `LossMixer` if the semantics are actually different.
+
+### 15.4 Memory-bank/state lifecycle
+
+If SimMatch and another method require persistent in-training banks with shared
+checkpoint/provenance semantics, consider an explicit stateful artifact
+abstraction. Until then, keep memory local to the consuming objective/stage.
+
+### 15.5 Explicit missingness mechanism
 
 If two recipes need to model why `t` is observed, consider an explicit typed
 statistical quantity for label availability and corresponding provenance rules.
 
-### Ensemble realisations
+### 15.6 Ensemble realisations
 
 If two recipes need simultaneous in-program ensemble members, reconsider the
 current student/teacher parameter realisation axis. Until then, train ensembles
 as independent recipes/runs.
 
-### Domain/group metadata
+### 15.7 Prototype/similarity semantics
+
+CoMatch, SsCL, PAWS, SimMatch and semi-supervised clustering all use
+representation relationships, but not necessarily the same statistical
+quantity. Do not add `SIMILARITY`, `PROTOTYPE` or graph ports merely because the
+names recur. First identify two consumers with the same type/shape/meaning.
+
+### 15.8 Domain/group metadata
 
 If two domain-robust recipes need a stable domain variable, extend the batch or
 introduce another typed mechanism only after specifying exactly what is observed,
 where it is valid and how leakage should be checked.
 
-### Continuous/dose-response treatment
+### 15.9 Continuous/dose-response treatment
 
 This is explicitly outside v1. It would invalidate assumptions behind exact
 small-K marginalisation, candidate-treatment contracts and some estimator APIs.
 Treat it as a versioned design exercise rather than another recipe.
 
-### Sequence/time-series inputs
+### 15.10 Sequence/time-series inputs
 
 Also outside v1. A sequence encoder is not merely another MLP if the input
 contract, views and reconstruction semantics all change. Require concrete
@@ -621,7 +1109,7 @@ sequence recipes before widening the batch/schema abstractions.
 
 ---
 
-## 15. Backlog triage rules
+## 16. Backlog triage rules
 
 When choosing from this file, prefer an item that does at least one of the
 following:
@@ -629,6 +1117,10 @@ following:
 - reuses an existing objective with a genuinely different parameterisation;
 - reuses an existing component in a genuinely different training program;
 - composes two already validated methods without framework changes;
+- makes different objectives consume **different row populations** from the same
+  batch rather than discarding data globally;
+- makes two independently meaningful semantic quantities interact, as in
+  CoMatch/SimMatch, while remaining reviewable;
 - exposes a suspected objective conflict that P3 diagnostics can test;
 - exercises leakage/provenance rules on a real method;
 - forces a meaningful boundary decision backed by two consumers;
@@ -639,9 +1131,22 @@ Deprioritise items that are merely another architecture swap, have no credible
 reproduction target, or require large framework expansion before they answer a
 research question.
 
+When a recipe fails to fit cleanly, classify the failure before changing the
+framework:
+
+1. **missing component/objective/view** — local extension, no framework issue;
+2. **missing row-selection or scheduling mechanic** — see whether an existing
+   objective/schedule can own it;
+3. **synthetic-row semantics** — compare MixMatch/ReMixMatch consumers;
+4. **persistent training state** — compare SimMatch/Temporal Ensembling/etc.;
+5. **bilevel optimisation semantics** — compare MPL with a second real method;
+6. **new statistical quantity** — require matching consumers and a `PortSpec`;
+7. **new executor semantics** — require two methods that genuinely cannot be
+   represented by existing executors.
+
 ---
 
-## 16. What success looks like after P12
+## 17. What success looks like after P12
 
 The desired trajectory is not:
 
@@ -655,3 +1160,10 @@ It is:
 The strongest evidence that xty2 worked would be an experiment that would have
 required a new model class in XTYLearner but becomes, in xty2, a small reviewed
 card and a declarative recipe assembling pieces already known to work.
+
+An even stronger test is one of the Generation-3 methods above: a recipe in
+which confidence, representation similarity, pseudo-labels or teacher/student
+updates change what another objective sees, while the resulting execution plan
+still makes every dependency and training signal understandable. ReMixMatch,
+CoMatch and Meta Pseudo Labels + UDA are the three deliberate reference stress
+tests for that claim.
