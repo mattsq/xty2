@@ -44,7 +44,7 @@ def tarnet(schema: Schema) -> Recipe:
                 TARNetHead(
                     representation_dim=ENCODER_WIDTHS[-1],
                     num_treatments=schema.treatment_cardinality,
-                    outcome_shape=schema.outcome.shape,
+                    outcome=schema.outcome,
                     widths=OUTCOME_WIDTHS,
                     activation="elu",
                     normalisation="none",

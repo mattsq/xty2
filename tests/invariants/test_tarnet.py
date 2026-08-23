@@ -11,6 +11,8 @@ from xty2.core import (
     CategoricalTreatment,
     CompileError,
     GaussianOutcome,
+    GraphError,
+    OutcomeSpec,
     Port,
     Recipe,
     WeightDecay,
@@ -49,6 +51,12 @@ def test_the_recipe_is_exactly_one_graph_and_one_stage() -> None:
         ("t_observed",),
         ("t_missing",),
     ]
+
+
+def test_the_gaussian_tarnet_recipe_rejects_a_categorical_outcome() -> None:
+    schema = make_schema(outcome=OutcomeSpec(kind="categorical", num_classes=2))
+    with pytest.raises(GraphError, match="supports only continuous outcomes"):
+        tarnet(schema)
 
 
 def test_the_real_heads_satisfy_both_distribution_contracts() -> None:

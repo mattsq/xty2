@@ -296,6 +296,11 @@ def test_a_duplicate_component_name_is_rejected() -> None:
         ComponentGraph([ToyPropensity(), ToyPropensity()])
 
 
+def test_the_internal_component_registry_name_is_reserved() -> None:
+    with pytest.raises(GraphError, match="internal module registry"):
+        ToyEncoder("_components", width=HIDDEN)
+
+
 def test_an_empty_graph_is_rejected() -> None:
     with pytest.raises(GraphError, match="at least one component"):
         ComponentGraph([])

@@ -22,6 +22,7 @@ from xty2.core.distributions import GaussianOutcome
 from xty2.core.errors import GraphError
 from xty2.core.graph import Component, PortView
 from xty2.core.ports import Port, PortValue
+from xty2.core.schema import OutcomeSpec
 
 
 class _OutcomeMLP(nn.Module):
@@ -56,7 +57,7 @@ class TARNetHead(Component):
         *,
         representation_dim: int,
         num_treatments: int,
-        outcome_shape: tuple[int, ...],
+        outcome: OutcomeSpec,
         widths: tuple[int, ...] = REQUIRED,
         activation: str = REQUIRED,
         normalisation: str = REQUIRED,
@@ -81,7 +82,17 @@ class TARNetHead(Component):
         )
         if self.num_treatments < 2:
             raise GraphError(f"{owner}.num_treatments must be at least 2")
-        self.outcome_shape = tuple(outcome_shape)
+        if not isinstance(outcome, OutcomeSpec):
+            raise GraphError(
+                f"{owner}.outcome must be an OutcomeSpec, got {type(outcome)}"
+            )
+        if not outcome.is_continuous:
+            raise GraphError(
+                f"{owner} supports only continuous outcomes because it emits a "
+                "fixed-scale GaussianOutcome; use a categorical outcome head "
+                "for a categorical OutcomeSpec"
+            )
+        self.outcome_shape = outcome.shape
         if any(type(size) is not int or size < 1 for size in self.outcome_shape):
             raise GraphError(
                 f"{owner}.outcome_shape must contain positive dimensions, got "

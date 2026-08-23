@@ -280,6 +280,9 @@ Rules, all enforced rather than documented:
   expressible against a structural protocol with no parameter interface.
   `named_parameters()`, `state_dict()` and `load_state_dict()` are the contract
   the training layer depends on.
+- Component names are Python identifiers. `source` is reserved for the virtual
+  source node and `_components` is reserved for `ComponentGraph`'s internal
+  module registry, so qualified parameter names have one unambiguous owner.
 
 Examples: `mlp_encoder` (`X_RAW` → `X_REPR`), `tarnet_head`
 (`X_REPR` → `Y_GIVEN_XT`), `categorical_propensity` (`X_REPR` → `T_GIVEN_X`),
