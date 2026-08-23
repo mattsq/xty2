@@ -116,7 +116,7 @@ optimisation:
   optimiser:
   lr:
   lr_schedule:           # including warmup
-  weight_decay:          # and whether it applies to biases / norm params
+  weight_decay:          # coefficient, component scope, and bias / norm reach
   batch_size:
   labelled_unlabelled_ratio: # per batch — a very common silent difference
   total_steps_or_epochs: # state which; epochs on a semi-supervised loader are ambiguous

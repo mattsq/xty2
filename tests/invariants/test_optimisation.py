@@ -45,12 +45,17 @@ def test_every_bound_field_must_be_set(field: str) -> None:
         optimiser(**{field: REQUIRED})
 
 
-def test_weight_decay_needs_both_halves() -> None:
-    # `optimisation.weight_decay` is "the coefficient *and* whether it applies
-    # to biases / norm params" (`FIDELITY.md` §2), so a spec that names only
-    # the number has not answered the key.
+def test_weight_decay_needs_parameter_reach() -> None:
+    # `optimisation.weight_decay` is coefficient, component scope and bias/norm
+    # reach (`FIDELITY.md` §2), so a spec that names only the number has not
+    # answered the key.
     with pytest.raises(CompileError, match="no usable default"):
         WeightDecay(value=0.1)
+
+
+def test_weight_decay_needs_component_scope() -> None:
+    with pytest.raises(CompileError, match="no usable default"):
+        WeightDecay(value=0.1, on_norm_and_bias=False)
 
 
 def test_clipping_needs_its_mode() -> None:
@@ -63,7 +68,9 @@ def test_every_bound_field_reaches_the_card_keys() -> None:
         optimiser(
             name="adamw",
             lr=1e-3,
-            weight_decay=WeightDecay(value=0.01, on_norm_and_bias=False),
+            weight_decay=WeightDecay(
+                value=0.01, on_norm_and_bias=False, components=None
+            ),
             lr_schedule=Ramp(0.0, 1.0, steps=100),
             clipping=GradientClipping.by_norm(1.0),
         )
@@ -72,7 +79,9 @@ def test_every_bound_field_reaches_the_card_keys() -> None:
         "optimisation.optimiser": "adamw(betas=(0.9, 0.999), eps=1e-08)",
         "optimisation.lr": 1e-3,
         "optimisation.lr_schedule": "ramp 0.0 -> 1.0 over 100 steps",
-        "optimisation.weight_decay": "0.01 (norm and bias exempt)",
+        "optimisation.weight_decay": (
+            "0.01 (all trainable components; norm and bias exempt)"
+        ),
         "gradients.gradient_clipping": "norm at 1.0",
     }
 
@@ -185,7 +194,9 @@ def test_a_bare_number_is_coerced_to_a_constant_schedule() -> None:
 
 def test_weight_decay_splits_the_parameter_groups() -> None:
     layer = _linear()
-    spec = optimiser(weight_decay=WeightDecay(value=0.03, on_norm_and_bias=False))
+    spec = optimiser(
+        weight_decay=WeightDecay(value=0.03, on_norm_and_bias=False, components=None)
+    )
     groups = spec.build(list(layer.named_parameters())).param_groups
     assert [group["weight_decay"] for group in groups] == [0.03, 0.0]
     assert [p.ndim for p in groups[0]["params"]] == [2]
@@ -194,10 +205,47 @@ def test_weight_decay_splits_the_parameter_groups() -> None:
 
 def test_weight_decay_on_everything_is_one_group() -> None:
     layer = _linear()
-    spec = optimiser(weight_decay=WeightDecay(value=0.03, on_norm_and_bias=True))
+    spec = optimiser(
+        weight_decay=WeightDecay(value=0.03, on_norm_and_bias=True, components=None)
+    )
     groups = spec.build(list(layer.named_parameters())).param_groups
     assert [group["weight_decay"] for group in groups] == [0.03]
     assert len(groups[0]["params"]) == 2
+
+
+def test_weight_decay_can_be_scoped_to_one_component() -> None:
+    first = _linear()
+    second = _linear()
+    parameters = [
+        (f"encoder.{name}", parameter) for name, parameter in first.named_parameters()
+    ]
+    parameters += [
+        (f"tarnet_head.{name}", parameter)
+        for name, parameter in second.named_parameters()
+    ]
+    spec = optimiser(
+        weight_decay=WeightDecay(
+            value=0.03,
+            on_norm_and_bias=False,
+            components=("tarnet_head",),
+        )
+    )
+    groups = spec.build(parameters).param_groups
+    decayed = {id(parameter) for parameter in groups[0]["params"]}
+    assert decayed == {id(second.weight)}
+    assert all(id(parameter) not in decayed for parameter in first.parameters())
+
+
+def test_a_scoped_decay_must_match_a_parameter_component() -> None:
+    spec = optimiser(
+        weight_decay=WeightDecay(
+            value=0.03,
+            on_norm_and_bias=False,
+            components=("tarnet_head",),
+        )
+    )
+    with pytest.raises(CompileError, match="must reach the component"):
+        spec.build(list(_linear().named_parameters()))
 
 
 def test_no_decay_is_one_undecayed_group() -> None:
@@ -229,7 +277,7 @@ def test_the_plan_lines_name_every_card_field() -> None:
     lines = optimiser(
         name="adam",
         lr=1e-3,
-        weight_decay=WeightDecay(value=0.0, on_norm_and_bias=False),
+        weight_decay=WeightDecay(value=0.0, on_norm_and_bias=False, components=None),
         lr_schedule=Constant(1.0),
         clipping=GradientClipping.by_value(0.5),
     ).describe_lines()

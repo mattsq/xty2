@@ -116,7 +116,14 @@ from xty2.core.rows import (
     row_mask,
     validate_population,
 )
-from xty2.core.schedules import Constant, Ramp, Schedule, Step, as_schedule
+from xty2.core.schedules import (
+    Constant,
+    ExponentialDecay,
+    Ramp,
+    Schedule,
+    Step,
+    as_schedule,
+)
 from xty2.core.schema import FeatureSpec, OutcomeSpec, Schema
 
 __all__ = [
@@ -146,6 +153,7 @@ __all__ = [
     "Constant",
     "ContractError",
     "ExecutionPlan",
+    "ExponentialDecay",
     "FeatureSpec",
     "ForwardPass",
     "GaussianOutcome",

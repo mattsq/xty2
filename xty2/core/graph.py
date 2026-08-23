@@ -39,6 +39,9 @@ from xty2.core.schema import Schema
 SOURCE_NAME: Final = "source"
 """The virtual source node's name in the plan. Not a component."""
 
+GRAPH_COMPONENTS_NAME: Final = "_components"
+"""The internal module-registry prefix in `ComponentGraph.named_parameters()`."""
+
 SOURCE_PORTS: Final = frozenset({Port.X_RAW, Port.Y_RAW})
 """What the virtual source node supplies from the batch (`DESIGN.md` §2.2)."""
 
@@ -307,6 +310,12 @@ class Component(nn.Module, metaclass=_ComponentMeta):
             raise GraphError(
                 f"{SOURCE_NAME!r} is the virtual source node (DESIGN.md §2.2) "
                 "and cannot also be a component name"
+            )
+        if self.name == GRAPH_COMPONENTS_NAME:
+            raise GraphError(
+                f"component name {GRAPH_COMPONENTS_NAME!r} is reserved for "
+                "ComponentGraph's internal module registry. Reserving the name "
+                "keeps qualified parameter ownership unambiguous."
             )
         for label, ports in (("requires", self.requires), ("provides", self.provides)):
             if any(not isinstance(port, Port) for port in ports):

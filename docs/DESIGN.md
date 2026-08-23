@@ -280,6 +280,9 @@ Rules, all enforced rather than documented:
   expressible against a structural protocol with no parameter interface.
   `named_parameters()`, `state_dict()` and `load_state_dict()` are the contract
   the training layer depends on.
+- Component names are Python identifiers. `source` is reserved for the virtual
+  source node and `_components` is reserved for `ComponentGraph`'s internal
+  module registry, so qualified parameter names have one unambiguous owner.
 
 Examples: `mlp_encoder` (`X_RAW` → `X_REPR`), `tarnet_head`
 (`X_REPR` → `Y_GIVEN_XT`), `categorical_propensity` (`X_REPR` → `T_GIVEN_X`),
@@ -479,8 +482,10 @@ LossMixer([
 ])
 ```
 
-Schedules in v1: `Constant`, `Ramp` (linear), `Step`. Schedules are functions of
-`ctx.global_step` and are logged.
+Schedules in v1: `Constant`, `Ramp` (linear), `Step`, and the staircase
+`ExponentialDecay` required by TARNet's pinned reference implementation.
+Schedules are pure functions of `ctx.global_step` and are logged. The same
+types serve objective weights and learning-rate multipliers.
 
 ### 6.1 Reduction
 
@@ -566,11 +571,12 @@ ambiguous" (`FIDELITY.md` §2); a card stating epochs converts, and writes the
 conversion into its §7.
 
 `OptimiserSpec` itself lives in `core/optimisation.py` (§10) with the two value
-objects it needs: `WeightDecay`, which carries the coefficient *and* whether it
-reaches biases and norm parameters, and `GradientClipping`, which carries the
-mode and the threshold. Each is one field bound to one canonical key, as §9.1
-requires — the alternative, two fields sharing `optimisation.weight_decay`,
-is rejected by the binding rule. The learning-rate schedule reuses the
+objects it needs: `WeightDecay`, which carries the coefficient, its component
+scope, *and* whether it reaches biases and norm parameters, and
+`GradientClipping`, which carries the mode and the threshold. Each is one field
+bound to one canonical key, as §9.1 requires — the alternative, several fields
+sharing `optimisation.weight_decay`, is rejected by the binding rule. The
+learning-rate schedule reuses the
 `Schedule` types of §6 as a *multiplier* on `lr`, so warmup is a `Ramp` and no
 schedule is `Constant(1.0)`: a string field naming a schedule nothing
 implements would let a card claim one the run does not have.
@@ -832,6 +838,19 @@ after the §7.0 intersection. They are derived because there is nothing for a
 recipe to declare twice — it already supplied every one of them by constructing
 the `Weighted`.
 
+`gradients.stop_gradients` is derived the same way from each objective's
+required `detaches` declaration. A plan therefore shows an explicit `none` for
+every ordinary likelihood term and the detached port for a stopped path; a
+global prose claim cannot hide one exceptional objective.
+
+**Architecture keys are component-valued.** Components commonly bind the same
+canonical field to different values — TARNet has `[200, 200, 200]` in the
+encoder, `[100, 100, 100]` in each outcome arm, and a linear propensity head.
+`compile()` aggregates every `architecture.*` binding as
+`{component_name: value}`. Other cross-owner conflicts remain errors. This is
+the smallest representation that prevents both last-write-wins collapse and an
+opaque compound string in the review plan.
+
 **What this does not do.** It checks *presence*, never *correctness*: CI can
 prove the recipe sets `teacher.ema_decay`, and cannot prove 0.999 is the number
 in the paper. Only the card review does that. The mechanism stops silent
@@ -907,7 +926,7 @@ change the decision:
 | Plugin / entry-point system | a consumer outside this repo exists |
 | Distributed training | a single recipe stops fitting in one process |
 | A loader / sampler, and with it the `optimisation.batch_size` and `labelled_unlabelled_ratio` bindings | a recipe needs a fixed labelled/unlabelled quota per batch rather than whatever the data gives. The gradient executor takes an iterable of batches; a stage field for either key would be a card key nothing could check, which §7.1 rejects for provenance and §9.1 for hyperparameters |
-| LR schedules beyond `Constant`, `Ramp` and `Step` (cosine, one-cycle) | a card names one. The rate is a schedule multiplier, so a fourth schedule type serves both the loss weights and the LR — and by the two-consumer rule it waits for the first real one |
+| LR schedules beyond `Constant`, `Ramp`, `Step` and `ExponentialDecay` (cosine, one-cycle) | a card names one. The rate is a schedule multiplier, so a new type serves both loss weights and the LR; `ExponentialDecay` entered with TARNet, the first real card that names it |
 | The other ~35 XTYLearner families | one is actually needed for a result |
 
 **Migration is lazy by design.** No model is ported until it is next used. A

@@ -35,6 +35,7 @@ from xty2.core import (
     XTYBatch,
     compile,
     resolve_rows,
+    treatment_at,
 )
 from xty2.objectives import (
     MissingTreatmentMarginalNLL,
@@ -277,7 +278,7 @@ def test_the_gradient_path_reaches_the_plan_as_a_card_key() -> None:
     )
     hyperparameters = compile(recipe).plan.hyperparameters
     assert hyperparameters["gradients.marginal_nll_grad_path"] == "propensity"
-    assert hyperparameters["architecture.widths_depths"] == HIDDEN
+    assert hyperparameters["architecture.widths_depths"] == {"encoder": HIDDEN}
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +302,21 @@ def test_the_observed_outcome_nll_is_the_gaussian_log_density() -> None:
     )
     assert term.n == int(rows.numel())
     assert float(term.value) == pytest.approx(float(expected.mean()), abs=1e-12)
+
+
+def test_the_observed_outcome_nll_applies_batch_weights_before_reduction() -> None:
+    weights = torch.linspace(0.25, 2.0, BATCH_SIZE, dtype=torch.float64)
+    batch = _double_batch(weight=weights)
+    head, _ = _heads(batch)
+    rows = resolve_rows(batch, "t_observed")
+    state = State({DEFAULT: {Port.Y_GIVEN_XT: head}})
+
+    term = ObservedOutcomeNLL().compute(state, batch, rows, _ctx())
+
+    per_row = -head.log_prob(batch.y, treatment_at(batch, rows)) * weights
+    expected = per_row.index_select(0, rows).mean()
+    assert term.n == int(rows.numel())
+    assert float(term.value) == pytest.approx(float(expected), abs=1e-12)
 
 
 def test_the_observed_treatment_nll_is_the_categorical_cross_entropy() -> None:
