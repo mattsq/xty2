@@ -19,7 +19,6 @@ from xty2.training.executors import (
     BatchSource,
     StageResult,
     StepRecord,
-    emit_checkpoint,
     run_stage,
     trainable_only,
 )
@@ -46,7 +45,6 @@ __all__ = [
     "RunDirectory",
     "StageResult",
     "StepRecord",
-    "emit_checkpoint",
     "gradient_report",
     "is_read_only",
     "run_stage",

@@ -27,6 +27,7 @@ from xty2.core.compile import (
     ForwardPass,
     PlannedComponent,
     compile,
+    plan_digest_of,
 )
 from xty2.core.conformance import (
     check_outcome_distribution_contract,
@@ -196,6 +197,7 @@ __all__ = [
     "gradient_norm",
     "is_required",
     "outcome_distribution",
+    "plan_digest_of",
     "populations_are_disjoint",
     "port_spec",
     "reduce_rows",

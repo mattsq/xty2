@@ -45,7 +45,7 @@ from xty2.core.compile import CompiledRun, CompiledStage
 from xty2.core.errors import TrainingError
 from xty2.core.graph import ComponentGraph
 from xty2.core.loss import TrainContext
-from xty2.training.artifacts import Checkpoint, RunDirectory, issue_token
+from xty2.training.artifacts import Checkpoint, RunDirectory
 from xty2.training.loss_mixer import (
     GradientProbe,
     GradientReport,
@@ -198,31 +198,39 @@ def trainable_only(
     backward, which (a) makes the trainable-isolation invariant untestable by
     reading gradients, and (b) leaves stale gradients for whatever runs next.
 
+    Nothing is frozen until every component has been checked. A scan that
+    froze as it went would leave the components it had already reached frozen
+    when a later one turned out to be ineligible — the rejection would then
+    corrupt the graph it exists to protect, and the caller would have no way to
+    put it back.
+
     Raises:
         TrainingError: if a component the stage says it trains was already
             frozen. Freezing is by component name (`DESIGN.md` §8), so a
             parameter frozen underneath one is a silent no-op step.
     """
-    frozen: list[tuple[Tensor, bool]] = []
+    to_freeze: list[Tensor] = []
     updatable: list[tuple[str, Tensor]] = []
     names = set(trainable)
     for name in graph.names:
         component = graph[name]
         for parameter_name, parameter in component.named_parameters():
             qualified = f"{name}.{parameter_name}"
-            if name in names:
-                if not parameter.requires_grad:
-                    raise TrainingError(
-                        f"stage trains {name!r}, but its parameter "
-                        f"{qualified!r} has requires_grad=False. The optimiser "
-                        "would hold a parameter no gradient reaches and every "
-                        "step for it would be a no-op; freezing is by "
-                        "component name (DESIGN.md §8)."
-                    )
-                updatable.append((qualified, parameter))
-            else:
-                frozen.append((parameter, parameter.requires_grad))
-                parameter.requires_grad_(False)
+            if name not in names:
+                to_freeze.append(parameter)
+                continue
+            if not parameter.requires_grad:
+                raise TrainingError(
+                    f"stage trains {name!r}, but its parameter "
+                    f"{qualified!r} has requires_grad=False. The optimiser "
+                    "would hold a parameter no gradient reaches and every "
+                    "step for it would be a no-op; freezing is by "
+                    "component name (DESIGN.md §8)."
+                )
+            updatable.append((qualified, parameter))
+    frozen = [(candidate, candidate.requires_grad) for candidate in to_freeze]
+    for candidate in to_freeze:
+        candidate.requires_grad_(False)
     try:
         yield tuple(updatable)
     finally:
@@ -235,11 +243,11 @@ def trainable_only(
 # ---------------------------------------------------------------------------
 
 
-def emit_checkpoint(
+def _emit_checkpoint(
     run: CompiledRun,
     stage: CompiledStage,
     parameters: Sequence[tuple[str, Tensor]],
-    row_ids: Tensor,
+    row_ids: Sequence[Tensor],
     *,
     steps: int,
     seed: int,
@@ -247,28 +255,35 @@ def emit_checkpoint(
 ) -> Checkpoint:
     """Build the stage's `Checkpoint` from what the run actually did.
 
-    This is the only way a `Checkpoint` comes into existence (§7.1). Every
-    provenance field is computed here from the run rather than passed in by a
-    caller who would like it to be true: `trained_on_row_ids` is the sorted,
-    deduplicated union of the rows the loop stepped on, and `plan_digest` is
-    the digest of the plan those steps ran under.
+    **Module-private, and that is the guard.** `Checkpoint.__init__` refuses a
+    direct call, but a factory anyone can reach is a factory anyone can hand
+    invented row ids to — the guard would then stop only the honest caller.
+    `run_stage` is the one thing that calls this, and it passes the row ids of
+    the batches it stepped on, so a `Checkpoint` in existence came from a run.
+    Nothing here can certify that: Python has no way to prove a caller's
+    provenance, and the claim is that the *only path in the package* produces
+    it from the loop, not that the object is unforgeable.
+
+    Every field that can be derived is derived rather than passed:
+    `trained_on_row_ids` is the sorted, deduplicated union of the recorded
+    batches, `plan_digest` is the digest of the plan those steps ran under, and
+    `components` is the stage's trainable list.
     """
-    if row_ids.ndim != 1 or row_ids.dtype != torch.long:
-        raise TrainingError(
-            f"row ids must be a [M] long tensor, got shape "
-            f"{tuple(row_ids.shape)} of {row_ids.dtype}"
-        )
-    return Checkpoint(
+    seen = (
+        torch.cat([rows.reshape(-1) for rows in row_ids])
+        if row_ids
+        else torch.zeros(0, dtype=torch.long)
+    )
+    return Checkpoint._issue(
         recipe=run.recipe.name,
         stage=stage.name,
         fold=fold,
-        trained_on_row_ids=torch.unique(row_ids.detach().cpu()),
+        trained_on_row_ids=torch.unique(seen.cpu()),
         parameters=dict(parameters),
         components=tuple(stage.trainable),
         steps=steps,
         seed=seed,
         plan_digest=run.plan.digest,
-        issued_by=issue_token(),
     )
 
 
@@ -305,7 +320,7 @@ def run_stage(
     Returns:
         The trace, the per-step log and the stage's checkpoint.
     """
-    compiled = run.stage(stage) if isinstance(stage, str) else stage
+    compiled = _resolve(run, stage)
     spec = compiled.optimiser
     graph = run.graph
     torch.manual_seed(seed)
@@ -319,7 +334,7 @@ def run_stage(
         tensors = [parameter for _, parameter in parameters]
         mixer = LossMixer.for_stage(compiled, probe=probe)
         source = iter(batches)
-        was_training = graph.training
+        modes = {module: module.training for module in graph.modules()}
         graph.train()
         try:
             for step in range(compiled.steps):
@@ -337,16 +352,18 @@ def run_stage(
                         gradients=mixed.loss.gradients,
                     )
                 )
-                seen.append(batch.row_id.detach())
+                # Cloned, not viewed: a source that reuses one buffer across
+                # batches would otherwise rewrite the provenance of every step
+                # already recorded (DESIGN.md §7.1).
+                seen.append(batch.row_id.detach().clone())
         finally:
-            graph.train(was_training)
-        checkpoint = emit_checkpoint(
-            run,
-            compiled,
-            parameters,
-            torch.cat(seen) if seen else torch.zeros(0, dtype=torch.long),
-            steps=len(records),
-            seed=seed,
+            # Restored module by module. `graph.train(flag)` is recursive, so
+            # one saved root flag would silently put a submodule a caller had
+            # placed in eval mode back into training.
+            for module, was in modes.items():
+                module.training = was
+        checkpoint = _emit_checkpoint(
+            run, compiled, parameters, seen, steps=len(records), seed=seed
         )
 
     paths: dict[str, str] = {}
@@ -404,6 +421,28 @@ def _step(
     return _Stepped(loss=mixed, grad_norm=grad_norm)
 
 
+def _resolve(run: CompiledRun, stage: str | CompiledStage) -> CompiledStage:
+    """The stage `run` compiled under that name — never one from another run.
+
+    A `CompiledStage` carries its own objectives, optimiser and step count, so
+    one compiled from a different recipe would be executed happily against
+    *this* run's graph whenever the two graphs happen to be compatible. The
+    checkpoint would then record this run's recipe and plan digest over a fit
+    the plan does not describe — a provenance field that is wrong rather than
+    missing, which is the one failure `DESIGN.md` §7.1 is written to prevent.
+    """
+    resolved = run.stage(stage if isinstance(stage, str) else stage.name)
+    if not isinstance(stage, str) and resolved is not stage:
+        raise TrainingError(
+            f"the compiled stage {stage.name!r} passed here is not the one "
+            f"recipe {run.recipe.name!r} compiled under that name. A stage is "
+            "executed against the run that planned it, or the checkpoint's "
+            "plan digest describes a fit that never happened (DESIGN.md §7.1). "
+            "Pass the stage's name, or the CompiledStage from this run."
+        )
+    return resolved
+
+
 def _next_batch(
     source: Iterator[XTYBatch], step: int, compiled: CompiledStage
 ) -> XTYBatch:
@@ -436,7 +475,6 @@ __all__ = [
     "BatchSource",
     "StageResult",
     "StepRecord",
-    "emit_checkpoint",
     "run_stage",
     "trainable_only",
 ]

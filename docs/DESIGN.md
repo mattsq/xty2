@@ -655,6 +655,24 @@ The factory takes the compiled plan, so `used_y` comes from graph reachability
 actual row sets and `out_of_fold` is *earned* by passing the disjointness check
 below rather than asserted. A direct constructor call is a type error.
 
+**And the factory itself is not public.** A factory anyone can call is a
+factory anyone can hand invented row ids to, which moves the hole up one level
+rather than closing it: the constructor guard would then stop only the caller
+who was not trying. The public surface is therefore the *executor*, and the
+factory is private to it — `run_stage` returns a `Checkpoint` because it ran
+the loop that produced it. This is a legibility guard and not a security
+boundary: Python cannot prove a caller's provenance, and one determined to
+reach the private factory can. What it buys is that no ordinary path yields an
+artifact whose provenance was asserted rather than observed, and that a path
+which does is a deliberate line in a diff.
+
+A run directory holds **one** compiled recipe, and enforces it in both
+directions: a second, different plan is rejected, and so is a checkpoint whose
+`plan_digest` is not the plan already written there. The checkpoint carrying
+the digest makes the mismatch *detectable*; refusing the write is what stops a
+directory existing whose two halves each look valid and describe different
+runs.
+
 Two fields do the work. Each checkpoint records the row ids it was **fit on**;
 each prediction records **which checkpoint produced it**. `out_of_fold` is then
 a claim with a decision procedure:

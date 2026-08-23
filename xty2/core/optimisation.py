@@ -368,8 +368,25 @@ class OptimiserSpec:
         return self.clipping.describe()
 
     def lr_at(self, step: int) -> float:
-        """The learning rate at `step`: `lr` times the schedule's multiplier."""
-        return float(self.lr) * self.lr_schedule(step)
+        """The learning rate at `step`: `lr` times the schedule's multiplier.
+
+        A negative product is rejected here rather than by torch. A `Schedule`
+        checks that a weight is finite and not that it is positive, because a
+        *loss* weight may legitimately be negative — and the executor sets the
+        rate by writing into the optimiser's parameter groups, which is the one
+        path around torch's constructor-time check. A schedule that dipped
+        below zero would run gradient *ascent* for as long as it stayed there,
+        on a run whose plan and card both read as correct.
+        """
+        rate = float(self.lr) * self.lr_schedule(step)
+        if rate < 0:
+            raise CompileError(
+                f"{self.lr_schedule.describe()} puts the learning rate at "
+                f"{rate!r} on step {step}. A negative rate ascends the "
+                "gradient; the schedule multiplies `lr` and must stay "
+                "non-negative (DESIGN.md §6, §7)."
+            )
+        return rate
 
     def describe_lines(self) -> tuple[str, ...]:
         """The spec as the plan prints it, one card field per line."""

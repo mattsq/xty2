@@ -150,6 +150,36 @@ def test_a_trainable_component_that_was_already_frozen_is_rejected() -> None:
         run_stage(run, "fit", _batches(), seed=0)
 
 
+def test_a_rejected_stage_leaves_the_graph_as_it_found_it() -> None:
+    # The rejection must not corrupt the graph it protects. `propensity` is
+    # last in topological order, so a scan that froze as it went would have
+    # frozen the encoder and the outcome head before reaching the problem —
+    # and nothing would put them back.
+    run = compile(_recipe(trainable=("propensity",)))
+    for parameter in run.graph["propensity"].parameters():
+        parameter.requires_grad_(False)
+    with pytest.raises(TrainingError, match="requires_grad=False"):
+        run_stage(run, "fit", _batches(), seed=0)
+    for name in ("encoder", "outcome_head"):
+        assert all(p.requires_grad for p in run.graph[name].parameters())
+
+
+def test_a_compiled_stage_from_another_run_is_rejected() -> None:
+    # Two compatible graphs would otherwise let a foreign stage's objectives
+    # and optimiser run here, while the checkpoint recorded *this* recipe's
+    # plan digest — provenance that is wrong rather than missing.
+    run = compile(_recipe())
+    foreign = compile(_recipe(steps=2))
+    with pytest.raises(TrainingError, match="not the one"):
+        run_stage(run, foreign.stage("fit"), _batches(), seed=0)
+
+
+def test_the_run_s_own_compiled_stage_is_accepted() -> None:
+    run = compile(_recipe())
+    result = run_stage(run, run.stage("fit"), _batches(), seed=0)
+    assert result.stage == "fit"
+
+
 def test_trainable_only_yields_exactly_the_named_components() -> None:
     graph = ComponentGraph(
         [ToyEncoder(width=HIDDEN), ToyOutcomeHead(), ToyPropensity()]
@@ -281,6 +311,27 @@ def test_clipping_bounds_the_step() -> None:
     # The recorded norm is the one *before* clipping — the diagnostic that
     # says the clip was active at all.
     assert result.records[0].grad_norm > 1e-4
+
+
+def test_a_schedule_that_would_ascend_the_gradient_is_rejected() -> None:
+    # A `Schedule` checks a weight is finite, not that it is positive — a loss
+    # weight may be negative. Applied to the learning rate it would run
+    # gradient ascent, and writing into the parameter groups is the one path
+    # around torch's constructor-time check.
+    ascending = optimiser(lr=0.1, lr_schedule=Ramp(-1.0, 1.0, steps=4))
+    with pytest.raises(Exception, match="ascends the gradient"):
+        run_stage(compile(_recipe(optimiser=ascending)), "fit", _batches(), seed=0)
+
+
+def test_a_component_left_in_eval_mode_stays_there() -> None:
+    # `graph.train()` is recursive, so restoring one saved root flag would put
+    # a submodule the caller had placed in eval mode back into training — the
+    # frozen-BatchNorm case, silently undone.
+    run = compile(_recipe())
+    run.graph["propensity"].eval()
+    run_stage(run, "fit", _batches(), seed=0)
+    assert not run.graph["propensity"].training
+    assert run.graph["encoder"].training
 
 
 def test_a_batch_source_that_runs_dry_is_an_error() -> None:

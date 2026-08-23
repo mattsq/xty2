@@ -46,6 +46,17 @@ from xty2.core.recipe import Objective, Recipe, Stage, Weighted, validate_rows
 from xty2.core.rows import Rows, populations_are_disjoint
 from xty2.core.schedules import Schedule
 
+
+def plan_digest_of(rendered: str) -> str:
+    """`sha256` of a rendered execution plan.
+
+    A function rather than a method, because the two things that need it are a
+    plan in memory and a `plan.txt` a run directory wrote earlier. One
+    implementation is what lets the second be compared against the first.
+    """
+    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # What compilation produces
 # ---------------------------------------------------------------------------
@@ -193,7 +204,7 @@ class ExecutionPlan:
         artifact still the thing the card describes?" in a form something can
         check.
         """
-        return hashlib.sha256(self.render().encode("utf-8")).hexdigest()
+        return plan_digest_of(self.render())
 
     # -- sections ----------------------------------------------------------
 
@@ -727,4 +738,5 @@ __all__ = [
     "ForwardPass",
     "PlannedComponent",
     "compile",
+    "plan_digest_of",
 ]
