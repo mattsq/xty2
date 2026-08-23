@@ -1,8 +1,10 @@
 """xty2 — composable semi-supervised causal learning for tabular data.
 
-The package is deliberately empty at this point: P0 ships scaffolding only.
-Layout, and the packet that fills each subpackage, is in `docs/DESIGN.md` §10
-and `docs/PLAN.md`.
+`xty2.core` holds the data types the rest of the framework is stated against
+(P1): the batch, the schema, the ports and their shape contracts, the
+distribution protocols and the row populations. Everything else — components,
+objectives, views, training — is still empty. Layout, and the packet that fills
+each subpackage, is in `docs/DESIGN.md` §10 and `docs/PLAN.md`.
 """
 
 from importlib.metadata import PackageNotFoundError, version
