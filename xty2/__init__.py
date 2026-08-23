@@ -10,12 +10,13 @@ contracts those read (P3, P4).
 `xty2.objectives` holds four of the ten losses of `DESIGN.md` §4.2, and
 `xty2.training` the mixer that weights and logs them (P3) together with the
 single-stage `gradient` executor and the immutable artifacts it writes (P4).
-`xty2.components` and `xty2.recipes` now contain the first reviewed method:
-TARNet's shared MLP, treatment-specific outcome heads, categorical propensity,
-and one joint stage (P5). `xty2.views` adds schema-aware masking and jitter,
-view-keyed realisations, and the consistency objective (P6). The later recipes
-remain deliberately absent until their packets. Layout is in
-`docs/DESIGN.md` §10 and `docs/PLAN.md`.
+`xty2.components` and `xty2.recipes` contain two reviewed methods: TARNet's
+fixed-scale treatment heads (P5) and CNFlow's conditional spline outcome
+density (P7). They share the categorical propensity, exact missing-treatment
+marginal objective and one-stage executor. `xty2.views` adds schema-aware
+masking and jitter, view-keyed realisations, and the consistency objective
+(P6). Later recipes remain deliberately absent until their packets. Layout is
+in `docs/DESIGN.md` §10 and `docs/PLAN.md`.
 """
 
 from importlib.metadata import PackageNotFoundError, version
