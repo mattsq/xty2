@@ -24,6 +24,7 @@ which components transitively read `Y_RAW` — and the plan prints it.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -39,10 +40,22 @@ from xty2.core.graph import (
     State,
 )
 from xty2.core.loss import Reduction
+from xty2.core.optimisation import OptimiserSpec
 from xty2.core.ports import Port
 from xty2.core.recipe import Objective, Recipe, Stage, Weighted, validate_rows
 from xty2.core.rows import Rows, populations_are_disjoint
 from xty2.core.schedules import Schedule
+
+
+def plan_digest_of(rendered: str) -> str:
+    """`sha256` of a rendered execution plan.
+
+    A function rather than a method, because the two things that need it are a
+    plan in memory and a `plan.txt` a run directory wrote earlier. One
+    implementation is what lets the second be compared against the first.
+    """
+    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+
 
 # ---------------------------------------------------------------------------
 # What compilation produces
@@ -114,6 +127,16 @@ class CompiledStage:
     def trainable(self) -> tuple[str, ...]:
         return self.stage.trainable
 
+    @property
+    def optimiser(self) -> OptimiserSpec:
+        """How this stage descends. Set — a stage with objectives cannot omit it."""
+        return self.stage.optimiser
+
+    @property
+    def steps(self) -> int:
+        """Optimiser steps, not epochs (`FIDELITY.md` §2)."""
+        return self.stage.steps
+
 
 @dataclass(frozen=True)
 class PlannedComponent:
@@ -169,6 +192,20 @@ class ExecutionPlan:
     def __str__(self) -> str:
         return self.render()
 
+    @property
+    def digest(self) -> str:
+        """`sha256` of the rendered plan — what an artifact records it came from.
+
+        The plan is deterministic (that is what makes it diffable), so its
+        digest identifies a compiled recipe exactly: components, wiring,
+        objectives, schedules, row scopes and every resolved hyperparameter.
+        A checkpoint carrying it can be told apart from one produced by a
+        recipe that has since been edited, which is the question "is this
+        artifact still the thing the card describes?" in a form something can
+        check.
+        """
+        return plan_digest_of(self.render())
+
     # -- sections ----------------------------------------------------------
 
     def _component_lines(self) -> list[str]:
@@ -201,6 +238,9 @@ class ExecutionPlan:
         lines = [
             f"stage {compiled.name}",
             f"  rows: {compiled.stage.rows}",
+            f"  steps: {compiled.steps}",
+            "  optimisation",
+            *(f"    {line}" for line in compiled.optimiser.describe_lines()),
             f"  forward passes ({len(compiled.passes)})",
         ]
         for forward in compiled.passes:
@@ -582,6 +622,12 @@ def _hyperparameters(
         _merge(resolved, owners, component, f"component {component.name!r}")
     for stage in recipe.program:
         _merge(resolved, owners, stage, f"stage {stage.name!r}")
+        _merge(
+            resolved,
+            owners,
+            stage.optimiser,
+            f"the optimiser of stage {stage.name!r}",
+        )
         for weighted in stage.objectives:
             _merge(
                 resolved,
@@ -692,4 +738,5 @@ __all__ = [
     "ForwardPass",
     "PlannedComponent",
     "compile",
+    "plan_digest_of",
 ]

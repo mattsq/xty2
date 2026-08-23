@@ -550,10 +550,30 @@ class Stage:
     initialise_from: str | None = None         # a previous stage's checkpoint
     inputs: list[str] = ()                     # artifacts from previous stages
     executor: Literal["gradient", "array_fit", "cross_fit"] = "gradient"
-    optimiser: OptimiserSpec | None = None
-    steps: int | None = None
+    optimiser: OptimiserSpec = REQUIRED        # §9.1 sentinel, not a default
+    steps: int = REQUIRED                      # optimiser steps, never epochs
     allow_leakage: bool = False                # opt out of §7.2, predictive only
 ```
+
+`optimiser` and `steps` are written here as `REQUIRED` rather than `None`,
+amending an earlier draft that gave them optional defaults. Every field of an
+`OptimiserSpec` binds a card key from the `optimisation` block of
+`FIDELITY.md` §2, and so does `steps` — so a default is precisely the silent
+inheritance §9.1 exists to make impossible. A stage with no objectives is
+exempt: it has nothing to descend and is already a compile error. `steps` is
+**optimiser steps**, because "epochs on a semi-supervised loader are
+ambiguous" (`FIDELITY.md` §2); a card stating epochs converts, and writes the
+conversion into its §7.
+
+`OptimiserSpec` itself lives in `core/optimisation.py` (§10) with the two value
+objects it needs: `WeightDecay`, which carries the coefficient *and* whether it
+reaches biases and norm parameters, and `GradientClipping`, which carries the
+mode and the threshold. Each is one field bound to one canonical key, as §9.1
+requires — the alternative, two fields sharing `optimisation.weight_decay`,
+is rejected by the binding rule. The learning-rate schedule reuses the
+`Schedule` types of §6 as a *multiplier* on `lr`, so warmup is a `Ramp` and no
+schedule is `Constant(1.0)`: a string field naming a schedule nothing
+implements would let a card claim one the run does not have.
 
 ### 7.0 How `Stage.rows` and `Objective.rows` compose
 
@@ -594,9 +614,15 @@ worth nothing if nothing can check it:
 ```python
 @dataclass(frozen=True)
 class Checkpoint:
+    recipe: str
     stage: str
     fold: int | None
     trained_on_row_ids: Tensor        # [M] exactly the rows this fit saw
+    parameters: Mapping[str, Tensor]  # the trained components, and only those
+    components: tuple[str, ...]
+    steps: int
+    seed: int
+    plan_digest: str                  # sha256 of the plan this ran under
 
 @dataclass(frozen=True)
 class PseudoLabels:
@@ -628,6 +654,24 @@ The factory takes the compiled plan, so `used_y` comes from graph reachability
 (§2.2); it takes the checkpoints, so `prediction_mode` is computed from the
 actual row sets and `out_of_fold` is *earned* by passing the disjointness check
 below rather than asserted. A direct constructor call is a type error.
+
+**And the factory itself is not public.** A factory anyone can call is a
+factory anyone can hand invented row ids to, which moves the hole up one level
+rather than closing it: the constructor guard would then stop only the caller
+who was not trying. The public surface is therefore the *executor*, and the
+factory is private to it — `run_stage` returns a `Checkpoint` because it ran
+the loop that produced it. This is a legibility guard and not a security
+boundary: Python cannot prove a caller's provenance, and one determined to
+reach the private factory can. What it buys is that no ordinary path yields an
+artifact whose provenance was asserted rather than observed, and that a path
+which does is a deliberate line in a diff.
+
+A run directory holds **one** compiled recipe, and enforces it in both
+directions: a second, different plan is rejected, and so is a checkpoint whose
+`plan_digest` is not the plan already written there. The checkpoint carrying
+the digest makes the mismatch *detectable*; refusing the write is what stops a
+directory existing whose two halves each look valid and describe different
+runs.
 
 Two fields do the work. Each checkpoint records the row ids it was **fit on**;
 each prediction records **which checkpoint produced it**. `out_of_fold` is then
@@ -802,7 +846,8 @@ prevent.
 ```
 xty2/
   core/        batch.py schema.py ports.py distributions.py rows.py
-               graph.py card_keys.py loss.py schedules.py recipe.py compile.py
+               graph.py card_keys.py loss.py schedules.py optimisation.py
+               recipe.py compile.py
   components/  encoders/ outcome/ treatment/ posterior/ density/ energy/
   views/       masking.py tabular.py perturbations.py
   objectives/  supervised.py marginal.py consistency.py generative.py causal.py
@@ -861,6 +906,8 @@ change the decision:
 | Config-first surface | sweeps outgrow the Python API in practice |
 | Plugin / entry-point system | a consumer outside this repo exists |
 | Distributed training | a single recipe stops fitting in one process |
+| A loader / sampler, and with it the `optimisation.batch_size` and `labelled_unlabelled_ratio` bindings | a recipe needs a fixed labelled/unlabelled quota per batch rather than whatever the data gives. The gradient executor takes an iterable of batches; a stage field for either key would be a card key nothing could check, which §7.1 rejects for provenance and §9.1 for hyperparameters |
+| LR schedules beyond `Constant`, `Ramp` and `Step` (cosine, one-cycle) | a card names one. The rate is a schedule multiplier, so a fourth schedule type serves both the loss weights and the LR — and by the two-consumer rule it waits for the first real one |
 | The other ~35 XTYLearner families | one is actually needed for a result |
 
 **Migration is lazy by design.** No model is ported until it is next used. A

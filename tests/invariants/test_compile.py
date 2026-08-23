@@ -9,12 +9,13 @@ compile error rather than a term that quietly returns `n = 0` forever.
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import pytest
 import torch
 from xty2.core import (
     DEFAULT,
+    REQUIRED,
     CompileError,
     ComponentGraph,
     LossTerm,
@@ -35,18 +36,20 @@ from xty2.core import (
 
 from tests.invariants.conftest import (
     HIDDEN,
+    STEPS,
     ToyEncoder,
     ToyPosterior,
     ToyPropensity,
     make_schema,
     objective,
+    stage,
     two_head_recipe,
     weighted,
 )
 
 
-def _stage(*objectives: Weighted, **overrides: object) -> Stage:
-    return Stage(name="fit", objectives=objectives, **overrides)  # type: ignore[arg-type]
+def _stage(*objectives: Weighted, **overrides: Any) -> Stage:
+    return stage(objectives=objectives, **overrides)
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +224,58 @@ def test_a_stage_with_no_objectives_is_rejected() -> None:
         compile(two_head_recipe(program=(Stage(name="fit"),)))
 
 
+# ---------------------------------------------------------------------------
+# How a stage descends (DESIGN.md §7, §9.1 — P4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("field", ["optimiser", "steps"])
+def test_a_stage_that_descends_says_how(field: str) -> None:
+    # Both bind card keys (`FIDELITY.md` §2, the `optimisation` block), so
+    # neither may fall through to a framework default: a stage that ran 1,000
+    # steps at whatever lr the framework liked would print a plan a reviewer
+    # could not diff against a paper.
+    with pytest.raises(CompileError, match="no usable default"):
+        Stage(
+            name="fit",
+            objectives=(objective("outcome_nll", Port.Y_GIVEN_XT),),
+            trainable=("encoder", "outcome_head"),
+            **{field: REQUIRED},
+        )
+
+
+def test_a_stage_with_no_objectives_needs_neither() -> None:
+    # It is already rejected for having no objectives, and replacing that
+    # message with one about an optimiser would be a worse error, not an
+    # earlier one.
+    assert Stage(name="fit").steps is REQUIRED
+
+
+@pytest.mark.parametrize("steps", [0, -1, 2.5])
+def test_a_stage_runs_for_a_positive_number_of_steps(steps: object) -> None:
+    with pytest.raises(CompileError, match="optimiser steps"):
+        _stage(
+            objective("outcome_nll", Port.Y_GIVEN_XT),
+            trainable=("encoder", "outcome_head"),
+            steps=steps,
+        )
+
+
+def test_a_stage_holds_an_optimiser_spec() -> None:
+    with pytest.raises(CompileError, match="OptimiserSpec"):
+        _stage(
+            objective("outcome_nll", Port.Y_GIVEN_XT),
+            trainable=("encoder", "outcome_head"),
+            optimiser="adam",
+        )
+
+
+def test_the_optimiser_reaches_the_compiled_stage() -> None:
+    run = compile(two_head_recipe())
+    assert run.stage("fit").optimiser is run.recipe.program[0].optimiser
+    assert run.stage("fit").steps == STEPS
+
+
 def test_two_objectives_sharing_a_name_are_rejected() -> None:
     recipe = two_head_recipe(
         program=(
@@ -294,6 +349,15 @@ def test_the_plan_carries_the_resolved_hyperparameters() -> None:
     plan = compile(two_head_recipe()).plan
     assert plan.hyperparameters == {
         "architecture.widths_depths": HIDDEN,
+        # The optimisation block comes from the stage and its optimiser: five
+        # of the six card keys are rendered rather than structured, because
+        # this dict is what a reviewer diffs against a card's §4 YAML.
+        "gradients.gradient_clipping": "none",
+        "optimisation.lr": 0.05,
+        "optimisation.lr_schedule": "constant 1.0",
+        "optimisation.optimiser": "sgd(momentum=0.0, nesterov=False)",
+        "optimisation.total_steps_or_epochs": STEPS,
+        "optimisation.weight_decay": "none",
         "losses.eligible_rows": {
             "fit.outcome_nll": "y_observed",
             "fit.treatment_nll": "t_observed",

@@ -3,10 +3,11 @@
 `batch`, `schema`, `ports`, `distributions` and `rows` are the vocabulary
 everything else is stated against (P1). `graph`, `recipe` and `compile` are
 what turns a declarative assembly of components and objectives into a checked,
-printable execution plan (P2, `DESIGN.md` §2.1, §3, §7, §8, §9.1). `loss` and
-`schedules` are the objective and weighting contracts the compiler reads (P3,
-§4, §6) — they are in the leaf layer because `training/` imports `core/` and
-never the reverse, which is the same reason `DESIGN.md` §10 gives for `Stage`.
+printable execution plan (P2, `DESIGN.md` §2.1, §3, §7, §8, §9.1). `loss`,
+`schedules` and `optimisation` are the objective, weighting and descent
+contracts the compiler reads (P3, P4, §4, §6, §7) — they are in the leaf layer
+because `training/` imports `core/` and never the reverse, which is the same
+reason `DESIGN.md` §10 gives for `Stage`.
 """
 
 from xty2.core.batch import XTYBatch, assert_unchanged_by
@@ -26,6 +27,7 @@ from xty2.core.compile import (
     ForwardPass,
     PlannedComponent,
     compile,
+    plan_digest_of,
 )
 from xty2.core.conformance import (
     check_outcome_distribution_contract,
@@ -40,6 +42,7 @@ from xty2.core.distributions import (
     treatment_mode,
 )
 from xty2.core.errors import (
+    ArtifactError,
     BatchContractError,
     CardKeyError,
     CompileError,
@@ -48,6 +51,7 @@ from xty2.core.errors import (
     LossError,
     PortContractError,
     SchemaError,
+    TrainingError,
     Xty2Error,
 )
 from xty2.core.graph import (
@@ -76,6 +80,15 @@ from xty2.core.loss import (
     treatment_at,
     treatment_distribution,
     validate_reduction,
+)
+from xty2.core.optimisation import (
+    OPTIMISER_NAMES,
+    ClipMode,
+    GradientClipping,
+    OptimiserName,
+    OptimiserSpec,
+    WeightDecay,
+    gradient_norm,
 )
 from xty2.core.ports import (
     PORT_SPECS,
@@ -111,16 +124,19 @@ __all__ = [
     "CARD_KEY_VOCABULARY",
     "DEFAULT",
     "IDENTITY_VIEW",
+    "OPTIMISER_NAMES",
     "PORT_SPECS",
     "REDUCTIONS",
     "REQUIRED",
     "ROW_POPULATIONS",
     "SOURCE_NAME",
     "SOURCE_PORTS",
+    "ArtifactError",
     "Axis",
     "BatchContractError",
     "CardKeyError",
     "CategoricalTreatment",
+    "ClipMode",
     "CompileError",
     "CompiledObjective",
     "CompiledRun",
@@ -133,10 +149,13 @@ __all__ = [
     "FeatureSpec",
     "ForwardPass",
     "GaussianOutcome",
+    "GradientClipping",
     "GraphError",
     "LossError",
     "LossTerm",
     "Objective",
+    "OptimiserName",
+    "OptimiserSpec",
     "OutcomeDistribution",
     "OutcomeSpec",
     "Params",
@@ -160,8 +179,10 @@ __all__ = [
     "State",
     "Step",
     "TrainContext",
+    "TrainingError",
     "TreatmentDistribution",
     "TreatmentMode",
+    "WeightDecay",
     "Weighted",
     "XTYBatch",
     "Xty2Error",
@@ -173,8 +194,10 @@ __all__ = [
     "check_outcome_distribution_contract",
     "check_treatment_distribution_contract",
     "compile",
+    "gradient_norm",
     "is_required",
     "outcome_distribution",
+    "plan_digest_of",
     "populations_are_disjoint",
     "port_spec",
     "reduce_rows",

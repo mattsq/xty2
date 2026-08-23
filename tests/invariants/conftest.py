@@ -17,10 +17,13 @@ from xty2.core import (
     CategoricalTreatment,
     Component,
     ComponentGraph,
+    Constant,
     FeatureSpec,
     GaussianOutcome,
+    GradientClipping,
     LossTerm,
     Objective,
+    OptimiserSpec,
     OutcomeSpec,
     Port,
     PortValue,
@@ -35,6 +38,7 @@ from xty2.core import (
     Stage,
     State,
     TrainContext,
+    WeightDecay,
     Weighted,
     XTYBatch,
     reduce_rows,
@@ -217,6 +221,33 @@ def objective(
     )
 
 
+STEPS = 3
+"""Steps a fixture stage declares. Small: Tier 0 is seconds, not a fit."""
+
+
+def optimiser(**overrides: Any) -> OptimiserSpec:
+    """A fully specified optimiser.
+
+    Every field is stated, because every field binds a card key and none has a
+    default (`DESIGN.md` §9.1). Plain SGD without momentum, so a test that
+    checks a parameter moved can predict where it moved to.
+    """
+    defaults: dict[str, Any] = {
+        "name": "sgd",
+        "lr": 0.05,
+        "weight_decay": WeightDecay.none(),
+        "lr_schedule": Constant(1.0),
+        "clipping": GradientClipping.none(),
+    }
+    return OptimiserSpec(**(defaults | overrides))
+
+
+def stage(name: str = "fit", **overrides: Any) -> Stage:
+    """A stage with the two gradient fields filled in (`PLAN.md` P4)."""
+    defaults: dict[str, Any] = {"optimiser": optimiser(), "steps": STEPS}
+    return Stage(name=name, **(defaults | overrides))
+
+
 def two_head_graph() -> ComponentGraph:
     """Encoder -> {outcome head, propensity}: the shape every recipe starts from."""
     return ComponentGraph(
@@ -235,8 +266,7 @@ def two_head_recipe(**overrides: Any) -> Recipe:
         "schema": make_schema(),
         "system": two_head_graph(),
         "program": (
-            Stage(
-                name="fit",
+            stage(
                 objectives=(
                     objective("outcome_nll", Port.Y_GIVEN_XT, rows="y_observed"),
                     objective("treatment_nll", Port.T_GIVEN_X, rows="t_observed"),

@@ -36,7 +36,6 @@ from xty2.core import (
     Realisation,
     RowIndex,
     Rows,
-    Stage,
     State,
     Step,
     TrainContext,
@@ -61,6 +60,7 @@ from tests.invariants.conftest import (
     make_batch,
     make_schema,
     objective,
+    stage,
     two_head_recipe,
     weighted,
 )
@@ -183,7 +183,7 @@ def _encoder_run(*terms: Weighted) -> tuple[CompiledRun, ToyEncoder]:
     encoder = ToyEncoder(width=HIDDEN)
     recipe = two_head_recipe(
         system=ComponentGraph([encoder]),
-        program=(Stage(name="fit", objectives=terms, trainable=("encoder",)),),
+        program=(stage(objectives=terms, trainable=("encoder",)),),
     )
     return compile(recipe), encoder
 

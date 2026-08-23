@@ -25,11 +25,12 @@ This file is the short version of the rules those documents make binding.
 ## Layout
 
 ```
-xty2/core/        batch, schema, ports, distributions, graph, recipe, compile
+xty2/core/        batch, schema, ports, distributions, graph, loss, schedules,
+                  optimisation, recipe, compile
 xty2/components/  parameterisations only
 xty2/views/       augmentation, separated from the losses that use it
 xty2/objectives/  losses as independent objects
-xty2/training/    stage, program, loss mixer, schedules, executors, artifacts
+xty2/training/    loss mixer, executors, artifacts (program arrives with P8)
 xty2/recipes/     named methods, no logic
 xty2/evaluation/  predictive, causal, calibration metrics
 xty2/estimators/  cate, dml, policy front-ends
