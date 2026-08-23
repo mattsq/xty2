@@ -91,13 +91,26 @@ def test_row_ids_must_be_unique() -> None:
 def test_optional_fields_are_validated_when_present() -> None:
     with pytest.raises(BatchContractError, match="fold_id must be non-negative"):
         make_batch(fold_id=torch.full((BATCH_SIZE,), -1, dtype=torch.long))
-    with pytest.raises(BatchContractError, match="weight must be non-negative"):
+    with pytest.raises(BatchContractError, match="weight must be finite"):
         make_batch(weight=-torch.ones(BATCH_SIZE))
     ok = make_batch(
         fold_id=torch.zeros(BATCH_SIZE, dtype=torch.long),
         weight=torch.ones(BATCH_SIZE),
     )
     assert ok.fold_id is not None and ok.weight is not None
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -float("inf")])
+def test_a_non_finite_weight_is_rejected(bad: float) -> None:
+    """`weight.min() < 0` is false for NaN, so the contract cannot rest on it.
+
+    A NaN that survives construction reaches a weighted loss and propagates
+    into the experiment instead of failing at the batch boundary.
+    """
+    weight = torch.ones(BATCH_SIZE)
+    weight[3] = bad
+    with pytest.raises(BatchContractError, match="finite and non-negative"):
+        make_batch(weight=weight)
 
 
 def test_an_empty_batch_is_legal(batch: XTYBatch) -> None:

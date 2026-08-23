@@ -101,10 +101,13 @@ def test_y_is_passed_unexpanded_and_the_head_inserts_the_candidate_axis() -> Non
 
 def test_the_rank_of_t_selects_the_mode() -> None:
     observed = torch.zeros(BATCH_SIZE, dtype=torch.long)
-    assert treatment_mode(observed, NUM_TREATMENTS) == "observed"
-    assert treatment_mode(observed[:, None], NUM_TREATMENTS) == "candidate"
+    assert treatment_mode(observed, NUM_TREATMENTS, batch_size=BATCH_SIZE) == "observed"
+    assert (
+        treatment_mode(observed[:, None], NUM_TREATMENTS, batch_size=BATCH_SIZE)
+        == "candidate"
+    )
     with pytest.raises(ContractError, match="rank of t selects the mode"):
-        treatment_mode(observed[None, :, None], NUM_TREATMENTS)
+        treatment_mode(observed[None, :, None], NUM_TREATMENTS, batch_size=1)
 
 
 @pytest.mark.parametrize(
@@ -117,7 +120,7 @@ def test_the_rank_of_t_selects_the_mode() -> None:
 )
 def test_a_treatment_index_is_validated(t: Tensor, message: str) -> None:
     with pytest.raises(ContractError, match=message):
-        treatment_mode(t, NUM_TREATMENTS)
+        treatment_mode(t, NUM_TREATMENTS, batch_size=BATCH_SIZE)
 
 
 def test_a_candidate_column_may_be_any_width() -> None:
@@ -133,7 +136,7 @@ def test_the_reference_head_validates_its_own_parameters() -> None:
         GaussianOutcome(loc=torch.zeros(BATCH_SIZE, 3), scale=torch.ones(BATCH_SIZE, 2))
     with pytest.raises(ContractError, match=r"\[B, K, \*Dy\]"):
         GaussianOutcome(loc=torch.zeros(BATCH_SIZE), scale=torch.ones(BATCH_SIZE))
-    with pytest.raises(ContractError, match="scale must be positive"):
+    with pytest.raises(ContractError, match="scale must be finite and positive"):
         GaussianOutcome(
             loc=torch.zeros(BATCH_SIZE, 3), scale=torch.zeros(BATCH_SIZE, 3)
         )
@@ -285,8 +288,49 @@ def test_the_treatment_check_catches_a_broken_head(
         check_treatment_distribution_contract(head, num_treatments=NUM_TREATMENTS)
 
 
-def test_a_mismatched_batch_axis_is_not_broadcast_away() -> None:
+def test_a_mismatched_y_batch_axis_is_not_broadcast_away() -> None:
     head = make_gaussian()
     t = torch.zeros(BATCH_SIZE, dtype=torch.long)
-    with pytest.raises(ContractError, match="batch axis"):
+    with pytest.raises(ContractError, match="y has batch axis"):
         head.log_prob(torch.randn(1), t)
+
+
+@pytest.mark.parametrize("event_shape", EVENT_SHAPES, ids=["scalar-y", "vector-y"])
+def test_a_mismatched_t_batch_axis_is_not_broadcast_away(
+    event_shape: tuple[int, ...],
+) -> None:
+    """The failure this rejects returns a *correctly shaped* wrong answer.
+
+    With `t: [1]`, `gather` yields row 0's parameters and ambient broadcasting
+    then scores every row of `y` under them, returning a plausible `[B]`. No
+    downstream shape check can see it, so it is rejected at the source.
+    """
+    head, y = make_gaussian(event_shape), make_y(event_shape)
+    for t in (
+        torch.zeros(1, dtype=torch.long),
+        torch.zeros(1, NUM_TREATMENTS, dtype=torch.long),
+        torch.zeros(BATCH_SIZE - 1, dtype=torch.long),
+    ):
+        with pytest.raises(ContractError, match="t has batch axis"):
+            head.log_prob(y, t)
+        with pytest.raises(ContractError, match="t has batch axis"):
+            head.mean(t)
+        with pytest.raises(ContractError, match="t has batch axis"):
+            head.sample(t, 2)
+
+
+def test_the_propensity_rejects_a_mismatched_t_batch_axis() -> None:
+    head = CategoricalTreatment(logits=torch.randn(BATCH_SIZE, NUM_TREATMENTS))
+    with pytest.raises(ContractError, match="t has batch axis"):
+        head.log_prob(torch.zeros(1, dtype=torch.long))
+
+
+def test_a_nan_scale_is_rejected() -> None:
+    """`scale.min() <= 0` is false for NaN; the check must not rely on it."""
+    scale = torch.ones(BATCH_SIZE, NUM_TREATMENTS)
+    scale[0, 0] = float("nan")
+    with pytest.raises(ContractError, match="finite and positive"):
+        GaussianOutcome(loc=torch.zeros(BATCH_SIZE, NUM_TREATMENTS), scale=scale)
+    scale[0, 0] = float("inf")
+    with pytest.raises(ContractError, match="finite and positive"):
+        GaussianOutcome(loc=torch.zeros(BATCH_SIZE, NUM_TREATMENTS), scale=scale)

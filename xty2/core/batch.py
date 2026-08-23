@@ -50,7 +50,7 @@ class XTYBatch:
     fold_id: Tensor | None = None
     """`[B]` long fold assignment, for cross-fitting and leakage checks."""
     weight: Tensor | None = None
-    """`[B]` float non-negative sample weights."""
+    """`[B]` float sample weights; finite and non-negative."""
 
     def __post_init__(self) -> None:
         self._check_field("x", self.x, ndim=2, dtype="float")
@@ -87,8 +87,12 @@ class XTYBatch:
                 )
             if self.fold_id is not None and int(self.fold_id.min()) < 0:
                 raise BatchContractError("batch.fold_id must be non-negative")
-            if self.weight is not None and float(self.weight.min()) < 0.0:
-                raise BatchContractError("batch.weight must be non-negative")
+            # `weight.min() < 0` is false for NaN, so a NaN weight would pass
+            # the non-negative contract and reach a weighted loss instead.
+            if self.weight is not None and not bool(
+                (torch.isfinite(self.weight) & (self.weight >= 0)).all()
+            ):
+                raise BatchContractError("batch.weight must be finite and non-negative")
 
         devices = {tensor.device for tensor in self._tensors().values()}
         if len(devices) > 1:

@@ -64,17 +64,26 @@ class TreatmentDistribution(Protocol):
         """Same rank rule as the outcome contract: `[B] -> [B]`, `[B, C] -> [B, C]`."""
 
 
-def treatment_mode(t: Tensor, num_treatments: int) -> TreatmentMode:
+def treatment_mode(t: Tensor, num_treatments: int, *, batch_size: int) -> TreatmentMode:
     """Validate `t` against the contract and report which mode it selects.
+
+    `batch_size` is required rather than optional because a `t` whose leading
+    axis is *not* `B` is the one error this contract cannot survive: with a
+    singleton leading axis, `gather` and then ambient broadcasting produce a
+    correctly-shaped `[B]` or `[B, C]` result in which every row was scored
+    under row 0's parameters. Nothing downstream can detect that, so the check
+    belongs where no head can forget it.
 
     Args:
         t: `[B]` observed treatments or `[B, C]` candidate treatments.
         num_treatments: `K`. Every entry of `t` must lie in `[0, K)`.
+        batch_size: `B`, the number of rows this distribution represents.
 
     Raises:
-        ContractError: if `t` is not a long tensor of rank 1 or 2, or holds an
-            index outside `[0, K)` — including the `-1` a caller might reach
-            for to mean "missing" (`DESIGN.md` §1.1).
+        ContractError: if `t` is not a long tensor of rank 1 or 2, if its
+            leading axis is not `B`, or if it holds an index outside `[0, K)`
+            — including the `-1` a caller might reach for to mean "missing"
+            (`DESIGN.md` §1.1).
     """
     if t.dtype != torch.long:
         raise ContractError(f"t must be a long tensor of class indices, got {t.dtype}")
@@ -82,6 +91,12 @@ def treatment_mode(t: Tensor, num_treatments: int) -> TreatmentMode:
         raise ContractError(
             f"t must be [B] (observed) or [B, C] (candidate), got shape "
             f"{tuple(t.shape)} — the rank of t selects the mode (DESIGN.md §3.1)"
+        )
+    if t.shape[0] != batch_size:
+        raise ContractError(
+            f"t has batch axis {t.shape[0]} but this distribution was built for "
+            f"{batch_size} rows. A singleton axis here broadcasts silently and "
+            "scores every row under row 0 (DESIGN.md §3.1)."
         )
     if t.numel() and (int(t.min()) < 0 or int(t.max()) >= num_treatments):
         raise ContractError(
@@ -133,8 +148,15 @@ class GaussianOutcome:
             raise ContractError(
                 f"loc must be [B, K, *Dy], got shape {tuple(self.loc.shape)}"
             )
-        if self.scale.numel() and float(self.scale.min()) <= 0.0:
-            raise ContractError("scale must be positive")
+        # `scale.min() <= 0` is false for NaN, which would let a NaN scale
+        # through and turn every log-density downstream into NaN.
+        if not bool((torch.isfinite(self.scale) & (self.scale > 0)).all()):
+            raise ContractError("scale must be finite and positive")
+
+    @property
+    def batch_size(self) -> int:
+        """`B`, the number of rows this distribution represents."""
+        return int(self.loc.shape[0])
 
     @property
     def num_treatments(self) -> int:
@@ -148,11 +170,11 @@ class GaussianOutcome:
 
     def log_prob(self, y: Tensor, t: Tensor) -> Tensor:
         """`log p(y | x, t)`, summed over `Dy`. `y` arrives unexpanded."""
-        mode = treatment_mode(t, self.num_treatments)
-        if y.shape[0] != self.loc.shape[0]:
+        mode = treatment_mode(t, self.num_treatments, batch_size=self.batch_size)
+        if y.shape[0] != self.batch_size:
             raise ContractError(
                 f"y has batch axis {y.shape[0]} but this distribution was built "
-                f"for {self.loc.shape[0]} rows"
+                f"for {self.batch_size} rows"
             )
         if tuple(y.shape[1:]) != self.event_shape:
             raise ContractError(
@@ -172,12 +194,12 @@ class GaussianOutcome:
 
     def mean(self, t: Tensor) -> Tensor:
         """`E[y | x, t]`, with the candidate axis immediately after the batch axis."""
-        treatment_mode(t, self.num_treatments)
+        treatment_mode(t, self.num_treatments, batch_size=self.batch_size)
         return _select(self.loc, t)
 
     def sample(self, t: Tensor, n: int) -> Tensor:
         """`n` samples, with the sample axis leading."""
-        treatment_mode(t, self.num_treatments)
+        treatment_mode(t, self.num_treatments, batch_size=self.batch_size)
         if n < 1:
             raise ContractError(f"n must be at least 1, got {n}")
         loc = _select(self.loc, t)
@@ -204,6 +226,11 @@ class CategoricalTreatment:
             )
 
     @property
+    def batch_size(self) -> int:
+        """`B`, the number of rows this distribution represents."""
+        return int(self.logits.shape[0])
+
+    @property
     def num_treatments(self) -> int:
         """`K`."""
         return int(self.logits.shape[1])
@@ -220,7 +247,7 @@ class CategoricalTreatment:
 
     def log_prob(self, t: Tensor) -> Tensor:
         """`log p(t | ·)`: `[B] -> [B]`, `[B, C] -> [B, C]`."""
-        mode = treatment_mode(t, self.num_treatments)
+        mode = treatment_mode(t, self.num_treatments, batch_size=self.batch_size)
         index = t[:, None] if mode == "observed" else t
         gathered = torch.gather(self.log_probs, 1, index)
         return gathered.squeeze(1) if mode == "observed" else gathered
