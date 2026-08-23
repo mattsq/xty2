@@ -46,6 +46,16 @@ class CardKeyError(Xty2Error):
     """
 
 
+class LossError(Xty2Error):
+    """An objective or a mixed loss violates `DESIGN.md` §4 / §6.
+
+    A non-scalar or weighted value, an `n` that disagrees with the eligible
+    row set, a `NaN` where the zero-eligible-row rule requires an exact zero,
+    a reduction outside the three modes of §6.1 — everything that is wrong
+    about a *loss term* rather than about the graph that produced it.
+    """
+
+
 class CompileError(Xty2Error):
     """`compile()` rejects a recipe (`DESIGN.md` §8).
 

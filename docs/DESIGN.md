@@ -478,9 +478,16 @@ Weighted(obj, weight=1.0, reduction="mean" | "sum" | "population")
 
 | Mode | Contribution | Use when |
 |---|---|---|
-| `mean` (default) | `value` | the paper averages over the term's own rows |
+| `mean` | `value` | the paper averages over the term's own rows |
 | `sum` | `value * n` | the paper sums over rows |
 | `population` | `value * n / B` | the paper averages over the *whole* batch |
+
+**Neither field has a default.** `weight` and `reduction` both bind card keys
+(`FIDELITY.md` §2: `losses.weights`, `losses.reduction`), so both carry the
+`REQUIRED` sentinel of §9.1 and a recipe that omits either is rejected at
+construction. `mean` is the *common* choice, not an inherited one — the
+paragraph below is the reason a silent one would be the worst available
+outcome.
 
 Because `LossTerm` already carries `n`, all three are recoverable from the same
 objective with no change to the objective API, and the raw per-objective value
@@ -765,12 +772,12 @@ prevent.
 
 ```
 xty2/
-  core/        batch.py schema.py ports.py distributions.py
-               graph.py card_keys.py recipe.py compile.py
+  core/        batch.py schema.py ports.py distributions.py rows.py
+               graph.py card_keys.py loss.py schedules.py recipe.py compile.py
   components/  encoders/ outcome/ treatment/ posterior/ density/ energy/
   views/       masking.py tabular.py perturbations.py
   objectives/  supervised.py marginal.py consistency.py generative.py causal.py
-  training/    program.py loss_mixer.py schedules.py executors.py artifacts.py
+  training/    program.py loss_mixer.py executors.py artifacts.py
   recipes/     tarnet.py cnflow.py cycle_dual.py mean_teacher.py ssdml.py
   evaluation/  predictive.py causal.py calibration.py policy.py
   estimators/  cate.py dml.py policy.py
@@ -780,12 +787,17 @@ tests/
   invariants/  smoke/  benchmarks/
 ```
 
-`Stage`, `Recipe` and the `Objective` protocol are in `core/recipe.py` rather
-than beside the training layer, because they are the compiler's *input*: they
-declare what a program is, and `compile()` reads them. `training/` imports
-`core`, never the reverse, so putting the declarations in the leaf layer is what
-keeps that one-way. `card_keys.py` holds the closed vocabulary of
-`FIDELITY.md` §2 and the `REQUIRED` sentinel (§9.1).
+`Stage`, `Recipe`, `Weighted` and the `Objective` protocol are in
+`core/recipe.py` rather than beside the training layer, because they are the
+compiler's *input*: they declare what a program is, and `compile()` reads them.
+`training/` imports `core`, never the reverse, so putting the declarations in
+the leaf layer is what keeps that one-way. The same argument puts `loss.py`
+(`LossTerm`, `TrainContext`, the reduction modes of §6.1) and `schedules.py`
+(§6) in `core/` rather than in `training/` beside the mixer: `Weighted` names a
+schedule and the `Objective` protocol is stated in terms of a `LossTerm`, so
+both are read by the compiler. `training/loss_mixer.py` holds what *runs* them.
+`card_keys.py` holds the closed vocabulary of `FIDELITY.md` §2 and the
+`REQUIRED` sentinel (§9.1).
 
 ### The five ported recipes, and what each one proves
 

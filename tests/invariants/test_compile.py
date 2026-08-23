@@ -12,18 +12,24 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 import pytest
+import torch
 from xty2.core import (
     DEFAULT,
     CompileError,
     ComponentGraph,
-    Objective,
+    LossTerm,
     Port,
     Realisation,
     Recipe,
+    RowIndex,
     Rows,
     Stage,
+    State,
+    TrainContext,
+    Weighted,
     XTYBatch,
     compile,
+    reduce_rows,
 )
 
 from tests.invariants.conftest import (
@@ -34,10 +40,11 @@ from tests.invariants.conftest import (
     make_schema,
     objective,
     two_head_recipe,
+    weighted,
 )
 
 
-def _stage(*objectives: Objective, **overrides: object) -> Stage:
+def _stage(*objectives: Weighted, **overrides: object) -> Stage:
     return Stage(name="fit", objectives=objectives, **overrides)  # type: ignore[arg-type]
 
 
@@ -297,6 +304,12 @@ class _WidthBindingObjective:
     rows: Rows = "all"
     CARD_KEYS: ClassVar[Mapping[str, str]] = {"width": "architecture.widths_depths"}
 
+    def compute(
+        self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
+    ) -> LossTerm:
+        del state, ctx
+        return reduce_rows(torch.zeros(batch.batch_size), rows)
+
 
 def test_a_hyperparameter_conflict_between_two_owners_is_rejected() -> None:
     # A canonical key names one number. Two owners disagreeing about it would
@@ -304,10 +317,12 @@ def test_a_hyperparameter_conflict_between_two_owners_is_rejected() -> None:
     recipe = two_head_recipe(
         program=(
             _stage(
-                _WidthBindingObjective(
-                    name="outcome_nll",
-                    requires=frozenset({(Port.Y_GIVEN_XT, DEFAULT)}),
-                    width=HIDDEN + 3,
+                weighted(
+                    _WidthBindingObjective(
+                        name="outcome_nll",
+                        requires=frozenset({(Port.Y_GIVEN_XT, DEFAULT)}),
+                        width=HIDDEN + 3,
+                    )
                 ),
                 trainable=("encoder", "outcome_head"),
             ),
@@ -321,10 +336,12 @@ def test_two_owners_agreeing_on_a_card_key_is_not_a_conflict() -> None:
     recipe = two_head_recipe(
         program=(
             _stage(
-                _WidthBindingObjective(
-                    name="outcome_nll",
-                    requires=frozenset({(Port.Y_GIVEN_XT, DEFAULT)}),
-                    width=HIDDEN,
+                weighted(
+                    _WidthBindingObjective(
+                        name="outcome_nll",
+                        requires=frozenset({(Port.Y_GIVEN_XT, DEFAULT)}),
+                        width=HIDDEN,
+                    )
                 ),
                 trainable=("encoder", "outcome_head"),
             ),

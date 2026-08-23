@@ -5,24 +5,37 @@ explicit hyperparameters, and **it contains no logic**. That rule is only
 enforceable if the thing a recipe assembles is data, so the three types here
 are deliberately inert: they validate their own shape and hold no behaviour.
 
-`Objective` is the *compiler's* view of a loss — the three attributes the
-compiler reads. P3 adds `compute()`, `LossTerm` and the mixer around it; a
-structural protocol is what lets the compiler check objectives it cannot yet
-run. `Stage` likewise carries the fields the compiler checks; the sequencing
-fields of §7 (`initialise_from`, `inputs`, `executor`, artifacts) arrive with
-the executor and the program that need them.
+`Objective` is a structural protocol rather than a base class, so a loss is an
+ordinary object that happens to satisfy four members and the compiler can check
+one it has not been asked to run. `Weighted` is what a stage actually holds
+(§6, §7): an objective together with the two things the *paper* governs about
+its use — the weight schedule and the reduction — neither of which has a
+default. `Stage` carries the fields the compiler checks; the sequencing fields
+of §7 (`initialise_from`, `inputs`, `executor`, artifacts) arrive with the
+executor and the program that need them.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
+from xty2.core.card_keys import REQUIRED, is_required
 from xty2.core.errors import CompileError, Xty2Error, require_str
-from xty2.core.graph import ComponentGraph, Realisation
+from xty2.core.graph import ComponentGraph, Realisation, State
+from xty2.core.loss import (
+    LossTerm,
+    Reduction,
+    TrainContext,
+    validate_reduction,
+)
 from xty2.core.ports import Port
-from xty2.core.rows import Rows, validate_population
+from xty2.core.rows import RowIndex, Rows, validate_population
+from xty2.core.schedules import Schedule, as_schedule
 from xty2.core.schema import Schema
+
+if TYPE_CHECKING:  # pragma: no cover - the batch is only named in a signature
+    from xty2.core.batch import XTYBatch
 
 Purpose = Literal["causal", "predictive"]
 """What the recipe is for. `predictive` is what may opt out of the leakage
@@ -33,10 +46,10 @@ rule (`DESIGN.md` §7.2); `causal` may not."""
 class Objective(Protocol):
     """What the compiler reads from a loss (`DESIGN.md` §4).
 
-    Declared read-only, and the three members are properties for that reason
-    rather than for ceremony: an objective is a *declaration* the compiler
-    inspects, so a frozen dataclass has to be able to satisfy it, and nothing
-    in the framework may write these back.
+    The three declarations are properties rather than plain attributes for a
+    reason: an objective is something the compiler *inspects*, so a frozen
+    dataclass has to be able to satisfy it and nothing in the framework may
+    write them back. `compute` is the one member that does work.
     """
 
     @property
@@ -59,6 +72,107 @@ class Objective(Protocol):
         is the objective's half of that.
         """
 
+    def compute(
+        self,
+        state: State,
+        batch: XTYBatch,
+        rows: RowIndex,
+        ctx: TrainContext,
+    ) -> LossTerm:
+        """The **unweighted** loss over `rows` (`DESIGN.md` §4).
+
+        `state` and `batch` are both full-batch and share one batch axis, so
+        the same `rows` indexes both and alignment is automatic. The objective
+        gathers by it; it is not handed a pre-sliced batch, because state holds
+        distribution objects that are not generally sliceable.
+
+        An objective never weights its own value, never calls `.backward()`,
+        never mutates state and never touches parameters directly.
+        """
+
+
+@dataclass(frozen=True)
+class Weighted:
+    """An objective as a stage uses it (`DESIGN.md` §6, §6.1).
+
+    Neither field has a default, and that is the point. Both are paper-governed
+    (`FIDELITY.md` §2 names `losses.weights` and `losses.reduction`), and the
+    standing rule is that a paper-governed field carries the `REQUIRED`
+    sentinel so it cannot fall through to a framework default (§9.1).
+
+    `DESIGN.md` §6.1 writes `reduction` with `mean` as its default. It is
+    `REQUIRED` here instead, because that section also explains why: `sum` and
+    `mean` differ by a factor that varies *per batch* whenever the row
+    population does, so the wrong choice yields a model that trains, looks
+    reasonable, and weights its semi-supervised term differently from the
+    paper. That is exactly the failure the sentinel exists to prevent, and a
+    default is what would let it through unread.
+
+    Attributes:
+        objective: The loss. Its `name` keys the per-objective log (§6.2).
+        weight: A `Schedule`, or a number coerced to `Constant`.
+        reduction: How the term's mean-over-rows value enters the total.
+    """
+
+    objective: Objective
+    weight: Schedule | float = REQUIRED
+    reduction: Reduction = REQUIRED
+
+    def __post_init__(self) -> None:
+        candidate: object = self.objective
+        if not isinstance(candidate, Objective):
+            missing = [
+                member
+                for member in ("name", "requires", "rows", "compute")
+                if not hasattr(candidate, member)
+            ]
+            raise CompileError(
+                f"Weighted holds an Objective — name, requires, rows, compute — "
+                f"got {type(candidate)}, which is missing {missing!r} "
+                "(DESIGN.md §4)."
+            )
+        if is_required(self.weight):
+            raise CompileError(_no_default("weight", self.objective, "losses.weights"))
+        if is_required(self.reduction):
+            raise CompileError(
+                _no_default("reduction", self.objective, "losses.reduction")
+            )
+        object.__setattr__(self, "weight", as_schedule(self.weight))
+        validate_reduction(self.reduction, where=f"objective {self.objective.name!r}")
+
+    @property
+    def name(self) -> str:
+        """The wrapped objective's name."""
+        return self.objective.name
+
+    @property
+    def requires(self) -> frozenset[tuple[Port, Realisation]]:
+        """The wrapped objective's `(port, realisation)` requirements."""
+        return self.objective.requires
+
+    @property
+    def rows(self) -> Rows:
+        """The wrapped objective's row population."""
+        return self.objective.rows
+
+    @property
+    def schedule(self) -> Schedule:
+        """The weight as a `Schedule`. A number given for it is a `Constant`."""
+        return as_schedule(self.weight)
+
+    def weight_at(self, step: int) -> float:
+        """The weight this term carries at `step`."""
+        return self.schedule(step)
+
+
+def _no_default(field: str, objective: object, key: str) -> str:
+    name = getattr(objective, "name", type(objective).__name__)
+    return (
+        f"objective {name!r} was given no {field}. It binds card key {key!r} and "
+        "is governed by the paper, so it has no usable default — the recipe sets "
+        "it explicitly (DESIGN.md §9.1, CLAUDE.md standing rules)."
+    )
+
 
 @dataclass(frozen=True)
 class Stage:
@@ -67,7 +181,9 @@ class Stage:
     Attributes:
         name: Unique within a program; names the stage's artifacts and its
             section of the printed plan.
-        objectives: The losses active in this stage.
+        objectives: The `Weighted` terms active in this stage. Bare objectives
+            are rejected: the weight and the reduction are paper-governed and
+            have no default (`DESIGN.md` §6.1, §9.1).
         trainable: Component names this stage updates. A name that is not a
             component, or a component no active objective depends on, is a
             compile error — the second catches a dead-weight stage.
@@ -76,7 +192,7 @@ class Stage:
     """
 
     name: str
-    objectives: tuple[Objective, ...] = ()
+    objectives: tuple[Weighted, ...] = ()
     trainable: tuple[str, ...] = ()
     rows: Rows = "all"
 
@@ -88,6 +204,15 @@ class Stage:
                 f"stage name {self.name!r} must be a Python identifier: it names "
                 "the stage's artifacts and its section of the execution plan"
             )
+        for entry in self.objectives:
+            if not isinstance(entry, Weighted):
+                raise CompileError(
+                    f"stage {self.name!r} holds {type(entry)} in `objectives`; a "
+                    "stage holds Weighted terms (DESIGN.md §6). Wrap the "
+                    "objective in Weighted(objective, weight=..., "
+                    "reduction=...) — both are paper-governed and neither has a "
+                    "default."
+                )
         validate_rows(self.rows, f"stage {self.name!r}")
         duplicates = _duplicates(self.trainable)
         if duplicates:

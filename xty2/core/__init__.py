@@ -3,7 +3,10 @@
 `batch`, `schema`, `ports`, `distributions` and `rows` are the vocabulary
 everything else is stated against (P1). `graph`, `recipe` and `compile` are
 what turns a declarative assembly of components and objectives into a checked,
-printable execution plan (P2, `DESIGN.md` §2.1, §3, §7, §8, §9.1).
+printable execution plan (P2, `DESIGN.md` §2.1, §3, §7, §8, §9.1). `loss` and
+`schedules` are the objective and weighting contracts the compiler reads (P3,
+§4, §6) — they are in the leaf layer because `training/` imports `core/` and
+never the reverse, which is the same reason `DESIGN.md` §10 gives for `Stage`.
 """
 
 from xty2.core.batch import XTYBatch, assert_unchanged_by
@@ -42,6 +45,7 @@ from xty2.core.errors import (
     CompileError,
     ContractError,
     GraphError,
+    LossError,
     PortContractError,
     SchemaError,
     Xty2Error,
@@ -60,6 +64,19 @@ from xty2.core.graph import (
     render_ports,
     source_ports,
 )
+from xty2.core.loss import (
+    REDUCTIONS,
+    LossTerm,
+    Reduction,
+    TrainContext,
+    apply_reduction,
+    candidate_treatments,
+    outcome_distribution,
+    reduce_rows,
+    treatment_at,
+    treatment_distribution,
+    validate_reduction,
+)
 from xty2.core.ports import (
     PORT_SPECS,
     Axis,
@@ -69,7 +86,14 @@ from xty2.core.ports import (
     port_spec,
     resolve_shape,
 )
-from xty2.core.recipe import Objective, Purpose, Recipe, Stage, validate_rows
+from xty2.core.recipe import (
+    Objective,
+    Purpose,
+    Recipe,
+    Stage,
+    Weighted,
+    validate_rows,
+)
 from xty2.core.rows import (
     ROW_POPULATIONS,
     RowIndex,
@@ -79,6 +103,7 @@ from xty2.core.rows import (
     row_mask,
     validate_population,
 )
+from xty2.core.schedules import Constant, Ramp, Schedule, Step, as_schedule
 from xty2.core.schema import FeatureSpec, OutcomeSpec, Schema
 
 __all__ = [
@@ -87,6 +112,7 @@ __all__ = [
     "DEFAULT",
     "IDENTITY_VIEW",
     "PORT_SPECS",
+    "REDUCTIONS",
     "REQUIRED",
     "ROW_POPULATIONS",
     "SOURCE_NAME",
@@ -101,12 +127,15 @@ __all__ = [
     "CompiledStage",
     "Component",
     "ComponentGraph",
+    "Constant",
     "ContractError",
     "ExecutionPlan",
     "FeatureSpec",
     "ForwardPass",
     "GaussianOutcome",
     "GraphError",
+    "LossError",
+    "LossTerm",
     "Objective",
     "OutcomeDistribution",
     "OutcomeSpec",
@@ -118,33 +147,47 @@ __all__ = [
     "PortValue",
     "PortView",
     "Purpose",
+    "Ramp",
     "Realisation",
     "Recipe",
+    "Reduction",
     "RowIndex",
     "Rows",
+    "Schedule",
     "Schema",
     "SchemaError",
     "Stage",
     "State",
+    "Step",
+    "TrainContext",
     "TreatmentDistribution",
     "TreatmentMode",
+    "Weighted",
     "XTYBatch",
     "Xty2Error",
+    "apply_reduction",
+    "as_schedule",
     "assert_unchanged_by",
+    "candidate_treatments",
     "card_hyperparameters",
     "check_outcome_distribution_contract",
     "check_treatment_distribution_contract",
     "compile",
     "is_required",
+    "outcome_distribution",
     "populations_are_disjoint",
     "port_spec",
+    "reduce_rows",
     "render_ports",
     "resolve_rows",
     "resolve_shape",
     "row_mask",
     "source_ports",
+    "treatment_at",
+    "treatment_distribution",
     "treatment_mode",
     "validate_card_key",
     "validate_population",
+    "validate_reduction",
     "validate_rows",
 ]

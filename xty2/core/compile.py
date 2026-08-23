@@ -38,9 +38,11 @@ from xty2.core.graph import (
     Realisation,
     State,
 )
+from xty2.core.loss import Reduction
 from xty2.core.ports import Port
-from xty2.core.recipe import Objective, Recipe, Stage, validate_rows
+from xty2.core.recipe import Objective, Recipe, Stage, Weighted, validate_rows
 from xty2.core.rows import Rows, populations_are_disjoint
+from xty2.core.schedules import Schedule
 
 # ---------------------------------------------------------------------------
 # What compilation produces
@@ -63,20 +65,37 @@ class ForwardPass:
 
 @dataclass(frozen=True)
 class CompiledObjective:
-    """An objective with its eligible-row declaration resolved (`DESIGN.md` §7.0).
+    """A weighted term with its eligible-row declaration resolved (§6, §7.0).
 
     `rows` is the stage scope and the objective's own population together, in
     the form `resolve_rows` takes. The intersection is not always itself a
     named population — `t_observed ∩ y_observed` is not — so it is carried as
     the populations to intersect rather than collapsed to one name.
+
+    This is what the mixer is built from, and it is the only thing it is built
+    from: the eligible set is the compiler's answer, so a mixer that re-derived
+    it would be a second implementation of a rule the compiler has already
+    rejected the empty-by-construction case of.
     """
 
-    objective: Objective
+    weighted: Weighted
     rows: tuple[Rows, ...]
 
     @property
+    def objective(self) -> Objective:
+        return self.weighted.objective
+
+    @property
     def name(self) -> str:
-        return self.objective.name
+        return self.weighted.name
+
+    @property
+    def weight(self) -> Schedule:
+        return self.weighted.schedule
+
+    @property
+    def reduction(self) -> Reduction:
+        return self.weighted.reduction
 
 
 @dataclass(frozen=True)
@@ -196,9 +215,11 @@ class ExecutionPlan:
                 for port, realisation in _sorted_requirements(objective.objective)
             )
             lines.append(
-                f"    {objective.name:<{width}}  rows {_rows(objective.rows):<{rows}}  "
-                f"requires {requires or 'nothing'}"
+                f"    {objective.name:<{width}}  rows {_rows(objective.rows):<{rows}}"
+                f"  reduction {objective.reduction}"
             )
+            lines.append(f"      weight    {objective.weight.describe()}")
+            lines.append(f"      requires  {requires or 'nothing'}")
         lines.append("  trainable")
         lines.append(f"    {_names(compiled.trainable)}")
         return lines
@@ -329,13 +350,14 @@ def _compile_stage(
 
     demanded: dict[Realisation, set[Port]] = {}
     objectives: list[CompiledObjective] = []
-    for objective in stage.objectives:
+    for weighted in stage.objectives:
+        objective = weighted.objective
         rows = _effective_rows(stage, objective, where)
         for port, realisation in _sorted_requirements(objective):
             _check_port(graph, port, objective, where)
             _check_realisation(realisation, realisable, objective, where)
             demanded.setdefault(realisation, set()).add(port)
-        objectives.append(CompiledObjective(objective=objective, rows=rows))
+        objectives.append(CompiledObjective(weighted=weighted, rows=rows))
 
     passes = tuple(
         ForwardPass(realisation=realisation, components=graph.subgraph_for(ports))
@@ -347,8 +369,8 @@ def _compile_stage(
 
 def _reject_duplicate_objectives(stage: Stage, where: str) -> None:
     seen: set[str] = set()
-    for objective in stage.objectives:
-        name = objective.name
+    for weighted in stage.objectives:
+        name = weighted.name
         if name in seen:
             raise CompileError(
                 f"{where} has more than one objective called {name!r}. Per-"
@@ -467,12 +489,12 @@ def _hyperparameters(recipe: Recipe) -> dict[str, Any]:
         _merge(resolved, owners, component, f"component {component.name!r}")
     for stage in recipe.program:
         _merge(resolved, owners, stage, f"stage {stage.name!r}")
-        for objective in stage.objectives:
+        for weighted in stage.objectives:
             _merge(
                 resolved,
                 owners,
-                objective,
-                f"objective {objective.name!r} in stage {stage.name!r}",
+                weighted.objective,
+                f"objective {weighted.name!r} in stage {stage.name!r}",
             )
     return resolved
 
