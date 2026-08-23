@@ -183,6 +183,17 @@ def test_a_trainable_component_no_objective_depends_on_is_rejected() -> None:
         compile(recipe)
 
 
+def test_a_stage_that_trains_nothing_at_all_is_rejected() -> None:
+    # The other extreme of the dead-trainable rule: with an empty `trainable`
+    # the optimiser gets no parameter group, so every step is a no-op. Only
+    # gradient stages exist, so this is knowable before any data.
+    recipe = two_head_recipe(
+        program=(_stage(objective("outcome_nll", Port.Y_GIVEN_XT)),)
+    )
+    with pytest.raises(CompileError, match="empty `trainable`"):
+        compile(recipe)
+
+
 def test_a_row_pairing_empty_by_construction_is_rejected() -> None:
     recipe = two_head_recipe(
         program=(

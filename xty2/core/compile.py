@@ -412,6 +412,17 @@ def _check_realisation(
 def _check_trainable(
     graph: ComponentGraph, stage: Stage, passes: tuple[ForwardPass, ...], where: str
 ) -> None:
+    # The other extreme of the dead-trainable rule below: both reject a stage
+    # that cannot do what it appears to, one because a named component gets no
+    # gradient and this one because nothing is named at all.
+    if not stage.trainable:
+        raise CompileError(
+            f"{where} has objectives but an empty `trainable`, so it would "
+            "descend a gradient into nothing: the optimiser gets no parameter "
+            "group and every step is a no-op. Name the components this stage "
+            "updates. A stage that deliberately runs without training is a "
+            "StageAction (DESIGN.md §7), which does not exist yet."
+        )
     unknown = [name for name in stage.trainable if name not in graph]
     if unknown:
         raise CompileError(

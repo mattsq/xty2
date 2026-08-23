@@ -149,11 +149,13 @@ def card_hyperparameters(owner: object) -> dict[str, Any]:
     case for anything the paper does not govern.
 
     Raises:
-        CardKeyError: if a key is outside the vocabulary, if a bound field does
-            not exist on `owner`, or if a bound field still holds `REQUIRED`.
+        CardKeyError: if two fields bind to one key, if a key is outside the
+            vocabulary, if a bound field does not exist on `owner`, or if a
+            bound field still holds `REQUIRED`.
     """
     bindings: Mapping[str, str] = getattr(owner, "CARD_KEYS", {})
     label = _label(owner)
+    _reject_shared_keys(bindings, label)
     resolved: dict[str, Any] = {}
     for field, key in bindings.items():
         validate_card_key(key, owner=label)
@@ -173,6 +175,39 @@ def card_hyperparameters(owner: object) -> dict[str, Any]:
             )
         resolved[key] = value
     return resolved
+
+
+def _reject_shared_keys(bindings: Mapping[str, str], label: str) -> None:
+    """Reject two fields of one owner bound to the same canonical key.
+
+    `CARD_KEYS` maps field to key, so nothing about its *type* stops two fields
+    naming one key — and resolving them writes both into one slot, where the
+    last one wins by dictionary order. That is the worst available outcome: the
+    cross-check goes green because the key is present, and the plan reports
+    whichever value happened to be written last.
+
+    Rejected whether or not the two values currently agree. A canonical key
+    names one number, so which field the card governs has to be decidable from
+    the binding rather than from the values two fields happen to hold on the
+    day. A paper that states several numbers under one key binds one field
+    holding a tuple.
+    """
+    fields_by_key: dict[str, list[str]] = {}
+    for field, key in bindings.items():
+        fields_by_key.setdefault(key, []).append(field)
+    shared = sorted(
+        (key, fields) for key, fields in fields_by_key.items() if len(fields) > 1
+    )
+    if shared:
+        key, fields = shared[0]
+        raise CardKeyError(
+            f"{label} binds fields {sorted(fields)!r} to the same card key "
+            f"{key!r}. A canonical key names one value, so which field the card "
+            "governs would depend on dictionary order, and the cross-check "
+            "would pass while the plan reported the other one. Bind one field, "
+            "holding a tuple if the paper states several numbers together "
+            "(DESIGN.md §9.1)."
+        )
 
 
 def _label(owner: object) -> str:

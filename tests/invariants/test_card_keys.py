@@ -104,6 +104,31 @@ def test_a_binding_to_a_field_that_does_not_exist_is_rejected() -> None:
         card_hyperparameters(_BindsAMissingField())
 
 
+class _BindsTwoFieldsToOneKey:
+    CARD_KEYS: ClassVar[Mapping[str, str]] = {
+        "width": "architecture.widths_depths",
+        "depth": "architecture.widths_depths",
+    }
+
+    def __init__(self, width: int, depth: int) -> None:
+        self.width = width
+        self.depth = depth
+
+
+def test_two_fields_bound_to_one_canonical_key_are_rejected() -> None:
+    # The collapse happens inside one owner, so the cross-owner conflict check
+    # never sees it: it is handed the already-collapsed dict.
+    with pytest.raises(CardKeyError, match="the same card key"):
+        card_hyperparameters(_BindsTwoFieldsToOneKey(width=64, depth=3))
+
+
+def test_a_shared_key_is_rejected_even_when_the_two_values_agree() -> None:
+    # Agreement today is a coincidence, and the version that compiles quietly
+    # is the dangerous one: the key would still name a value nobody chose.
+    with pytest.raises(CardKeyError, match="the same card key"):
+        card_hyperparameters(_BindsTwoFieldsToOneKey(width=3, depth=3))
+
+
 def test_an_owner_with_no_card_keys_contributes_nothing() -> None:
     assert card_hyperparameters(object()) == {}
 
