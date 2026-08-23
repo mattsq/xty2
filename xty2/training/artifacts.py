@@ -28,6 +28,12 @@ write to the same path raises instead of replacing what a later stage may
 already have loaded, and a checkpoint is only written into a run directory
 whose plan it was actually produced under.
 
+P8 adds component buffers to the checkpoint beside parameters. A later stage
+cannot be initialised faithfully from a BatchNorm-bearing component if its
+running statistics vanished at the stage boundary. They remain a separate
+mapping because teacher buffer EMA is independently card-driven and because an
+optimiser never owns them.
+
 `PseudoLabels` — the other §7.1 artifact — is absent rather than stubbed. It
 carries `predicted_by_fold` and a fold-disjointness check, neither of which
 exists until `cross_fit` does (P10), and an artifact whose provenance nothing
@@ -86,6 +92,9 @@ class Checkpoint:
         parameters: `{qualified name: tensor}` for the components the stage
             trained, and only those: a checkpoint that quietly carried frozen
             components would restore them over a later stage's work.
+        buffers: `{qualified name: tensor}` for buffers owned by those same
+            trained components. They are separate from parameters because an
+            optimiser never owns them.
         components: The trained component names, in the stage's order.
         steps: Optimiser steps taken.
         seed: The seed the run was executed under.
@@ -93,6 +102,7 @@ class Checkpoint:
     """
 
     __slots__ = (
+        "_buffers",
         "_components",
         "_fold",
         "_parameters",
@@ -116,6 +126,7 @@ class Checkpoint:
         steps: int,
         seed: int,
         plan_digest: str,
+        buffers: Mapping[str, Tensor] | None = None,
         issued_by: object = None,
     ) -> None:
         if issued_by is not _FACTORY_TOKEN:
@@ -138,6 +149,12 @@ class Checkpoint:
         self._parameters: Mapping[str, Tensor] = MappingProxyType(
             {name: value.detach().clone() for name, value in sorted(parameters.items())}
         )
+        self._buffers: Mapping[str, Tensor] = MappingProxyType(
+            {
+                name: value.detach().clone()
+                for name, value in sorted((buffers or {}).items())
+            }
+        )
         self._components = tuple(components)
         self._steps = steps
         self._seed = seed
@@ -152,6 +169,7 @@ class Checkpoint:
         fold: int | None,
         trained_on_row_ids: Tensor,
         parameters: Mapping[str, Tensor],
+        buffers: Mapping[str, Tensor] | None = None,
         components: tuple[str, ...],
         steps: int,
         seed: int,
@@ -169,6 +187,7 @@ class Checkpoint:
             fold=fold,
             trained_on_row_ids=trained_on_row_ids,
             parameters=parameters,
+            buffers=buffers,
             components=components,
             steps=steps,
             seed=seed,
@@ -218,6 +237,13 @@ class Checkpoint:
             {name: value.clone() for name, value in self._parameters.items()}
         )
 
+    @property
+    def buffers(self) -> Mapping[str, Tensor]:
+        """A read-only mapping of copies of the trained components' buffers."""
+        return MappingProxyType(
+            {name: value.clone() for name, value in self._buffers.items()}
+        )
+
     def parameter(self, name: str) -> Tensor:
         """A copy of one saved parameter."""
         try:
@@ -228,9 +254,23 @@ class Checkpoint:
                 f"{sorted(self._parameters)!r}"
             ) from None
 
+    def buffer(self, name: str) -> Tensor:
+        """A copy of one saved component buffer."""
+        try:
+            return self._buffers[name].clone()
+        except KeyError:
+            raise ArtifactError(
+                f"this checkpoint holds no buffer {name!r}; it holds "
+                f"{sorted(self._buffers)!r}"
+            ) from None
+
     def state_dict(self) -> dict[str, Tensor]:
         """A copy of every saved parameter, keyed as `<component>.<parameter>`."""
         return {name: value.clone() for name, value in self._parameters.items()}
+
+    def buffer_dict(self) -> dict[str, Tensor]:
+        """A copy of every saved buffer, keyed as `<component>.<buffer>`."""
+        return {name: value.clone() for name, value in self._buffers.items()}
 
     def __repr__(self) -> str:
         return (
@@ -271,6 +311,7 @@ class Checkpoint:
             "fold": self.fold,
             "trained_on_row_ids": self._row_ids,
             "parameters": dict(self._parameters),
+            "buffers": dict(self._buffers),
             "components": list(self._components),
             "steps": self.steps,
             "seed": self.seed,
@@ -301,6 +342,7 @@ class Checkpoint:
             fold=payload["fold"],
             trained_on_row_ids=payload["trained_on_row_ids"],
             parameters=payload["parameters"],
+            buffers=payload.get("buffers", {}),
             components=tuple(payload["components"]),
             steps=int(payload["steps"]),
             seed=int(payload["seed"]),

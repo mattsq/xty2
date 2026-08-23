@@ -3,10 +3,10 @@
 `training/` imports `core/` and never the reverse, which is why the pieces a
 recipe *declares* — `Stage`, `Weighted`, the schedules, the `OptimiserSpec` —
 live in the leaf layer and only the machinery that *runs* them lives here. So
-far that is the loss mixer and its gradient probe (P3), the single-stage
-`gradient` executor, and the immutable artifacts and run directory it writes
-(P4). `Program`, the `array_fit` and `cross_fit` executors and the pseudo-label
-artifact arrive with the packets that need them (P8, P10).
+far that is the loss mixer and its gradient probe (P3), the `gradient`
+executor and immutable artifacts (P4), plus the ordered program runner and EMA
+teacher parameter set (P8). The `array_fit` and `cross_fit` executors and the
+pseudo-label artifact arrive in P10.
 """
 
 from xty2.training.artifacts import (
@@ -17,8 +17,11 @@ from xty2.training.artifacts import (
 )
 from xty2.training.executors import (
     BatchSource,
+    BatchSources,
+    ProgramResult,
     StageResult,
     StepRecord,
+    run_program,
     run_stage,
     trainable_only,
 )
@@ -31,22 +34,27 @@ from xty2.training.loss_mixer import (
     ObjectiveLog,
     gradient_report,
 )
+from xty2.training.teacher import EMATeacher
 
 __all__ = [
     "ARTIFACT_FORMAT",
     "PERIODIC_STEPS",
     "BatchSource",
+    "BatchSources",
     "Checkpoint",
+    "EMATeacher",
     "GradientProbe",
     "GradientReport",
     "LossMixer",
     "MixedLoss",
     "ObjectiveLog",
+    "ProgramResult",
     "RunDirectory",
     "StageResult",
     "StepRecord",
     "gradient_report",
     "is_read_only",
+    "run_program",
     "run_stage",
     "trainable_only",
 ]

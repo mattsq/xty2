@@ -12,18 +12,28 @@ one it has not been asked to run. `Weighted` is what a stage actually holds
 its use — the weight schedule and the reduction — neither of which has a
 default. `Stage` carries the fields the compiler checks, together with the two
 the gradient executor needs — the optimiser and the step count, both of them
-card-bound and so both `REQUIRED`. The remaining sequencing fields of §7
-(`initialise_from`, `inputs`, `executor`, `allow_leakage`) arrive with the
-program, the second executor and the leakage rule that need them.
+card-bound and so both `REQUIRED`. `Program` is the ordered, immutable stage
+sequence; `initialise_from` may point only backwards through it. `TeacherSpec`
+makes every paper-governed EMA choice explicit before a teacher realisation can
+be planned. The remaining §7 fields (`inputs`, `executor`, `allow_leakage`)
+arrive with the second executor and leakage rule that need them (P10).
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import math
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, runtime_checkable
+from typing import (
+    TYPE_CHECKING,
+    ClassVar,
+    Literal,
+    Protocol,
+    overload,
+    runtime_checkable,
+)
 
-from xty2.core.card_keys import REQUIRED, is_required
+from xty2.core.card_keys import REQUIRED, card_hyperparameters, is_required
 from xty2.core.errors import CompileError, Xty2Error, require_str
 from xty2.core.graph import ComponentGraph, Realisation, State
 from xty2.core.loss import (
@@ -209,6 +219,69 @@ def _no_default(field: str, objective: object, key: str) -> str:
 
 
 @dataclass(frozen=True)
+class TeacherSpec:
+    """The card-driven EMA parameter set a stage maintains (`PLAN.md` P8).
+
+    All four fields are required because all four appear in the mechanics
+    checklist. In particular, buffer handling and module mode are independent:
+    a teacher in training mode may update its own BatchNorm statistics even
+    when student buffers are not included in the EMA.
+    """
+
+    decay: float = REQUIRED
+    applies_to_buffers: bool = REQUIRED
+    train_mode: bool = REQUIRED
+    requires_grad: Literal[False] = REQUIRED
+
+    CARD_KEYS: ClassVar[Mapping[str, str]] = {
+        "decay": "teacher.ema_decay",
+        "applies_to_buffers": "teacher.ema_applies_to_buffers",
+        "train_mode": "teacher.teacher_in_train_mode",
+        "requires_grad": "teacher.teacher_requires_grad",
+    }
+
+    def __post_init__(self) -> None:
+        # Resolve the bindings first: an omitted paper-governed value should
+        # fail as an omission, not later as a type error involving REQUIRED.
+        card_hyperparameters(self)
+        if isinstance(self.decay, bool) or not isinstance(self.decay, (int, float)):
+            raise CompileError(
+                f"teacher EMA decay must be a finite number in [0, 1), got "
+                f"{self.decay!r}"
+            )
+        decay = float(self.decay)
+        if not math.isfinite(decay) or not 0.0 <= decay < 1.0:
+            raise CompileError(
+                f"teacher EMA decay must be a finite number in [0, 1), got "
+                f"{self.decay!r}"
+            )
+        object.__setattr__(self, "decay", decay)
+        for field in ("applies_to_buffers", "train_mode", "requires_grad"):
+            value = getattr(self, field)
+            if type(value) is not bool:
+                raise CompileError(
+                    f"TeacherSpec.{field} must be bool, got {value!r} "
+                    f"({type(value).__name__})"
+                )
+        if self.requires_grad:
+            raise CompileError(
+                "TeacherSpec.requires_grad must be false. A teacher is an EMA "
+                "target parameter set, never an optimiser target; allowing a "
+                "gradient would violate the teacher-isolation invariant "
+                "(FIDELITY.md Tier 0)."
+            )
+
+    def describe(self) -> str:
+        """One stable plan line."""
+        buffers = "ema" if self.applies_to_buffers else "independent"
+        mode = "train" if self.train_mode else "eval"
+        return (
+            f"ema(decay={self.decay!r}, buffers={buffers}, mode={mode}, "
+            "requires_grad=False)"
+        )
+
+
+@dataclass(frozen=True)
 class Stage:
     """One step of the program (`DESIGN.md` §7).
 
@@ -223,6 +296,12 @@ class Stage:
             compile error — the second catches a dead-weight stage.
         rows: The stage's row scope. The eligible set for each objective is
             this intersected with the objective's own population (§7.0).
+        initialise_from: An earlier stage whose immutable checkpoint supplies
+            this stage's initial values. Components absent from that checkpoint
+            retain the recipe's initial values; no immediately preceding stage
+            is inherited implicitly.
+        teacher: The EMA teacher this stage maintains, or `None`. A teacher
+            realisation is compilable only when this is present.
         optimiser: How the stage descends. `REQUIRED` for a stage that has
             objectives: it binds four card keys, none of which may fall
             through to a framework default (§9.1).
@@ -244,6 +323,8 @@ class Stage:
     objectives: tuple[Weighted, ...] = ()
     trainable: tuple[str, ...] = ()
     rows: Rows = "all"
+    initialise_from: str | None = None
+    teacher: TeacherSpec | None = None
     optimiser: OptimiserSpec = REQUIRED
     steps: int = REQUIRED
 
@@ -269,6 +350,20 @@ class Stage:
                     "default."
                 )
         validate_rows(self.rows, f"stage {self.name!r}")
+        if self.initialise_from is not None:
+            source = require_str(
+                "Stage.initialise_from", self.initialise_from, error=CompileError
+            )
+            if not source.isidentifier():
+                raise CompileError(
+                    f"stage {self.name!r} initialises from {source!r}, which "
+                    "must be a Python identifier naming an earlier stage"
+                )
+        if self.teacher is not None and not isinstance(self.teacher, TeacherSpec):
+            raise CompileError(
+                f"stage {self.name!r} holds {type(self.teacher)} as its teacher; "
+                "expected TeacherSpec or None"
+            )
         self._check_gradient_fields()
         duplicates = _duplicates(self.trainable)
         if duplicates:
@@ -317,7 +412,79 @@ class Stage:
             )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
+class Program(Sequence[Stage]):
+    """An immutable ordered list of stages (`DESIGN.md` §7).
+
+    A program is deliberately not a DAG. Stage names are unique and an
+    `initialise_from` edge points only to an earlier element, so execution is a
+    single readable loop and no scheduler exists to make ordering decisions.
+    """
+
+    stages: tuple[Stage, ...]
+
+    def __init__(self, stages: Sequence[Stage]) -> None:
+        object.__setattr__(self, "stages", tuple(stages))
+        self.__post_init__()
+
+    def __post_init__(self) -> None:
+        for index, stage in enumerate(self.stages):
+            if not isinstance(stage, Stage):
+                raise CompileError(
+                    f"program entry {index} is {type(stage)}, expected Stage"
+                )
+        duplicates = _duplicates(tuple(stage.name for stage in self.stages))
+        if duplicates:
+            raise CompileError(
+                f"program has more than one stage called {duplicates!r}; stages "
+                "are referenced by name"
+            )
+        positions = {stage.name: index for index, stage in enumerate(self.stages)}
+        for index, stage in enumerate(self.stages):
+            source = stage.initialise_from
+            if source is None:
+                continue
+            source_index = positions.get(source)
+            if source_index is None:
+                raise CompileError(
+                    f"stage {stage.name!r} initialises from unknown stage "
+                    f"{source!r}; this program has {list(positions)!r}"
+                )
+            if source_index >= index:
+                raise CompileError(
+                    f"stage {stage.name!r} initialises from {source!r}, which is "
+                    "not an earlier stage. Program is an ordered list, not a "
+                    "DAG; initialise_from may only point backwards "
+                    "(DESIGN.md §7)."
+                )
+
+    def __iter__(self) -> Iterator[Stage]:
+        return iter(self.stages)
+
+    def __len__(self) -> int:
+        return len(self.stages)
+
+    @overload
+    def __getitem__(self, index: int) -> Stage: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> tuple[Stage, ...]: ...
+
+    def __getitem__(self, index: int | slice) -> Stage | tuple[Stage, ...]:
+        return self.stages[index]
+
+    def stage(self, name: str) -> Stage:
+        """The stage called `name`."""
+        for stage in self.stages:
+            if stage.name == name:
+                return stage
+        raise CompileError(
+            f"program has no stage {name!r}; it has "
+            f"{[stage.name for stage in self.stages]!r}"
+        )
+
+
+@dataclass(frozen=True, init=False)
 class Recipe:
     """A named method: a graph, a program, a schema and a card.
 
@@ -338,14 +505,36 @@ class Recipe:
     name: str
     schema: Schema
     system: ComponentGraph
-    program: tuple[Stage, ...]
+    program: Program
     card: str
     purpose: Purpose = "causal"
     views: tuple[ViewSpec, ...] = ()
 
+    def __init__(
+        self,
+        name: str,
+        schema: Schema,
+        system: ComponentGraph,
+        program: Program | Sequence[Stage],
+        card: str,
+        purpose: Purpose = "causal",
+        views: Sequence[ViewSpec] = (),
+    ) -> None:
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "schema", schema)
+        object.__setattr__(self, "system", system)
+        resolved_program = program if isinstance(program, Program) else Program(program)
+        object.__setattr__(
+            self,
+            "program",
+            resolved_program,
+        )
+        object.__setattr__(self, "card", card)
+        object.__setattr__(self, "purpose", purpose)
+        object.__setattr__(self, "views", tuple(views))
+        self.__post_init__()
+
     def __post_init__(self) -> None:
-        object.__setattr__(self, "program", tuple(self.program))
-        object.__setattr__(self, "views", tuple(self.views))
         if not require_str("recipe name", self.name, error=CompileError).isidentifier():
             raise CompileError(f"recipe name {self.name!r} must be a Python identifier")
         if self.purpose not in ("causal", "predictive"):
@@ -361,12 +550,6 @@ class Recipe:
             )
         if not self.program:
             raise CompileError(f"recipe {self.name!r} has an empty program")
-        duplicates = _duplicates(tuple(stage.name for stage in self.program))
-        if duplicates:
-            raise CompileError(
-                f"recipe {self.name!r} has more than one stage called "
-                f"{duplicates!r}; stages are referenced by name"
-            )
         for view in self.views:
             if not isinstance(view, ViewSpec):
                 raise CompileError(
@@ -382,13 +565,13 @@ class Recipe:
 
     def stage(self, name: str) -> Stage:
         """The stage called `name`."""
-        for stage in self.program:
-            if stage.name == name:
-                return stage
-        raise CompileError(
-            f"recipe {self.name!r} has no stage {name!r}; it has "
-            f"{[stage.name for stage in self.program]!r}"
-        )
+        try:
+            return self.program.stage(name)
+        except CompileError as error:
+            raise CompileError(
+                f"recipe {self.name!r} has no stage {name!r}; it has "
+                f"{[stage.name for stage in self.program]!r}"
+            ) from error
 
     def view(self, name: str) -> ViewSpec:
         """The declared view called ``name`` (identity is handled by the run)."""

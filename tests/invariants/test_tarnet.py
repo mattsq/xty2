@@ -14,6 +14,7 @@ from xty2.core import (
     GraphError,
     OutcomeSpec,
     Port,
+    Program,
     Recipe,
     WeightDecay,
     check_outcome_distribution_contract,
@@ -148,8 +149,8 @@ def test_a_decay_scope_outside_the_stage_is_a_compile_error() -> None:
     )
     changed = replace(
         recipe,
-        program=(
-            replace(stage, optimiser=replace(stage.optimiser, weight_decay=decay)),
+        program=Program(
+            (replace(stage, optimiser=replace(stage.optimiser, weight_decay=decay)),)
         ),
     )
     with pytest.raises(CompileError, match="scopes weight decay"):
@@ -192,7 +193,8 @@ def test_the_card_cross_check_fails_when_a_real_binding_is_removed() -> None:
     recipe = tarnet(make_schema())
     stage = recipe.program[0]
     complete_case = replace(
-        recipe, program=(replace(stage, objectives=stage.objectives[:2]),)
+        recipe,
+        program=Program((replace(stage, objectives=stage.objectives[:2]),)),
     )
     with pytest.raises(AssertionError, match=r"gradients\.marginal_nll_grad_path"):
         _assert_card_is_covered(complete_case)

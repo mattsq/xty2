@@ -9,7 +9,8 @@ contracts the compiler reads (P3, P4, §4, §6, §7) — they are in the leaf la
 because `training/` imports `core/` and never the reverse, which is the same
 reason `DESIGN.md` §10 gives for `Stage`. `views` holds the declarative
 ``ViewSpec`` contract the compiler consumes (P6); concrete transforms remain
-in ``xty2.views``.
+in ``xty2.views``. `Program`, stage checkpoint transitions and the card-bound
+teacher declaration complete the sequencing surface in P8.
 """
 
 from xty2.core.batch import XTYBatch, assert_unchanged_by
@@ -105,9 +106,11 @@ from xty2.core.ports import (
 )
 from xty2.core.recipe import (
     Objective,
+    Program,
     Purpose,
     Recipe,
     Stage,
+    TeacherSpec,
     Weighted,
     validate_rows,
 )
@@ -190,6 +193,7 @@ __all__ = [
     "PortValue",
     "PortView",
     "PreservedField",
+    "Program",
     "Purpose",
     "Ramp",
     "Realisation",
@@ -205,6 +209,7 @@ __all__ = [
     "Stage",
     "State",
     "Step",
+    "TeacherSpec",
     "TrainContext",
     "TrainingError",
     "TreatmentDistribution",
