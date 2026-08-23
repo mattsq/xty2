@@ -291,10 +291,9 @@ class ExecutionPlan:
             if not isinstance(value, Mapping):
                 lines.append(f"  {key:<{width}} = {value!r}")
                 continue
-            # A per-objective key (the four `losses.*` of FIDELITY.md §2)
-            # renders as a block rather than one very wide dict: the card it is
-            # diffed against is a YAML block, and a line nobody can read across
-            # is a line nobody checks.
+            # Per-objective and per-component values render as blocks rather
+            # than wide dicts: the card they are diffed against is a YAML
+            # block, and a line nobody can read across is a line nobody checks.
             lines.append(f"  {key}")
             entries = _width(value)
             for label in sorted(value):
@@ -434,6 +433,7 @@ def _compile_stage(
         for realisation, ports in sorted(demanded.items())
     )
     _check_trainable(graph, stage, passes, trained, where)
+    _check_weight_decay_scope(stage, where)
     return CompiledStage(stage=stage, passes=passes, objectives=tuple(objectives))
 
 
@@ -586,6 +586,20 @@ def _check_trainable(
         )
 
 
+def _check_weight_decay_scope(stage: Stage, where: str) -> None:
+    """A component-scoped decay may name only components this stage trains."""
+    decay = stage.optimiser.weight_decay
+    if not decay.applies or decay.components is None:
+        return
+    unknown = sorted(set(decay.components) - set(stage.trainable))
+    if unknown:
+        raise CompileError(
+            f"{where} scopes weight decay to {unknown!r}, but its trainable "
+            f"components are {list(stage.trainable)!r}. A scoped optimiser "
+            "policy must reach a component the stage actually updates."
+        )
+
+
 def _plan_component(graph: ComponentGraph, name: str) -> PlannedComponent:
     component = graph[name]
     requires = tuple(sorted(component.requires))
@@ -605,9 +619,11 @@ def _hyperparameters(
     """The flat `{canonical_key: value}` dict of `DESIGN.md` §9.1.
 
     Everything that can carry card keys contributes: components, stages and
-    objectives. Two owners binding one key to different values is rejected —
-    a card key names one number, and a plan showing two would make the card
-    cross-check meaningless in the one case where it matters.
+    objectives. Architecture keys are component-valued by construction and
+    therefore aggregate as `{component_name: value}`; other owners binding one
+    key to different values are rejected. The component namespace is what lets
+    a reviewer see three different width/depth declarations without a
+    last-write-wins collapse.
 
     The four `losses.*` keys are *derived* from the program rather than bound
     by a `CARD_KEYS` declaration, for the reason `FIDELITY.md` §2 annotates
@@ -619,7 +635,7 @@ def _hyperparameters(
     resolved: dict[str, Any] = {}
     owners: dict[str, str] = {}
     for component in recipe.system.components:
-        _merge(resolved, owners, component, f"component {component.name!r}")
+        _merge_component(resolved, owners, component)
     for stage in recipe.program:
         _merge(resolved, owners, stage, f"stage {stage.name!r}")
         _merge(
@@ -637,7 +653,39 @@ def _hyperparameters(
             )
     for key, value in _loss_hyperparameters(stages).items():
         _merge_value(resolved, owners, key, value, "the program's weighted terms")
+    for key, value in _gradient_hyperparameters(stages).items():
+        _merge_value(resolved, owners, key, value, "the program's gradient paths")
     return resolved
+
+
+def _merge_component(
+    resolved: dict[str, Any], owners: dict[str, str], component: object
+) -> None:
+    """Merge one component, namespacing every `architecture.*` binding."""
+    name = getattr(component, "name", type(component).__name__)
+    label = f"component {name!r}"
+    for key, value in card_hyperparameters(component).items():
+        if not key.startswith("architecture."):
+            _merge_value(resolved, owners, key, value, label)
+            continue
+        existing = resolved.get(key)
+        if existing is None:
+            values: dict[str, Any] = {}
+            resolved[key] = values
+        elif isinstance(existing, dict):
+            values = existing
+        else:
+            raise CompileError(
+                f"card key {key!r} is component-valued, but {owners[key]} "
+                f"already set the scalar {existing!r}. Architecture bindings "
+                "are keyed by component so the plan cannot collapse modules."
+            )
+        if name in values:
+            raise CompileError(
+                f"card key {key!r} has two architecture bindings for component {name!r}"
+            )
+        values[str(name)] = value
+        owners.setdefault(key, label)
 
 
 def _loss_hyperparameters(
@@ -676,6 +724,22 @@ def _loss_hyperparameters(
         "losses.schedules": schedules,
         "losses.weights": weights,
     }
+
+
+def _gradient_hyperparameters(
+    stages: tuple[CompiledStage, ...],
+) -> dict[str, dict[str, str]]:
+    """Render every objective's declared stop-gradient into the card surface."""
+    paths: dict[str, str] = {}
+    for stage in stages:
+        for objective in stage.objectives:
+            label = f"{stage.name}.{objective.name}"
+            detached = sorted(
+                f"{port} @ {realisation}"
+                for port, realisation in objective.objective.detaches
+            )
+            paths[label] = ", ".join(detached) or "none"
+    return {"gradients.stop_gradients": paths}
 
 
 def _merge(

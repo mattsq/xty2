@@ -354,7 +354,9 @@ def test_weight_decay_reaches_only_the_group_it_declares() -> None:
     # a frozen-gradient parameter would still shrink if it were in the decayed
     # group.
     spec = optimiser(
-        name="sgd", lr=0.1, weight_decay=WeightDecay(value=0.5, on_norm_and_bias=False)
+        name="sgd",
+        lr=0.1,
+        weight_decay=WeightDecay(value=0.5, on_norm_and_bias=False, components=None),
     )
     run = compile(_recipe(optimiser=spec))
     groups = spec.build(list(run.graph.named_parameters())).param_groups

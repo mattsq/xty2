@@ -348,11 +348,15 @@ def test_looking_up_a_stage_that_does_not_exist_says_what_does() -> None:
 def test_the_plan_carries_the_resolved_hyperparameters() -> None:
     plan = compile(two_head_recipe()).plan
     assert plan.hyperparameters == {
-        "architecture.widths_depths": HIDDEN,
+        "architecture.widths_depths": {"encoder": HIDDEN},
         # The optimisation block comes from the stage and its optimiser: five
         # of the six card keys are rendered rather than structured, because
         # this dict is what a reviewer diffs against a card's §4 YAML.
         "gradients.gradient_clipping": "none",
+        "gradients.stop_gradients": {
+            "fit.outcome_nll": "none",
+            "fit.treatment_nll": "none",
+        },
         "optimisation.lr": 0.05,
         "optimisation.lr_schedule": "constant 1.0",
         "optimisation.optimiser": "sgd(momentum=0.0, nesterov=False)",
@@ -413,7 +417,7 @@ def test_a_hyperparameter_conflict_between_two_owners_is_rejected() -> None:
         compile(recipe)
 
 
-def test_two_owners_agreeing_on_a_card_key_is_not_a_conflict() -> None:
+def test_an_objective_cannot_collapse_a_component_valued_architecture_key() -> None:
     recipe = two_head_recipe(
         program=(
             _stage(
@@ -428,7 +432,8 @@ def test_two_owners_agreeing_on_a_card_key_is_not_a_conflict() -> None:
             ),
         )
     )
-    assert compile(recipe).plan.hyperparameters["architecture.widths_depths"] == HIDDEN
+    with pytest.raises(CompileError, match="bound twice with different values"):
+        compile(recipe)
 
 
 # ---------------------------------------------------------------------------

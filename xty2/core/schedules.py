@@ -1,8 +1,11 @@
-"""Weight schedules: `Constant`, `Ramp`, `Step` (`DESIGN.md` §6).
+"""Weight and rate schedules (`DESIGN.md` §6).
 
-A schedule is a function of `ctx.global_step` that a `Weighted` term consults
-for its weight. Three of them exist in v1 and a fourth needs a second real
-consumer first (§11).
+A schedule is a function of `ctx.global_step`. A `Weighted` term consults one
+for its weight and an optimiser consults one as a multiplier on its base rate.
+`ExponentialDecay` arrives with TARNet because its pinned reference
+implementation uses staircase exponential learning-rate decay; spelling the
+formula as one declaration keeps the plan readable and the executed schedule
+exact.
 
 They live in `core/` rather than beside the mixer for the reason `DESIGN.md`
 §10 gives for `Stage` and `Recipe`: they are the compiler's *input*. A recipe
@@ -194,6 +197,50 @@ class Step(Schedule):
         return "step " + ", ".join(segments)
 
 
+@dataclass(frozen=True)
+class ExponentialDecay(Schedule):
+    """Staircase exponential decay, `initial * gamma**floor(step / every)`.
+
+    This is TensorFlow 0.x's `exponential_decay(..., staircase=True)` in the
+    units the executor uses. TARNet's reference implementation applies it to
+    the learning-rate multiplier with `gamma=0.97` every 100 optimiser steps.
+
+    `gamma` is restricted to `(0, 1]`: a factor above one is exponential
+    growth and should be named by the card rather than disguised as decay.
+    """
+
+    gamma: float
+    every: int
+    initial: float = 1.0
+
+    def __post_init__(self) -> None:
+        _require_finite("ExponentialDecay.gamma", self.gamma)
+        _require_finite("ExponentialDecay.initial", self.initial)
+        if not 0.0 < self.gamma <= 1.0:
+            raise Xty2Error(
+                f"ExponentialDecay.gamma must be in (0, 1], got {self.gamma!r}"
+            )
+        if self.every < 1:
+            raise Xty2Error(
+                f"ExponentialDecay.every must be at least 1, got {self.every}"
+            )
+
+    def value(self, step: int) -> float:
+        return float(self.initial) * float(self.gamma) ** (step // self.every)
+
+    @property
+    def nominal(self) -> float:
+        # The limiting value. For the learning-rate use that introduced this
+        # schedule, `OptimiserSpec` prints `describe()` and does not use it.
+        return float(self.initial) if self.gamma == 1.0 else 0.0
+
+    def describe(self) -> str:
+        return (
+            f"staircase {float(self.initial)!r} * {float(self.gamma)!r}^"
+            f"floor(step/{self.every})"
+        )
+
+
 def as_schedule(weight: float | Schedule) -> Schedule:
     """Coerce a bare number to `Constant`, so recipes may write `weight=1.0`.
 
@@ -206,7 +253,8 @@ def as_schedule(weight: float | Schedule) -> Schedule:
     if isinstance(weight, bool) or not isinstance(weight, int | float):
         raise Xty2Error(
             f"a weight is a number or a Schedule, got {type(weight)}. The v1 "
-            f"schedules are Constant, Ramp and Step (DESIGN.md §6)."
+            "schedules are Constant, Ramp, Step and ExponentialDecay "
+            "(DESIGN.md §6)."
         )
     return Constant(float(weight))
 
@@ -218,4 +266,11 @@ def _require_finite(label: str, value: object) -> None:
         raise Xty2Error(f"{label} must be finite, got {float(value)!r}")
 
 
-__all__ = ["Constant", "Ramp", "Schedule", "Step", "as_schedule"]
+__all__ = [
+    "Constant",
+    "ExponentialDecay",
+    "Ramp",
+    "Schedule",
+    "Step",
+    "as_schedule",
+]

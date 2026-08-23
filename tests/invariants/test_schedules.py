@@ -14,7 +14,15 @@ its boundary is exactly the silent difference `FIDELITY.md` §2 lists under
 """
 
 import pytest
-from xty2.core import Constant, Ramp, Schedule, Step, Xty2Error, as_schedule
+from xty2.core import (
+    Constant,
+    ExponentialDecay,
+    Ramp,
+    Schedule,
+    Step,
+    Xty2Error,
+    as_schedule,
+)
 
 # ---------------------------------------------------------------------------
 # Constant
@@ -107,6 +115,31 @@ def test_a_step_boundary_at_zero_is_rejected() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Staircase exponential decay
+# ---------------------------------------------------------------------------
+
+
+def test_exponential_decay_jumps_at_the_declared_step_interval() -> None:
+    schedule = ExponentialDecay(gamma=0.97, every=100)
+    assert schedule(0) == 1.0
+    assert schedule(99) == 1.0
+    assert schedule(100) == pytest.approx(0.97)
+    assert schedule(299) == pytest.approx(0.97**2)
+    assert schedule.describe() == "staircase 1.0 * 0.97^floor(step/100)"
+
+
+@pytest.mark.parametrize("gamma", [0.0, 1.01])
+def test_exponential_decay_rejects_a_non_decay_factor(gamma: float) -> None:
+    with pytest.raises(Xty2Error, match="in \\(0, 1\\]"):
+        ExponentialDecay(gamma=gamma, every=100)
+
+
+def test_exponential_decay_needs_a_positive_interval() -> None:
+    with pytest.raises(Xty2Error, match="at least 1"):
+        ExponentialDecay(gamma=0.97, every=0)
+
+
+# ---------------------------------------------------------------------------
 # The contract every schedule holds to
 # ---------------------------------------------------------------------------
 
@@ -116,6 +149,7 @@ def _schedules() -> list[Schedule]:
         Constant(1.0),
         Ramp(0.0, 0.5, steps=100),
         Step((0.0, 1.0), (50,)),
+        ExponentialDecay(gamma=0.97, every=100),
     ]
 
 

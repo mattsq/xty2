@@ -14,12 +14,14 @@ framework would otherwise supply silently:
   includes momentum or betas, because "SGD" and "SGD with Nesterov momentum
   0.9" are different optimisers stated in one line of a paper. They bind one
   key between them, as §9.1 requires, by binding a rendered `description`.
-* **`weight_decay` carries whether it reaches biases and norm parameters**,
+* **`weight_decay` carries which components it reaches and whether it reaches
+  biases and norm parameters**,
   which `FIDELITY.md` §2 calls out by name: the executor has to put every
   parameter in some group, so *something* decides this, and a framework
   default deciding it is exactly the invisible difference the checklist
-  exists to surface. `WeightDecay` is one field holding both halves rather
-  than two fields sharing a key, which the card-key vocabulary forbids.
+  exists to surface. `WeightDecay` is one field holding coefficient, component
+  scope and parameter reach rather than several fields sharing a key, which
+  the card-key vocabulary forbids.
 * **`lr_schedule` is a real schedule, not a description.** A string field
   saying "cosine with warmup" would let a card claim a schedule the run does
   not have. It reuses `core.schedules` as a *multiplier* on `lr`, so warmup is
@@ -62,11 +64,10 @@ ClipMode = Literal["none", "norm", "value"]
 class WeightDecay:
     """A decay coefficient *and* who it applies to (`FIDELITY.md` §2).
 
-    One field holding both halves, because a canonical key names one value
-    (`DESIGN.md` §9.1) and `optimisation.weight_decay` is annotated "and
-    whether it applies to biases / norm params". Splitting it into two fields
-    would either need a second key — the vocabulary is closed — or leave the
-    second half unbound and therefore un-cross-checkable.
+    One field holds coefficient, component scope and parameter reach because a
+    canonical key names one value (`DESIGN.md` §9.1). Splitting them would
+    either need new keys — the vocabulary is closed — or leave part of the
+    policy unbound and therefore un-cross-checkable.
 
     Attributes:
         value: The coefficient passed to the optimiser.
@@ -74,10 +75,15 @@ class WeightDecay:
             scale/shift of every norm layer — are decayed too. Papers that say
             "weight decay 1e-4" almost always mean the matrices only, and the
             difference is invisible in a diff and in a loss curve alike.
+        components: Component names the decay reaches, or `None` for every
+            trainable component. This is part of the same card decision: the
+            TARNet reference regularises its outcome heads but not its shared
+            representation.
     """
 
     value: float = REQUIRED
     on_norm_and_bias: bool = REQUIRED
+    components: tuple[str, ...] | None = REQUIRED
 
     def __post_init__(self) -> None:
         _require_set("WeightDecay", "value", self.value, "optimisation.weight_decay")
@@ -85,6 +91,12 @@ class WeightDecay:
             "WeightDecay",
             "on_norm_and_bias",
             self.on_norm_and_bias,
+            "optimisation.weight_decay",
+        )
+        _require_set(
+            "WeightDecay",
+            "components",
+            self.components,
             "optimisation.weight_decay",
         )
         _require_finite("WeightDecay.value", self.value)
@@ -97,11 +109,33 @@ class WeightDecay:
                 "WeightDecay.on_norm_and_bias must be a bool, got "
                 f"{type(self.on_norm_and_bias)}"
             )
+        if self.components is not None:
+            object.__setattr__(self, "components", tuple(self.components))
+            if not self.components:
+                raise CompileError(
+                    "WeightDecay.components is either None (all trainable "
+                    "components) or a non-empty tuple of component names"
+                )
+            invalid = [name for name in self.components if not name.isidentifier()]
+            if invalid:
+                raise CompileError(
+                    "WeightDecay.components must contain Python-identifier "
+                    f"component names, got {invalid!r}"
+                )
+            if len(set(self.components)) != len(self.components):
+                raise CompileError(
+                    f"WeightDecay.components contains duplicates: {self.components!r}"
+                )
+            if not self.applies:
+                raise CompileError(
+                    "WeightDecay with value 0.0 cannot carry a component scope: "
+                    "the scope would print as active but decay nothing"
+                )
 
     @classmethod
     def none(cls) -> WeightDecay:
         """No decay at all, written explicitly so the plan says so."""
-        return cls(value=0.0, on_norm_and_bias=False)
+        return cls(value=0.0, on_norm_and_bias=False, components=None)
 
     @property
     def applies(self) -> bool:
@@ -112,17 +146,27 @@ class WeightDecay:
         """One stable line for the execution plan."""
         if not self.applies:
             return "none"
+        scope = (
+            "all trainable components"
+            if self.components is None
+            else "components " + ", ".join(self.components) + " only"
+        )
         reach = "all parameters" if self.on_norm_and_bias else "norm and bias exempt"
-        return f"{float(self.value)!r} ({reach})"
+        return f"{float(self.value)!r} ({scope}; {reach})"
 
-    def decays(self, parameter: Tensor) -> bool:
+    def decays(self, name: str, parameter: Tensor) -> bool:
         """Does this parameter belong in the decayed group?
 
         The rule is the usual one and it is stated once, here, rather than in
         the executor: a parameter with fewer than two dimensions is a bias or a
-        norm scale, and everything else is a weight matrix.
+        norm scale, and everything else is a weight matrix. Component scope is
+        resolved from the qualified name yielded by the stage freezer.
         """
-        return self.applies and (self.on_norm_and_bias or parameter.ndim >= 2)
+        component = _parameter_component(name)
+        selected = self.components is None or component in self.components
+        return (
+            self.applies and selected and (self.on_norm_and_bias or parameter.ndim >= 2)
+        )
 
 
 @dataclass(frozen=True)
@@ -292,9 +336,10 @@ class OptimiserSpec:
             raise CompileError(f"OptimiserSpec.lr must be positive, got {self.lr!r}")
         if not isinstance(self.weight_decay, WeightDecay):
             raise CompileError(
-                "OptimiserSpec.weight_decay is a WeightDecay — the coefficient "
-                "and whether it reaches biases and norm parameters are one card "
-                f"field (FIDELITY.md §2) — got {type(self.weight_decay)}"
+                "OptimiserSpec.weight_decay is a WeightDecay — coefficient, "
+                "component scope, and whether it reaches biases and norm "
+                "parameters are one card field (FIDELITY.md §2) — got "
+                f"{type(self.weight_decay)}"
             )
         if not isinstance(self.clipping, GradientClipping):
             raise CompileError(
@@ -417,8 +462,21 @@ class OptimiserSpec:
                 "optimiser with an empty list means the trainable components "
                 "hold no parameters at all."
             )
-        decayed = [p for _, p in parameters if self.weight_decay.decays(p)]
-        rest = [p for _, p in parameters if not self.weight_decay.decays(p)]
+        if self.weight_decay.components is not None:
+            present = {_parameter_component(name) for name, _ in parameters}
+            missing = sorted(set(self.weight_decay.components) - present)
+            if missing:
+                raise CompileError(
+                    f"weight decay is scoped to components {missing!r}, but the "
+                    f"optimiser parameters name {sorted(present)!r}. A scoped "
+                    "card field must reach the component it names."
+                )
+        assignments = [
+            (parameter, self.weight_decay.decays(name, parameter))
+            for name, parameter in parameters
+        ]
+        decayed = [parameter for parameter, applies in assignments if applies]
+        rest = [parameter for parameter, applies in assignments if not applies]
         groups: list[dict[str, Any]] = []
         if decayed:
             groups.append(
@@ -451,6 +509,19 @@ def _require_finite(label: str, value: object) -> None:
         raise CompileError(f"{label} must be a number, got {type(value)}")
     if not math.isfinite(float(value)):
         raise CompileError(f"{label} must be finite, got {float(value)!r}")
+
+
+def _parameter_component(name: str) -> str:
+    """The component prefix of a qualified parameter name.
+
+    `trainable_only` yields `component.submodule.parameter`. Accept the
+    `ComponentGraph.named_parameters()` spelling too because diagnostics and
+    tests naturally inspect it as `_components.component...`.
+    """
+    parts = name.split(".")
+    if len(parts) > 1 and parts[0] == "_components":
+        return parts[1]
+    return parts[0]
 
 
 __all__ = [

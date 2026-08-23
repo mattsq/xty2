@@ -65,6 +65,12 @@ class ObservedOutcomeNLL:
         # `y` is passed unexpanded and `t` has rank 1, which is what selects
         # observed-treatment evaluation (DESIGN.md §3.1).
         per_row = -head.log_prob(batch.y, treatment_at(batch, rows))
+        if batch.weight is not None:
+            # Sample weights are row mechanics, distinct from the objective's
+            # mixer weight. Multiplying before `reduce_rows` means a
+            # `population` reduction is exactly `(1/B) Σ_i w_i nll_i`, which
+            # is TARNet Eq. (3). Ineligible rows are discarded afterwards.
+            per_row = per_row * batch.weight
         return reduce_rows(per_row, rows)
 
 

@@ -1,6 +1,6 @@
 # Recipe spec card: tarnet
 
-**Status:** `reviewed`
+**Status:** `smoke-passing`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 ---
@@ -140,7 +140,10 @@ realisation or second stage belongs in P5.
 
 ```yaml
 gradients:
-  stop_gradients: none                         # paper Algorithm 1; P5 likelihood trains every required port
+  stop_gradients:
+    joint_fit.observed_outcome_nll: none
+    joint_fit.observed_treatment_nll: none
+    joint_fit.missing_treatment_marginal_nll: none  # paper Algorithm 1; P5 trains every required port
   detached_targets: n/a                       # no consistency target
   gradient_clipping: none                     # ref impl cfr_net_train.py:294-298 leaves clipping commented out
   marginal_nll_grad_path: both                # xty2 P5 choice; not present in the paper
@@ -175,8 +178,8 @@ losses:
 optimisation:
   optimiser: adam(betas=(0.9, 0.999), eps=1e-8)  # paper section 5; TF defaults in pinned ref impl
   lr: 0.001                                      # ref impl configs/example_ihdp.txt
-  lr_schedule: staircase multiplier 0.97^floor(step/100)  # ref impl cfr_net_train.py:280-282
-  weight_decay: 0.0001 on tarnet_head matrices only; norm and bias exempt  # ref impl cfr/cfr_net.py:259-261, 305-306
+  lr_schedule: staircase 1.0 * 0.97^floor(step/100)  # ref impl cfr_net_train.py:280-282
+  weight_decay: 0.0001 (components tarnet_head only; norm and bias exempt)  # ref impl cfr/cfr_net.py:259-261, 305-306
   batch_size: n/a                                # external BatchSource; ref impl uses 100
   labelled_unlabelled_ratio: n/a                 # no fixed quota; Tier 1 applies 50% MCAR at dataset level
   total_steps_or_epochs: 3000 optimiser steps    # ref impl configs/example_ihdp.txt
@@ -191,7 +194,7 @@ architecture:
     tarnet_head: elu                             # paper section 5
     categorical_propensity: linear logits
   normalisation:
-    mlp_encoder: row-wise L2 normalise final representation; no batch norm  # ref impl example config
+    mlp_encoder: row_l2                         # final representation; no batch norm; ref impl example config
     tarnet_head: none
     categorical_propensity: none
   dropout:
@@ -203,7 +206,7 @@ architecture:
     tarnet_head: normal std=0.1/sqrt(fan_in), bias=0
     categorical_propensity: normal std=0.1/sqrt(fan_in), bias=0
   output_parameterisation:
-    tarnet_head: K scalar means with fixed Gaussian scale=1.0
+    tarnet_head: K means; fixed Gaussian scale=1.0
     categorical_propensity: K softmax logits
 
 data:
@@ -293,7 +296,7 @@ The first implementation is deliberately one graph and one stage:
 | Unspecified in paper | Our choice | Basis |
 |---|---|---|
 | Propensity-head architecture | One linear map from `X_REPR` to `K` logits. | Smallest parameterisation that exercises `T_GIVEN_X`; the paper has no propensity head. |
-| Marginal-likelihood weight and warm-up | Ramp from `0.0` to `0.5` over the first 1,000 of 3,000 steps. | Provisional P5 choice. A ramp is required by the plan, but neither paper nor reference code governs it. Review this value before changing status. |
+| Marginal-likelihood weight and warm-up | Ramp from `0.0` to `0.5` over the first 1,000 of 3,000 steps. | Reviewed P5 choice. A ramp is required by the plan, but neither paper nor reference code governs it. |
 | Outcome likelihood scale | Fixed Gaussian standard deviation `1.0`; it is not learned. | Preserves the paper's treatment-specific means and makes NLL equivalent to MSE up to scale and a constant on complete cases. |
 | Categorical extension of the paper's binary sample weight | `w_i = 1 / (K p(t_i))` on observed-treatment rows. | Reduces to the paper's Eq. (3) weight for `K=2` and gives each observed treatment class equal total mass. |
 | Exact interpretation of the paper's `+/-` values | Treat the published centre `0.88` as the target and report xty2 mean and standard error explicitly. | The table does not label the dispersion statistic in its caption. |
