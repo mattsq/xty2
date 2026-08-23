@@ -58,6 +58,14 @@ class Axis(StrEnum):
     """Variadic; resolved from `OutcomeSpec.shape`. Only ever the last axis."""
 
 
+PortValue = Tensor | TreatmentDistribution | OutcomeDistribution
+"""What may travel over a port.
+
+The union is deliberately narrow. `Any` would type-check every component that
+passed a stray dict or a bare float over a port, and the `PortSpec` check would
+be the only thing left standing between that and a training run.
+"""
+
 PortKind = Literal["tensor", "treatment_distribution", "outcome_distribution"]
 
 PortDtype = Literal["float", "outcome"]

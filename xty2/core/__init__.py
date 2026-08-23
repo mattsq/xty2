@@ -1,9 +1,29 @@
-"""Core data types: batch, schema, ports, distributions, row populations (P1).
+"""The core: data types, the component graph, and the compiler.
 
-The graph and the compiler (`graph.py`, `compile.py`) land in P2.
+`batch`, `schema`, `ports`, `distributions` and `rows` are the vocabulary
+everything else is stated against (P1). `graph`, `recipe` and `compile` are
+what turns a declarative assembly of components and objectives into a checked,
+printable execution plan (P2, `DESIGN.md` §2.1, §3, §7, §8, §9.1).
 """
 
 from xty2.core.batch import XTYBatch, assert_unchanged_by
+from xty2.core.card_keys import (
+    CARD_KEY_SECTIONS,
+    CARD_KEY_VOCABULARY,
+    REQUIRED,
+    card_hyperparameters,
+    is_required,
+    validate_card_key,
+)
+from xty2.core.compile import (
+    CompiledObjective,
+    CompiledRun,
+    CompiledStage,
+    ExecutionPlan,
+    ForwardPass,
+    PlannedComponent,
+    compile,
+)
 from xty2.core.conformance import (
     check_outcome_distribution_contract,
     check_treatment_distribution_contract,
@@ -18,12 +38,38 @@ from xty2.core.distributions import (
 )
 from xty2.core.errors import (
     BatchContractError,
+    CardKeyError,
+    CompileError,
     ContractError,
+    GraphError,
     PortContractError,
     SchemaError,
     Xty2Error,
 )
-from xty2.core.ports import PORT_SPECS, Axis, Port, PortSpec, port_spec, resolve_shape
+from xty2.core.graph import (
+    DEFAULT,
+    IDENTITY_VIEW,
+    SOURCE_NAME,
+    SOURCE_PORTS,
+    Component,
+    ComponentGraph,
+    Params,
+    PortView,
+    Realisation,
+    State,
+    render_ports,
+    source_ports,
+)
+from xty2.core.ports import (
+    PORT_SPECS,
+    Axis,
+    Port,
+    PortSpec,
+    PortValue,
+    port_spec,
+    resolve_shape,
+)
+from xty2.core.recipe import Objective, Purpose, Recipe, Stage, validate_rows
 from xty2.core.rows import (
     ROW_POPULATIONS,
     RowIndex,
@@ -36,35 +82,69 @@ from xty2.core.rows import (
 from xty2.core.schema import FeatureSpec, OutcomeSpec, Schema
 
 __all__ = [
+    "CARD_KEY_SECTIONS",
+    "CARD_KEY_VOCABULARY",
+    "DEFAULT",
+    "IDENTITY_VIEW",
     "PORT_SPECS",
+    "REQUIRED",
     "ROW_POPULATIONS",
+    "SOURCE_NAME",
+    "SOURCE_PORTS",
     "Axis",
     "BatchContractError",
+    "CardKeyError",
     "CategoricalTreatment",
+    "CompileError",
+    "CompiledObjective",
+    "CompiledRun",
+    "CompiledStage",
+    "Component",
+    "ComponentGraph",
     "ContractError",
+    "ExecutionPlan",
     "FeatureSpec",
+    "ForwardPass",
     "GaussianOutcome",
+    "GraphError",
+    "Objective",
     "OutcomeDistribution",
     "OutcomeSpec",
+    "Params",
+    "PlannedComponent",
     "Port",
     "PortContractError",
     "PortSpec",
+    "PortValue",
+    "PortView",
+    "Purpose",
+    "Realisation",
+    "Recipe",
     "RowIndex",
     "Rows",
     "Schema",
     "SchemaError",
+    "Stage",
+    "State",
     "TreatmentDistribution",
     "TreatmentMode",
     "XTYBatch",
     "Xty2Error",
     "assert_unchanged_by",
+    "card_hyperparameters",
     "check_outcome_distribution_contract",
     "check_treatment_distribution_contract",
+    "compile",
+    "is_required",
     "populations_are_disjoint",
     "port_spec",
+    "render_ports",
     "resolve_rows",
     "resolve_shape",
     "row_mask",
+    "source_ports",
     "treatment_mode",
+    "validate_card_key",
     "validate_population",
+    "validate_rows",
 ]
