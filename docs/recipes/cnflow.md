@@ -1,6 +1,6 @@
 # Recipe spec card: cnflow
 
-**Status:** `draft`
+**Status:** `smoke-passing`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 ---
@@ -466,5 +466,5 @@ does not add one: that is a fidelity-system decision, not flow implementation.
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status -> `reviewed`) | | |
-| Plan diffed against section 3.2 and section 4 | | |
+| Card reviewed (status -> `reviewed`) | mattsq | 2026-08-23 |
+| Plan diffed against section 3.2 and section 4 | Codex | 2026-08-23 |
