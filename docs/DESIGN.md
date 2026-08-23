@@ -446,6 +446,7 @@ ViewSpec(
     transforms=[FeatureMask(p=0.25),
                 BoundedJitter(columns=["KTAS", "TRQ", "FF"])],
     preserves={"t", "y"},
+    recompute_rules=[],  # required for any derived column made stale
 )
 ```
 
@@ -864,11 +865,11 @@ prevent.
 
 ```
 xty2/
-  core/        batch.py schema.py ports.py distributions.py rows.py
+  core/        batch.py schema.py ports.py distributions.py rows.py views.py
                graph.py card_keys.py loss.py schedules.py optimisation.py
                recipe.py compile.py
   components/  encoders/ outcome/ treatment/ posterior/ density/ energy/
-  views/       masking.py tabular.py perturbations.py
+  views/       masking.py perturbations.py
   objectives/  supervised.py marginal.py consistency.py generative.py causal.py
   training/    program.py loss_mixer.py executors.py artifacts.py
   recipes/     tarnet.py cnflow.py cycle_dual.py mean_teacher.py ssdml.py

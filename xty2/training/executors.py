@@ -340,7 +340,16 @@ def run_stage(
             for step in range(compiled.steps):
                 batch = _next_batch(source, step, compiled)
                 lr = _set_learning_rate(optimiser, spec.lr_at(step))
-                mixed = _step(run, compiled, batch, mixer, optimiser, tensors, step)
+                mixed = _step(
+                    run,
+                    compiled,
+                    batch,
+                    mixer,
+                    optimiser,
+                    tensors,
+                    step,
+                    rng_key=seed * 1_000_000_007 + step,
+                )
                 records.append(
                     StepRecord(
                         step=step,
@@ -403,9 +412,11 @@ def _step(
     optimiser: torch.optim.Optimizer,
     tensors: Sequence[Tensor],
     step: int,
+    *,
+    rng_key: int,
 ) -> _Stepped:
     """Forward, mix, backward, clip, step — in that order and no other."""
-    state = run.state(compiled, batch)
+    state = run.state(compiled, batch, rng_key=rng_key)
     ctx = TrainContext(global_step=step, schema=run.recipe.schema, stage=compiled.name)
     mixed = mixer.mix(state, batch, ctx, parameters=tensors)
     optimiser.zero_grad(set_to_none=True)

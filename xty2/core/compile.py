@@ -15,11 +15,11 @@ components each one runs, the active objectives with their eligible rows and
 declared ports, and the trainable parameter groups. It is deterministic: the
 same recipe prints the same bytes, or a diff means nothing.
 
-Two checks of §8 are not here yet, and are absent rather than stubbed: views
-are validated against the schema when views exist (§8.5, P6), and the static
-half of the leakage rule needs artifacts and executors to reason about (§8.7,
-P10). `ComponentGraph` already derives what the second one will ask for —
-which components transitively read `Y_RAW` — and the plan prints it.
+The static half of the leakage rule is not here yet: it needs artifacts and
+executors to reason about (§8.7, P10). `ComponentGraph` already derives what it
+will ask for — which components transitively read `Y_RAW` — and the plan prints
+it. Views are validated here against the resolved schema before any stage is
+planned (P6, §8.5).
 """
 
 from __future__ import annotations
@@ -31,9 +31,10 @@ from typing import Any
 
 from xty2.core.batch import XTYBatch
 from xty2.core.card_keys import card_hyperparameters
-from xty2.core.errors import CompileError
+from xty2.core.errors import CompileError, SchemaError, ViewError
 from xty2.core.graph import (
     DEFAULT,
+    IDENTITY_VIEW,
     SOURCE_PORTS,
     ComponentGraph,
     Realisation,
@@ -45,6 +46,7 @@ from xty2.core.ports import Port
 from xty2.core.recipe import Objective, Recipe, Stage, Weighted, validate_rows
 from xty2.core.rows import Rows, populations_are_disjoint
 from xty2.core.schedules import Schedule
+from xty2.core.views import ViewSpec
 
 
 def plan_digest_of(rendered: str) -> str:
@@ -154,6 +156,17 @@ class PlannedComponent:
 
 
 @dataclass(frozen=True)
+class PlannedView:
+    """One validated view, reduced to stable plan data."""
+
+    name: str
+    transforms: tuple[str, ...]
+    preserves: tuple[str, ...]
+    recomputes: tuple[str, ...]
+    affected_columns: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ExecutionPlan:
     """The human-readable artifact a reviewer diffs against the card (§8).
 
@@ -168,6 +181,7 @@ class ExecutionPlan:
     card: str
     features: int
     treatments: int
+    views: tuple[PlannedView, ...]
     components: tuple[PlannedComponent, ...]
     stages: tuple[CompiledStage, ...]
     hyperparameters: Mapping[str, Any]
@@ -179,11 +193,10 @@ class ExecutionPlan:
             f"purpose: {self.purpose}",
             f"card: {self.card}",
             f"schema: D = {self.features}, K = {self.treatments}",
-            "",
-            *self._component_lines(),
-            "",
-            *self._lineage_lines(),
         ]
+        if self.views:
+            lines += ["", *self._view_lines()]
+        lines += ["", *self._component_lines(), "", *self._lineage_lines()]
         for stage in self.stages:
             lines += ["", *self._stage_lines(stage)]
         lines += ["", *self._hyperparameter_lines()]
@@ -215,6 +228,21 @@ class ExecutionPlan:
             f"{_ports(component.provides)}"
             for component in self.components
         ]
+
+    def _view_lines(self) -> list[str]:
+        lines = ["views"]
+        for view in self.views:
+            lines.append(f"  {view.name}")
+            lines.append("    preserves  " + (", ".join(view.preserves) or "nothing"))
+            lines.append(
+                "    affects    "
+                + (", ".join(view.affected_columns) or "no feature columns")
+            )
+            for transform in view.transforms:
+                lines.append(f"    transform  {transform}")
+            for recompute in view.recomputes:
+                lines.append(f"    recompute  {recompute}")
+        return lines
 
     def _lineage_lines(self) -> list[str]:
         width = _width(component.name for component in self.components)
@@ -323,7 +351,13 @@ class CompiledRun:
             f"{[stage.name for stage in self.stages]!r}"
         )
 
-    def state(self, stage: str | CompiledStage, batch: XTYBatch) -> State:
+    def state(
+        self,
+        stage: str | CompiledStage,
+        batch: XTYBatch,
+        *,
+        rng_key: int = 0,
+    ) -> State:
         """Run one stage's planned forward passes over `batch`.
 
         This is the whole of what an executor (P4) needs from the graph: the
@@ -332,15 +366,23 @@ class CompiledRun:
         """
         compiled = self.stage(stage) if isinstance(stage, str) else stage
         values = {}
+        batches_by_view: dict[str, XTYBatch] = {IDENTITY_VIEW: batch}
         for forward in compiled.passes:
-            if forward.realisation != DEFAULT:
+            if forward.realisation.params != "student":
                 raise CompileError(
                     f"stage {compiled.name!r} plans {forward.realisation}, which "
-                    "needs a view (DESIGN.md §5) or a teacher parameter set "
-                    "(§7); neither exists yet"
+                    "needs a teacher parameter set (DESIGN.md §7); teacher "
+                    "parameters arrive with P8"
                 )
+            view_name = forward.realisation.view
+            viewed = batches_by_view.get(view_name)
+            if viewed is None:
+                viewed = self.recipe.view(view_name).apply(
+                    batch, self.recipe.schema, rng_key=rng_key
+                )
+                batches_by_view[view_name] = viewed
             values[forward.realisation] = self.graph.evaluate(
-                batch, schema=self.recipe.schema, only=forward.components
+                viewed, schema=self.recipe.schema, only=forward.components
             )
         return State(values)
 
@@ -370,7 +412,8 @@ def compile(recipe: Recipe) -> CompiledRun:
             construction.
     """
     graph = recipe.system
-    realisable = _realisable(recipe)
+    views = _validated_views(recipe)
+    realisable = _realisable(views)
     stages = tuple(
         _compile_stage(recipe, stage, realisable) for stage in recipe.program
     )
@@ -380,6 +423,7 @@ def compile(recipe: Recipe) -> CompiledRun:
         card=recipe.card,
         features=recipe.schema.num_features,
         treatments=recipe.schema.treatment_cardinality,
+        views=tuple(_plan_view(view, recipe) for view in views),
         components=tuple(_plan_component(graph, name) for name in graph.names),
         stages=stages,
         hyperparameters=_hyperparameters(recipe, stages),
@@ -387,18 +431,27 @@ def compile(recipe: Recipe) -> CompiledRun:
     return CompiledRun(recipe=recipe, stages=stages, plan=plan)
 
 
-def _realisable(recipe: Recipe) -> frozenset[Realisation]:
+def _validated_views(recipe: Recipe) -> tuple[ViewSpec, ...]:
+    """Validate every declared view against the recipe's resolved schema."""
+    for view in recipe.views:
+        try:
+            view.validate(recipe.schema)
+        except (ViewError, SchemaError) as error:
+            raise CompileError(
+                f"view {view.name!r} of recipe {recipe.name!r} is invalid for "
+                f"its schema: {error}"
+            ) from error
+    return tuple(recipe.views)
+
+
+def _realisable(views: tuple[ViewSpec, ...]) -> frozenset[Realisation]:
     """The realisations this recipe can actually produce.
 
-    A non-default realisation comes from one of exactly two places, and a
-    recipe can declare neither yet: a `view` names a `ViewSpec` (`DESIGN.md`
-    §5) and `params="teacher"` names a stage-built EMA copy (§7). Until it
-    can, an objective asking for one is unsatisfiable rather than merely
-    unimplemented, and saying so at compile time is the point — the
-    alternative is a consistency loss that silently reads the student.
+    Views make student realisations available now. ``params="teacher"`` still
+    names a stage-built EMA copy (§7, P8), so asking for one remains
+    unsatisfiable rather than silently reading the student.
     """
-    del recipe  # widened by the packets that add views and teacher parameters
-    return frozenset({DEFAULT})
+    return frozenset({DEFAULT, *(Realisation(view=view.name) for view in views)})
 
 
 def _compile_stage(
@@ -613,6 +666,16 @@ def _plan_component(graph: ComponentGraph, name: str) -> PlannedComponent:
     )
 
 
+def _plan_view(view: ViewSpec, recipe: Recipe) -> PlannedView:
+    return PlannedView(
+        name=view.name,
+        transforms=view.transform_descriptions(),
+        preserves=tuple(sorted(view.preserves)),
+        recomputes=view.recompute_descriptions(),
+        affected_columns=tuple(sorted(view.affected_columns(recipe.schema))),
+    )
+
+
 def _hyperparameters(
     recipe: Recipe, stages: tuple[CompiledStage, ...]
 ) -> dict[str, Any]:
@@ -801,6 +864,7 @@ __all__ = [
     "ExecutionPlan",
     "ForwardPass",
     "PlannedComponent",
+    "PlannedView",
     "compile",
     "plan_digest_of",
 ]

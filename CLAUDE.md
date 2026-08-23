@@ -25,8 +25,8 @@ This file is the short version of the rules those documents make binding.
 ## Layout
 
 ```
-xty2/core/        batch, schema, ports, distributions, graph, loss, schedules,
-                  optimisation, recipe, compile
+xty2/core/        batch, schema, ports, distributions, graph, views, loss,
+                  schedules, optimisation, recipe, compile
 xty2/components/  parameterisations only
 xty2/views/       augmentation, separated from the losses that use it
 xty2/objectives/  losses as independent objects
