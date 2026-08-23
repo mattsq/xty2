@@ -765,11 +765,12 @@ prevent.
 
 ```
 xty2/
-  core/        batch.py schema.py ports.py distributions.py graph.py compile.py
+  core/        batch.py schema.py ports.py distributions.py
+               graph.py card_keys.py recipe.py compile.py
   components/  encoders/ outcome/ treatment/ posterior/ density/ energy/
   views/       masking.py tabular.py perturbations.py
   objectives/  supervised.py marginal.py consistency.py generative.py causal.py
-  training/    stage.py program.py loss_mixer.py schedules.py executors.py artifacts.py
+  training/    program.py loss_mixer.py schedules.py executors.py artifacts.py
   recipes/     tarnet.py cnflow.py cycle_dual.py mean_teacher.py ssdml.py
   evaluation/  predictive.py causal.py calibration.py policy.py
   estimators/  cate.py dml.py policy.py
@@ -778,6 +779,13 @@ docs/
 tests/
   invariants/  smoke/  benchmarks/
 ```
+
+`Stage`, `Recipe` and the `Objective` protocol are in `core/recipe.py` rather
+than beside the training layer, because they are the compiler's *input*: they
+declare what a program is, and `compile()` reads them. `training/` imports
+`core`, never the reverse, so putting the declarations in the leaf layer is what
+keeps that one-way. `card_keys.py` holds the closed vocabulary of
+`FIDELITY.md` §2 and the `REQUIRED` sentinel (§9.1).
 
 ### The five ported recipes, and what each one proves
 
