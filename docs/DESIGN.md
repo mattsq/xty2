@@ -357,6 +357,7 @@ RowIndex = Tensor          # [n] long, indices into the shared batch axis
 class Objective(Protocol):
     name: str
     requires: frozenset[tuple[Port, Realisation]]
+    detaches: frozenset[tuple[Port, Realisation]]    # subset of `requires`
     rows: Rows
 
     def compute(self, state: State, batch: XTYBatch,
@@ -376,6 +377,21 @@ Rules:
   logged raw value incomparable across runs.
 - An objective never calls `.backward()`, never mutates state, never touches
   parameters directly.
+- **A stop-gradient is declared, because it is invisible in the graph.**
+  `requires` says a term *reads* `p(t|x)`, and the compiler plans the forward
+  pass from that — but a `.detach()` inside `compute` means no gradient ever
+  reaches the component that produced it. `detaches` names that subset, so the
+  dead-trainable rule (§8.4) can tell a component that is merely executed from
+  one that is actually trained. Without it a stage whose sole trainable is the
+  detached side compiles, trains, and makes every optimiser step a no-op — the
+  dead-weight stage §8.4 exists to reject, hidden behind a detach rather than
+  behind the wiring. It is a required member rather than an optional attribute
+  for the reason §7.1 gives about provenance: a declaration with a fallback is
+  one that can be forgotten, and forgetting this one restores the hole. Where a
+  card field governs the stop-gradient — `gradients.marginal_nll_grad_path`,
+  `ConsistencyLoss.stop_grad` — derive `detaches` from that field rather than
+  stating it twice. An objective that detaches *everything* it requires
+  contributes a constant to the total and is rejected.
 - **`rows` is the eligible set, and the objective must gather by it.** `state`
   and `batch` are both full-batch and share one batch axis, so the same `rows`
   indexes both and alignment is automatic. `n == rows.numel()`. Reading
@@ -478,9 +494,16 @@ Weighted(obj, weight=1.0, reduction="mean" | "sum" | "population")
 
 | Mode | Contribution | Use when |
 |---|---|---|
-| `mean` (default) | `value` | the paper averages over the term's own rows |
+| `mean` | `value` | the paper averages over the term's own rows |
 | `sum` | `value * n` | the paper sums over rows |
 | `population` | `value * n / B` | the paper averages over the *whole* batch |
+
+**Neither field has a default.** `weight` and `reduction` both bind card keys
+(`FIDELITY.md` §2: `losses.weights`, `losses.reduction`), so both carry the
+`REQUIRED` sentinel of §9.1 and a recipe that omits either is rejected at
+construction. `mean` is the *common* choice, not an inherited one — the
+paragraph below is the reason a silent one would be the worst available
+outcome.
 
 Because `LossTerm` already carries `n`, all three are recoverable from the same
 objective with no change to the objective API, and the raw per-objective value
@@ -675,7 +698,9 @@ loader catches executions that are wrong in fact.
 3. topologically orders components per realisation and plans the minimum number
    of forward passes;
 4. checks `trainable` names exist and that every trainable component is actually
-   upstream of at least one active objective (catches dead-weight stages);
+   upstream of at least one active objective **through a port that objective
+   backpropagates through** (catches dead-weight stages, including the ones
+   hidden behind a `detaches` declaration);
 5. validates views against the schema (mutability, bounds, derived columns);
 6. intersects `Stage.rows` with each `Objective.rows` and rejects any pairing
    that is empty by construction (§7.0);
@@ -752,6 +777,17 @@ CI then asserts that every card §4 key not marked `n/a` appears in
 `plan.hyperparameters` with a non-null value. The same flat dict is what makes
 the printed plan diffable against the card by eye.
 
+**Per-objective keys are derived, not bound.** Four of the §2 keys —
+`losses.weights`, `losses.schedules`, `losses.reduction`, `losses.eligible_rows`
+— are annotated "per objective", and a canonical key names one value. `compile()`
+therefore aggregates them over the whole program into one mapping each, keyed by
+`"<stage>.<objective>"`, rather than having each `Weighted` bind them and
+collide. The values come from what the term actually runs with: the schedule's
+nominal weight, its description, its reduction mode, and the *effective* row set
+after the §7.0 intersection. They are derived because there is nothing for a
+recipe to declare twice — it already supplied every one of them by constructing
+the `Weighted`.
+
 **What this does not do.** It checks *presence*, never *correctness*: CI can
 prove the recipe sets `teacher.ema_decay`, and cannot prove 0.999 is the number
 in the paper. Only the card review does that. The mechanism stops silent
@@ -765,12 +801,12 @@ prevent.
 
 ```
 xty2/
-  core/        batch.py schema.py ports.py distributions.py
-               graph.py card_keys.py recipe.py compile.py
+  core/        batch.py schema.py ports.py distributions.py rows.py
+               graph.py card_keys.py loss.py schedules.py recipe.py compile.py
   components/  encoders/ outcome/ treatment/ posterior/ density/ energy/
   views/       masking.py tabular.py perturbations.py
   objectives/  supervised.py marginal.py consistency.py generative.py causal.py
-  training/    program.py loss_mixer.py schedules.py executors.py artifacts.py
+  training/    program.py loss_mixer.py executors.py artifacts.py
   recipes/     tarnet.py cnflow.py cycle_dual.py mean_teacher.py ssdml.py
   evaluation/  predictive.py causal.py calibration.py policy.py
   estimators/  cate.py dml.py policy.py
@@ -780,12 +816,17 @@ tests/
   invariants/  smoke/  benchmarks/
 ```
 
-`Stage`, `Recipe` and the `Objective` protocol are in `core/recipe.py` rather
-than beside the training layer, because they are the compiler's *input*: they
-declare what a program is, and `compile()` reads them. `training/` imports
-`core`, never the reverse, so putting the declarations in the leaf layer is what
-keeps that one-way. `card_keys.py` holds the closed vocabulary of
-`FIDELITY.md` §2 and the `REQUIRED` sentinel (§9.1).
+`Stage`, `Recipe`, `Weighted` and the `Objective` protocol are in
+`core/recipe.py` rather than beside the training layer, because they are the
+compiler's *input*: they declare what a program is, and `compile()` reads them.
+`training/` imports `core`, never the reverse, so putting the declarations in
+the leaf layer is what keeps that one-way. The same argument puts `loss.py`
+(`LossTerm`, `TrainContext`, the reduction modes of §6.1) and `schedules.py`
+(§6) in `core/` rather than in `training/` beside the mixer: `Weighted` names a
+schedule and the `Objective` protocol is stated in terms of a `LossTerm`, so
+both are read by the compiler. `training/loss_mixer.py` holds what *runs* them.
+`card_keys.py` holds the closed vocabulary of `FIDELITY.md` §2 and the
+`REQUIRED` sentinel (§9.1).
 
 ### The five ported recipes, and what each one proves
 

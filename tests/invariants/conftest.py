@@ -19,16 +19,25 @@ from xty2.core import (
     ComponentGraph,
     FeatureSpec,
     GaussianOutcome,
+    LossTerm,
+    Objective,
     OutcomeSpec,
     Port,
     PortValue,
     PortView,
     Realisation,
     Recipe,
+    Reduction,
+    RowIndex,
     Rows,
+    Schedule,
     Schema,
     Stage,
+    State,
+    TrainContext,
+    Weighted,
     XTYBatch,
+    reduce_rows,
 )
 
 BATCH_SIZE = 7
@@ -153,12 +162,39 @@ class ToyPosterior(Component):
 
 @dataclass(frozen=True)
 class ToyObjective:
-    """The compiler's view of a loss (`DESIGN.md` §4); P3 gives it a `compute`."""
+    """The smallest thing that satisfies the `Objective` protocol (§4).
+
+    `compute` returns a genuine zero term through `reduce_rows`, so the row
+    bookkeeping every compiler and mixer test relies on is real even though the
+    loss is not. The three shipped objectives are tested against brute force in
+    `test_objectives.py`; this one exists to be wired up, not to be right.
+    """
 
     name: str
     requires: frozenset[tuple[Port, Realisation]]
     rows: Rows = "all"
     CARD_KEYS: ClassVar[Mapping[str, str]] = {}
+
+    @property
+    def detaches(self) -> frozenset[tuple[Port, Realisation]]:
+        """Nothing. A double that detached would need to say so (§4)."""
+        return frozenset()
+
+    def compute(
+        self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
+    ) -> LossTerm:
+        del state, ctx
+        return reduce_rows(torch.zeros(batch.batch_size), rows)
+
+
+def weighted(
+    objective: Objective,
+    *,
+    weight: float | Schedule = 1.0,
+    reduction: Reduction = "mean",
+) -> Weighted:
+    """Wrap an objective for a stage. Both fields are explicit, as recipes must be."""
+    return Weighted(objective, weight=weight, reduction=reduction)
 
 
 def objective(
@@ -166,12 +202,18 @@ def objective(
     *ports: Port,
     rows: Rows = "all",
     realisation: Realisation = DEFAULT,
-) -> ToyObjective:
-    """A `ToyObjective` requiring `ports` under one realisation."""
-    return ToyObjective(
-        name=name,
-        requires=frozenset((port, realisation) for port in ports),
-        rows=rows,
+    weight: float | Schedule = 1.0,
+    reduction: Reduction = "mean",
+) -> Weighted:
+    """A weighted `ToyObjective` requiring `ports` under one realisation."""
+    return weighted(
+        ToyObjective(
+            name=name,
+            requires=frozenset((port, realisation) for port in ports),
+            rows=rows,
+        ),
+        weight=weight,
+        reduction=reduction,
     )
 
 
@@ -205,3 +247,8 @@ def two_head_recipe(**overrides: Any) -> Recipe:
         "card": "docs/recipes/two_head.md",
     }
     return Recipe(**(defaults | overrides))
+
+
+def backward(value: Tensor) -> None:
+    """`value.backward()`, with torch's untyped signature confined to one place."""
+    value.backward()  # type: ignore[no-untyped-call]

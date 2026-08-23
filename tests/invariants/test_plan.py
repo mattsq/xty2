@@ -16,7 +16,7 @@ is a snapshot test rather than a set of substring assertions: a change to the
 format is a change to the review surface and should show up in a diff as one.
 """
 
-from xty2.core import ComponentGraph, Port, Recipe, Stage, compile
+from xty2.core import ComponentGraph, Port, Ramp, Recipe, Stage, Step, compile
 
 from tests.invariants.conftest import (
     HIDDEN,
@@ -52,13 +52,29 @@ stage fit
   forward passes (1)
     view=identity params=student: encoder -> outcome_head -> propensity
   objectives
-    outcome_nll    rows y_observed  requires p(y|x,t) @ view=identity params=student
-    treatment_nll  rows t_observed  requires p(t|x) @ view=identity params=student
+    outcome_nll    rows y_observed  reduction mean
+      weight    constant 1.0
+      requires  p(y|x,t) @ view=identity params=student
+    treatment_nll  rows t_observed  reduction mean
+      weight    constant 1.0
+      requires  p(t|x) @ view=identity params=student
   trainable
     encoder, outcome_head, propensity
 
 hyperparameters
   architecture.widths_depths = 5
+  losses.eligible_rows
+    fit.outcome_nll   = 'y_observed'
+    fit.treatment_nll = 't_observed'
+  losses.reduction
+    fit.outcome_nll   = 'mean'
+    fit.treatment_nll = 'mean'
+  losses.schedules
+    fit.outcome_nll   = 'constant 1.0'
+    fit.treatment_nll = 'constant 1.0'
+  losses.weights
+    fit.outcome_nll   = 1.0
+    fit.treatment_nll = 1.0
 """
 
 POSTERIOR_PLAN = """\
@@ -84,13 +100,29 @@ stage infer
   forward passes (1)
     view=identity params=student: encoder -> propensity -> posterior
   objectives
-    posterior_kl   rows t_observed  requires q(t|x,y) @ view=identity params=student
-    treatment_nll  rows t_observed  requires p(t|x) @ view=identity params=student
+    posterior_kl   rows t_observed  reduction mean
+      weight    constant 1.0
+      requires  q(t|x,y) @ view=identity params=student
+    treatment_nll  rows t_observed  reduction mean
+      weight    constant 1.0
+      requires  p(t|x) @ view=identity params=student
   trainable
     encoder, propensity, posterior
 
 hyperparameters
   architecture.widths_depths = 5
+  losses.eligible_rows
+    infer.posterior_kl  = 't_observed'
+    infer.treatment_nll = 't_observed'
+  losses.reduction
+    infer.posterior_kl  = 'mean'
+    infer.treatment_nll = 'mean'
+  losses.schedules
+    infer.posterior_kl  = 'constant 1.0'
+    infer.treatment_nll = 'constant 1.0'
+  losses.weights
+    infer.posterior_kl  = 1.0
+    infer.treatment_nll = 1.0
 """
 
 
@@ -151,3 +183,38 @@ def test_tie_breaking_follows_declaration_order() -> None:
         "propensity",
         "outcome_head",
     ]
+
+
+def test_the_weight_schedule_and_reduction_reach_the_plan() -> None:
+    # `losses.weights`, `losses.schedules` and `losses.reduction` are card §4
+    # keys (`FIDELITY.md` §2), and the plan is where a reviewer checks them
+    # against the paper. A ramp that printed as a bare number, or a `sum` that
+    # printed as `mean`, would make that check pass on a recipe that trains
+    # something else.
+    recipe = two_head_recipe(
+        program=(
+            Stage(
+                name="fit",
+                objectives=(
+                    objective(
+                        "outcome_nll",
+                        Port.Y_GIVEN_XT,
+                        weight=Ramp(0.0, 0.5, steps=5_000),
+                        reduction="sum",
+                    ),
+                    objective(
+                        "treatment_nll",
+                        Port.T_GIVEN_X,
+                        weight=Step((0.0, 1.0), (1_000,)),
+                        reduction="population",
+                    ),
+                ),
+                trainable=("encoder", "outcome_head", "propensity"),
+            ),
+        )
+    )
+    rendered = compile(recipe).plan.render()
+    assert "      weight    ramp 0.0 -> 0.5 over 5000 steps" in rendered
+    assert "      weight    step 0.0 from 0, 1.0 from 1000" in rendered
+    assert "reduction sum" in rendered
+    assert "reduction population" in rendered

@@ -38,9 +38,11 @@ from xty2.core.graph import (
     Realisation,
     State,
 )
+from xty2.core.loss import Reduction
 from xty2.core.ports import Port
-from xty2.core.recipe import Objective, Recipe, Stage, validate_rows
+from xty2.core.recipe import Objective, Recipe, Stage, Weighted, validate_rows
 from xty2.core.rows import Rows, populations_are_disjoint
+from xty2.core.schedules import Schedule
 
 # ---------------------------------------------------------------------------
 # What compilation produces
@@ -63,20 +65,37 @@ class ForwardPass:
 
 @dataclass(frozen=True)
 class CompiledObjective:
-    """An objective with its eligible-row declaration resolved (`DESIGN.md` §7.0).
+    """A weighted term with its eligible-row declaration resolved (§6, §7.0).
 
     `rows` is the stage scope and the objective's own population together, in
     the form `resolve_rows` takes. The intersection is not always itself a
     named population — `t_observed ∩ y_observed` is not — so it is carried as
     the populations to intersect rather than collapsed to one name.
+
+    This is what the mixer is built from, and it is the only thing it is built
+    from: the eligible set is the compiler's answer, so a mixer that re-derived
+    it would be a second implementation of a rule the compiler has already
+    rejected the empty-by-construction case of.
     """
 
-    objective: Objective
+    weighted: Weighted
     rows: tuple[Rows, ...]
 
     @property
+    def objective(self) -> Objective:
+        return self.weighted.objective
+
+    @property
     def name(self) -> str:
-        return self.objective.name
+        return self.weighted.name
+
+    @property
+    def weight(self) -> Schedule:
+        return self.weighted.schedule
+
+    @property
+    def reduction(self) -> Reduction:
+        return self.weighted.reduction
 
 
 @dataclass(frozen=True)
@@ -196,9 +215,23 @@ class ExecutionPlan:
                 for port, realisation in _sorted_requirements(objective.objective)
             )
             lines.append(
-                f"    {objective.name:<{width}}  rows {_rows(objective.rows):<{rows}}  "
-                f"requires {requires or 'nothing'}"
+                f"    {objective.name:<{width}}  rows {_rows(objective.rows):<{rows}}"
+                f"  reduction {objective.reduction}"
             )
+            lines.append(f"      weight    {objective.weight.describe()}")
+            lines.append(f"      requires  {requires or 'nothing'}")
+            # A stop-gradient is invisible in `requires`, and which side a
+            # paper detaches is exactly the one-line detail card §4 exists to
+            # pin down — so the plan says it rather than implying it.
+            detaches = ", ".join(
+                f"{port} @ {realisation}"
+                for port, realisation in sorted(
+                    objective.objective.detaches,
+                    key=lambda pair: (str(pair[0]), pair[1]),
+                )
+            )
+            if detaches:
+                lines.append(f"      detaches  {detaches}")
         lines.append("  trainable")
         lines.append(f"    {_names(compiled.trainable)}")
         return lines
@@ -206,11 +239,27 @@ class ExecutionPlan:
     def _hyperparameter_lines(self) -> list[str]:
         if not self.hyperparameters:
             return ["hyperparameters", "  none"]
-        width = _width(self.hyperparameters)
-        return ["hyperparameters"] + [
-            f"  {key:<{width}} = {self.hyperparameters[key]!r}"
-            for key in sorted(self.hyperparameters)
-        ]
+        scalars = {
+            key: value
+            for key, value in self.hyperparameters.items()
+            if not isinstance(value, Mapping)
+        }
+        width = _width(scalars)
+        lines = ["hyperparameters"]
+        for key in sorted(self.hyperparameters):
+            value = self.hyperparameters[key]
+            if not isinstance(value, Mapping):
+                lines.append(f"  {key:<{width}} = {value!r}")
+                continue
+            # A per-objective key (the four `losses.*` of FIDELITY.md §2)
+            # renders as a block rather than one very wide dict: the card it is
+            # diffed against is a YAML block, and a line nobody can read across
+            # is a line nobody checks.
+            lines.append(f"  {key}")
+            entries = _width(value)
+            for label in sorted(value):
+                lines.append(f"    {label:<{entries}} = {value[label]!r}")
+        return lines
 
 
 @dataclass(frozen=True)
@@ -294,7 +343,7 @@ def compile(recipe: Recipe) -> CompiledRun:
         treatments=recipe.schema.treatment_cardinality,
         components=tuple(_plan_component(graph, name) for name in graph.names),
         stages=stages,
-        hyperparameters=_hyperparameters(recipe),
+        hyperparameters=_hyperparameters(recipe, stages),
     )
     return CompiledRun(recipe=recipe, stages=stages, plan=plan)
 
@@ -328,27 +377,30 @@ def _compile_stage(
     _reject_duplicate_objectives(stage, where)
 
     demanded: dict[Realisation, set[Port]] = {}
+    trained: set[Port] = set()
     objectives: list[CompiledObjective] = []
-    for objective in stage.objectives:
+    for weighted in stage.objectives:
+        objective = weighted.objective
         rows = _effective_rows(stage, objective, where)
         for port, realisation in _sorted_requirements(objective):
             _check_port(graph, port, objective, where)
             _check_realisation(realisation, realisable, objective, where)
             demanded.setdefault(realisation, set()).add(port)
-        objectives.append(CompiledObjective(objective=objective, rows=rows))
+        trained |= {port for port, _ in _check_detaches(objective, where)}
+        objectives.append(CompiledObjective(weighted=weighted, rows=rows))
 
     passes = tuple(
         ForwardPass(realisation=realisation, components=graph.subgraph_for(ports))
         for realisation, ports in sorted(demanded.items())
     )
-    _check_trainable(graph, stage, passes, where)
+    _check_trainable(graph, stage, passes, trained, where)
     return CompiledStage(stage=stage, passes=passes, objectives=tuple(objectives))
 
 
 def _reject_duplicate_objectives(stage: Stage, where: str) -> None:
     seen: set[str] = set()
-    for objective in stage.objectives:
-        name = objective.name
+    for weighted in stage.objectives:
+        name = weighted.name
         if name in seen:
             raise CompileError(
                 f"{where} has more than one objective called {name!r}. Per-"
@@ -378,6 +430,40 @@ def _effective_rows(stage: Stage, objective: Objective, where: str) -> tuple[Row
         if rows != "all" and rows not in populations:
             populations.append(rows)
     return tuple(populations) or ("all",)
+
+
+def _check_detaches(
+    objective: Objective, where: str
+) -> frozenset[tuple[Port, Realisation]]:
+    """The `(port, realisation)` pairs this objective actually trains through.
+
+    `requires` says what a term *reads*, and the forward pass is planned from
+    it; `detaches` says which of those reads carry no gradient back. The
+    difference is what the dead-trainable rule has to reason about, because a
+    stop-gradient is invisible in the graph — nothing about `p(t|x)` appearing
+    in `requires` says whether a gradient ever reaches the head that produced
+    it (`DESIGN.md` §4, §8.4).
+    """
+    detaches = frozenset(objective.detaches)
+    requires = frozenset(objective.requires)
+    stray = sorted(
+        f"{port} @ {realisation}" for port, realisation in detaches - requires
+    )
+    if stray:
+        raise CompileError(
+            f"objective {objective.name!r} in {where} declares it detaches "
+            f"{stray!r}, which it does not require. `detaches` names the subset "
+            "of `requires` a term reads without training through (DESIGN.md §4)."
+        )
+    trained = requires - detaches
+    if requires and not trained:
+        raise CompileError(
+            f"objective {objective.name!r} in {where} detaches every port it "
+            "requires, so it contributes a constant to the total and trains "
+            "nothing. A term with no gradient path is a diagnostic, not an "
+            "objective (DESIGN.md §4)."
+        )
+    return trained
 
 
 def _check_port(
@@ -410,7 +496,11 @@ def _check_realisation(
 
 
 def _check_trainable(
-    graph: ComponentGraph, stage: Stage, passes: tuple[ForwardPass, ...], where: str
+    graph: ComponentGraph,
+    stage: Stage,
+    passes: tuple[ForwardPass, ...],
+    trained: set[Port],
+    where: str,
 ) -> None:
     # The other extreme of the dead-trainable rule below: both reject a stage
     # that cannot do what it appears to, one because a named component gets no
@@ -438,6 +528,22 @@ def _check_trainable(
             "dead weight and the recipe does not do what it appears to "
             "(DESIGN.md §8.4)."
         )
+    # Reachable from the ports the objectives *train through*, not merely from
+    # the ports they read: a component upstream of a detached port is executed
+    # in the forward pass and still receives no gradient, so `executed` alone
+    # accepts a stage whose every step is a no-op.
+    reached = set(graph.subgraph_for(trained))
+    detached = [name for name in stage.trainable if name not in reached]
+    if detached:
+        raise CompileError(
+            f"{where} trains {detached!r}, which every active objective reads "
+            "through a stop-gradient. The components run in the forward pass "
+            "and receive no gradient, so the optimiser step is a no-op — the "
+            "same dead-weight stage as above, hidden behind a detach rather "
+            "than behind the wiring. Change the objective's gradient path, or "
+            "train the components it does backpropagate into (DESIGN.md §4, "
+            "§8.4)."
+        )
 
 
 def _plan_component(graph: ComponentGraph, name: str) -> PlannedComponent:
@@ -453,13 +559,22 @@ def _plan_component(graph: ComponentGraph, name: str) -> PlannedComponent:
     )
 
 
-def _hyperparameters(recipe: Recipe) -> dict[str, Any]:
+def _hyperparameters(
+    recipe: Recipe, stages: tuple[CompiledStage, ...]
+) -> dict[str, Any]:
     """The flat `{canonical_key: value}` dict of `DESIGN.md` §9.1.
 
     Everything that can carry card keys contributes: components, stages and
     objectives. Two owners binding one key to different values is rejected —
     a card key names one number, and a plan showing two would make the card
     cross-check meaningless in the one case where it matters.
+
+    The four `losses.*` keys are *derived* from the program rather than bound
+    by a `CARD_KEYS` declaration, for the reason `FIDELITY.md` §2 annotates
+    them with: each is "per objective", and a canonical key names one value.
+    Aggregating them over the whole program is what makes them one value —
+    and the recipe does supply them, so a cross-check that reported them
+    absent would be reporting on the mechanism rather than on the recipe.
     """
     resolved: dict[str, Any] = {}
     owners: dict[str, str] = {}
@@ -467,28 +582,78 @@ def _hyperparameters(recipe: Recipe) -> dict[str, Any]:
         _merge(resolved, owners, component, f"component {component.name!r}")
     for stage in recipe.program:
         _merge(resolved, owners, stage, f"stage {stage.name!r}")
-        for objective in stage.objectives:
+        for weighted in stage.objectives:
             _merge(
                 resolved,
                 owners,
-                objective,
-                f"objective {objective.name!r} in stage {stage.name!r}",
+                weighted.objective,
+                f"objective {weighted.name!r} in stage {stage.name!r}",
             )
+    for key, value in _loss_hyperparameters(stages).items():
+        _merge_value(resolved, owners, key, value, "the program's weighted terms")
     return resolved
+
+
+def _loss_hyperparameters(
+    stages: tuple[CompiledStage, ...],
+) -> dict[str, dict[str, Any]]:
+    """The four per-objective `losses.*` keys of `FIDELITY.md` §2.
+
+    Each maps `"<stage>.<objective>"` — unique across a program, since stage
+    names are unique and objective names are unique within a stage — to the
+    value that term actually runs with:
+
+    * `losses.weights` is the schedule's **nominal** weight, which is the λ a
+      paper states;
+    * `losses.schedules` is how the term gets there, which is the other half
+      of the same sentence;
+    * `losses.reduction` is the §6.1 mode;
+    * `losses.eligible_rows` is the *effective* set — the stage scope and the
+      objective's population intersected (§7.0) — because that is the set the
+      term is actually given, and a card describing the objective's half alone
+      would not describe what runs.
+    """
+    weights: dict[str, Any] = {}
+    schedules: dict[str, Any] = {}
+    reductions: dict[str, Any] = {}
+    eligible: dict[str, Any] = {}
+    for stage in stages:
+        for objective in stage.objectives:
+            label = f"{stage.name}.{objective.name}"
+            weights[label] = objective.weight.nominal
+            schedules[label] = objective.weight.describe()
+            reductions[label] = objective.reduction
+            eligible[label] = _rows(objective.rows)
+    return {
+        "losses.eligible_rows": eligible,
+        "losses.reduction": reductions,
+        "losses.schedules": schedules,
+        "losses.weights": weights,
+    }
 
 
 def _merge(
     resolved: dict[str, Any], owners: dict[str, str], owner: object, label: str
 ) -> None:
     for key, value in card_hyperparameters(owner).items():
-        if key in resolved and resolved[key] != value:
-            raise CompileError(
-                f"card key {key!r} is bound twice with different values: "
-                f"{owners[key]} sets {resolved[key]!r} and {label} sets "
-                f"{value!r}. A canonical key names one number (DESIGN.md §9.1)."
-            )
-        resolved[key] = value
-        owners.setdefault(key, label)
+        _merge_value(resolved, owners, key, value, label)
+
+
+def _merge_value(
+    resolved: dict[str, Any],
+    owners: dict[str, str],
+    key: str,
+    value: object,
+    label: str,
+) -> None:
+    if key in resolved and resolved[key] != value:
+        raise CompileError(
+            f"card key {key!r} is bound twice with different values: "
+            f"{owners[key]} sets {resolved[key]!r} and {label} sets "
+            f"{value!r}. A canonical key names one number (DESIGN.md §9.1)."
+        )
+    resolved[key] = value
+    owners.setdefault(key, label)
 
 
 # ---------------------------------------------------------------------------
