@@ -74,9 +74,13 @@ class CategoricalPropensity(Component):
             raise GraphError(
                 f"{owner}.initialisation supports only {CFRNET_INITIALISATION!r}"
             )
-        if self.output_parameterisation != "K softmax logits":
+        allowed_outputs = {"K softmax logits"}
+        if self.num_treatments == 2:
+            allowed_outputs.add("two softmax logits")
+        if self.output_parameterisation not in allowed_outputs:
             raise GraphError(
-                f"{owner}.output_parameterisation supports only 'K softmax logits'"
+                f"{owner}.output_parameterisation supports "
+                f"{sorted(allowed_outputs)!r} for K={self.num_treatments}"
             )
         self.logits = nn.Linear(self.representation_dim, self.num_treatments)
         initialise_cfrnet(self)

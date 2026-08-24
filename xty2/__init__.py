@@ -11,14 +11,13 @@ contracts those read (P3, P4).
 `xty2.training` the mixer that weights and logs them (P3) together with the
 `gradient` executor and immutable artifacts (P4), then the ordered program
 runner and EMA teacher parameter set (P8).
-`xty2.components` and `xty2.recipes` contain three reviewed methods: TARNet's
+`xty2.components` and `xty2.recipes` contain five reviewed methods: TARNet's
 fixed-scale treatment heads (P5), CNFlow's conditional spline outcome density
-(P7), and Mean Teacher's EMA propensity consistency (P9). They share the
-categorical propensity, exact missing-treatment marginal objective and
-one-stage executor. `xty2.views` supplies the schema-aware feature masks and
-view-keyed realisations Mean Teacher composes with the P8 teacher parameter
-set. Later recipes remain deliberately absent until their packets. Layout is
-in `docs/DESIGN.md` §10 and `docs/PLAN.md`.
+(P7), Mean Teacher's EMA propensity consistency (P9), cycle-dual's staged
+outcome-dependent posterior, and SSDML's deterministic array ATE action (P11).
+They compose the exact missing-treatment marginal objective, schema-aware
+views, explicit gradient/cross-fit/array-fit executors, and immutable staged
+artifacts. Layout is in `docs/DESIGN.md` §10 and `docs/PLAN.md`.
 """
 
 from importlib.metadata import PackageNotFoundError, version

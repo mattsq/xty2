@@ -11,8 +11,10 @@ from torch import nn
 
 from xty2.components._nn import (
     CFRNET_INITIALISATION,
+    TORCH_LINEAR_INITIALISATION,
     elu_stack,
     initialise_cfrnet,
+    relu_stack,
     validate_dimension,
     validate_dropout,
     validate_widths,
@@ -29,10 +31,16 @@ class _OutcomeMLP(nn.Module):
     """One independent treatment arm."""
 
     def __init__(
-        self, input_dim: int, widths: tuple[int, ...], output_dim: int, dropout: float
+        self,
+        input_dim: int,
+        widths: tuple[int, ...],
+        output_dim: int,
+        dropout: float,
+        activation: str,
     ) -> None:
         super().__init__()
-        self.hidden, hidden_dim = elu_stack(input_dim, widths, dropout=dropout)
+        stack = elu_stack if activation == "elu" else relu_stack
+        self.hidden, hidden_dim = stack(input_dim, widths, dropout=dropout)
         self.output = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, representation: torch.Tensor) -> torch.Tensor:
@@ -101,15 +109,19 @@ class TARNetHead(Component):
         card_hyperparameters(self)
         self.widths = validate_widths(self.widths, owner=owner)
         self.dropout = validate_dropout(self.dropout, owner=owner)
-        if self.activation != "elu":
+        if self.activation not in ("elu", "relu"):
             raise GraphError(
-                f"{owner}.activation supports only 'elu', got {self.activation!r}"
+                f"{owner}.activation supports 'elu' or 'relu', got {self.activation!r}"
             )
         if self.normalisation != "none":
             raise GraphError(f"{owner}.normalisation supports only 'none'")
-        if self.initialisation != CFRNET_INITIALISATION:
+        if self.initialisation not in (
+            CFRNET_INITIALISATION,
+            TORCH_LINEAR_INITIALISATION,
+        ):
             raise GraphError(
-                f"{owner}.initialisation supports only {CFRNET_INITIALISATION!r}"
+                f"{owner}.initialisation supports {CFRNET_INITIALISATION!r} or "
+                f"{TORCH_LINEAR_INITIALISATION!r}, got {self.initialisation!r}"
             )
         expected_output = "K means; fixed Gaussian scale=1.0"
         if self.output_parameterisation != expected_output:
@@ -125,10 +137,12 @@ class TARNetHead(Component):
                 self.widths,
                 output_dim,
                 self.dropout,
+                self.activation,
             )
             for _ in range(self.num_treatments)
         )
-        initialise_cfrnet(self)
+        if self.initialisation == CFRNET_INITIALISATION:
+            initialise_cfrnet(self)
 
     @property
     def widths_description(self) -> object:
