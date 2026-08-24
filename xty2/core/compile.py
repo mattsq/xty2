@@ -29,13 +29,13 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 import torch
 
 from xty2.core.batch import XTYBatch
 from xty2.core.card_keys import card_hyperparameters
-from xty2.core.errors import CompileError, SchemaError, ViewError
+from xty2.core.errors import CompileError, SchemaError, TrainingError, ViewError
 from xty2.core.graph import (
     IDENTITY_VIEW,
     SOURCE_PORTS,
@@ -421,30 +421,32 @@ class CompiledRun:
         teacher objective self-consistency under one parameter set.
         """
         compiled = self.stage(stage) if isinstance(stage, str) else stage
+        if compiled.teacher is None:
+            if teacher_graph is not None:
+                raise TrainingError(
+                    f"stage {compiled.name!r} declares no teacher, but a teacher "
+                    "parameter graph was supplied"
+                )
+        elif teacher_graph is None:
+            raise TrainingError(
+                f"stage {compiled.name!r} declares a teacher, but no teacher "
+                "parameter graph was supplied. Execute the stage through "
+                "run_stage/run_program so its TeacherSpec can build the EMA "
+                "copy (PLAN.md P8)."
+            )
+        elif teacher_graph is self.graph:
+            raise TrainingError(
+                f"stage {compiled.name!r} was given the student graph as its "
+                "teacher. A teacher realisation is a distinct EMA parameter "
+                "set, never an alias of the student."
+            )
+
         values = {}
         batches_by_view: dict[str, XTYBatch] = {IDENTITY_VIEW: batch}
         for forward in compiled.passes:
             graph = self.graph
             if forward.realisation.params == "teacher":
-                if teacher_graph is None:
-                    raise CompileError(
-                        f"stage {compiled.name!r} plans {forward.realisation}, "
-                        "but no teacher parameter graph was supplied. Execute "
-                        "the stage through run_stage/run_program so its "
-                        "TeacherSpec can build the EMA copy (PLAN.md P8)."
-                    )
-                if teacher_graph is self.graph:
-                    raise CompileError(
-                        f"stage {compiled.name!r} was given the student graph "
-                        "as its teacher. A teacher realisation is a distinct EMA "
-                        "parameter set, never an alias of the student."
-                    )
-                graph = teacher_graph
-            elif teacher_graph is not None and compiled.teacher is None:
-                raise CompileError(
-                    f"stage {compiled.name!r} declares no teacher, but a teacher "
-                    "parameter graph was supplied"
-                )
+                graph = cast(ComponentGraph, teacher_graph)
             view_name = forward.realisation.view
             viewed = batches_by_view.get(view_name)
             if viewed is None:

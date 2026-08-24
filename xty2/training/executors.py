@@ -340,6 +340,9 @@ def run_stage(
 ) -> StageResult:
     """Train one stage for `stage.steps` optimiser steps.
 
+    The graph is restored to the state captured by ``compile()`` before the
+    stage starts, so separate calls cannot form an undeclared transition.
+
     Args:
         run: The compiled recipe. It decided the forward passes, the eligible
             rows and the trainable set; nothing here chooses any of them.
@@ -365,6 +368,11 @@ def run_stage(
             "resolves that earlier immutable checkpoint before executing the "
             "stage; run_stage cannot silently ignore the declared transition."
         )
+    _restore_initial_state(
+        run,
+        parameters=run.initial_parameters(),
+        buffers=run.initial_buffers(),
+    )
     return _run_stage(
         run,
         compiled,
@@ -423,17 +431,11 @@ def run_program(
         run_dir.write_plan(run.plan)
 
     for index, compiled in enumerate(run.stages):
-        _copy_named(
-            run.graph.named_parameters(),
-            initial_parameters,
-            what="the recipe's initial parameters",
+        _restore_initial_state(
+            run,
+            parameters=initial_parameters,
+            buffers=initial_buffers,
         )
-        _copy_named(
-            run.graph.named_buffers(),
-            initial_buffers,
-            what="the recipe's initial buffers",
-        )
-        run.graph.zero_grad(set_to_none=True)
         if compiled.initialise_from is not None:
             source = by_name[compiled.initialise_from].checkpoint
             _restore_checkpoint(run, source)
@@ -655,6 +657,26 @@ def _restore_checkpoint(run: CompiledRun, checkpoint: Checkpoint) -> None:
         checkpoint.buffers,
         what=f"checkpoint {checkpoint.stage!r} buffers",
     )
+
+
+def _restore_initial_state(
+    run: CompiledRun,
+    *,
+    parameters: Mapping[str, Tensor],
+    buffers: Mapping[str, Tensor],
+) -> None:
+    """Restore the graph snapshot captured by ``compile()``."""
+    _copy_named(
+        run.graph.named_parameters(),
+        parameters,
+        what="the recipe's initial parameters",
+    )
+    _copy_named(
+        run.graph.named_buffers(),
+        buffers,
+        what="the recipe's initial buffers",
+    )
+    run.graph.zero_grad(set_to_none=True)
 
 
 def _component_parameters(

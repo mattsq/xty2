@@ -148,6 +148,18 @@ def test_repeated_program_runs_reset_to_the_state_captured_by_compile() -> None:
             assert torch.equal(value, second_stage.checkpoint.parameters[name])
 
 
+def test_repeated_standalone_stage_runs_reset_to_compile_time_state() -> None:
+    torch.manual_seed(31)
+    run = compile(_recipe())
+    batch = make_batch()
+    first = run_stage(run, "base", [batch], seed=13)
+    second = run_stage(run, "base", [batch], seed=13)
+
+    assert first.trace == second.trace
+    for name, value in first.checkpoint.parameters.items():
+        assert torch.equal(value, second.checkpoint.parameters[name])
+
+
 def test_a_later_stage_cannot_mutate_an_earlier_checkpoint() -> None:
     torch.manual_seed(23)
     result = run_program(compile(_recipe()), _sources(), seed=3)

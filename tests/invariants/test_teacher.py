@@ -23,6 +23,7 @@ from xty2.core import (
     Realisation,
     Recipe,
     TeacherSpec,
+    TrainingError,
     Weighted,
     compile,
     treatment_distribution,
@@ -245,6 +246,30 @@ def test_teacher_parameters_are_isolated_from_autograd() -> None:
         state, Port.T_GIVEN_X, TEACHER, objective="teacher_isolation_test"
     )
     assert not distribution.probs.requires_grad
+
+
+def test_missing_teacher_graph_is_rejected_before_the_student_forward() -> None:
+    run = compile(_recipe(teacher=_teacher_spec()))
+    encoder = cast(BufferedEncoder, run.graph["encoder"])
+    running = encoder.running.clone()
+    batches = encoder.batches.clone()
+
+    with pytest.raises(TrainingError, match="no teacher parameter graph"):
+        run.state("fit", make_batch())
+
+    assert torch.equal(encoder.running, running)
+    assert torch.equal(encoder.batches, batches)
+
+
+def test_invalid_teacher_graphs_are_runtime_training_errors() -> None:
+    teacher_run = compile(_recipe(teacher=_teacher_spec()))
+    batch = make_batch()
+    with pytest.raises(TrainingError, match="student graph"):
+        teacher_run.state("fit", batch, teacher_graph=teacher_run.graph)
+
+    plain_run = compile(_recipe())
+    with pytest.raises(TrainingError, match="declares no teacher"):
+        plain_run.state("fit", batch, teacher_graph=teacher_run.graph)
 
 
 def test_teacher_parameters_follow_the_post_step_student_by_ema() -> None:
