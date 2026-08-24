@@ -1,6 +1,6 @@
 # Recipe spec card: cnflow
 
-**Status:** `smoke-passing`
+**Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 ---
@@ -257,6 +257,10 @@ an external `BatchSource` and cannot honestly claim to enforce them.
 | 7 | Approximate `mean` with 100 fixed antithetic base draws rather than 100 fresh samples per prediction. | Candidate-treatment means must agree column-wise and evaluation must be reproducible. | Reduces Monte Carlo variance between calls; a small deterministic integration error remains. |
 | 8 | Do not expose the old likelihood-only `predict_treatment_proba(x,y)` as `T_GIVEN_XY`. | That quantity omits the treatment prior, and no P7 objective consumes a posterior. The real posterior component first has a consumer in P11. | None for the P7 graph or losses. |
 
+### Tier 2 outcome
+
+On 2026-08-24, commit `d060df351f2fe8bac6d951c3757506c684d8b408` produced a `deviating` result: This is the predeclared project-local conditional-density validation target. Matching it validates the CNFlow recipe's limited claim and is not a reproduction of Durkan et al. Failed target(s): paired_d_conditional_NLL was 1.88504 +/- 0.225 nat/row against mean <= -0.1 nat/row.
+
 ## 6. Reproduction target
 
 There is no paper-level `cnflow` result to reproduce. Substituting an RQ-NSF
@@ -409,7 +413,7 @@ does not add one: that is a fidelity-system decision, not flow implementation.
 
 | Date | Commit | Metric | Value +/- stderr | Within tolerance? |
 |---|---|---|---|---|
-| | | | | |
+| 2026-08-24 | `d060df351f2fe8bac6d951c3757506c684d8b408` | paired_d_conditional_NLL<br>paired_d_sqrt_PEHE | 1.88504 +/- 0.225 nat/row<br>-0.226847 +/- 0.0637 outcome units | no |
 
 ### 6.4 P7 and Gate 1 acceptance
 
