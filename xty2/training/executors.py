@@ -519,14 +519,11 @@ def run_stage(
             "run_program so its source checkpoint and artifact edge are "
             "resolved before prediction."
         )
-    prediction_batches = (
-        _materialise_batches(batches, compiled)
-        if isinstance(compiled.action, PseudoLabelAction)
-        else None
-    )
-    fit_batches: BatchSource = (
-        prediction_batches if prediction_batches is not None else batches
-    )
+    prediction_batches: list[XTYBatch] | None = None
+    fit_batches: BatchSource = batches
+    if isinstance(compiled.action, PseudoLabelAction):
+        prediction_batches = []
+        fit_batches = _capture_step_batches(batches, compiled, prediction_batches)
     _restore_initial_state(
         run,
         parameters=run.initial_parameters(),
@@ -745,16 +742,19 @@ def _run_gradient_or_action(
     source_checkpoint: Checkpoint | None,
 ) -> StageResult:
     """Execute a normal fit, optionally followed by a pseudo-label action."""
-    materialised = (
-        _materialise_batches(batches, compiled)
-        if isinstance(compiled.action, PseudoLabelAction)
-        else None
-    )
+    materialised: list[XTYBatch] | None = None
+    fit_batches: BatchSource = batches
+    if isinstance(compiled.action, PseudoLabelAction):
+        if compiled.objectives:
+            materialised = []
+            fit_batches = _capture_step_batches(batches, compiled, materialised)
+        else:
+            materialised = _materialise_batches(batches, compiled)
     if compiled.objectives:
         result = _run_stage(
             run,
             compiled,
-            materialised if materialised is not None else batches,
+            fit_batches,
             seed=seed,
             run_dir=run_dir,
             probe=probe,
@@ -1081,6 +1081,13 @@ def _apply_inputs(
 def _materialise_batches(
     batches: BatchSource, compiled: CompiledStage
 ) -> list[XTYBatch]:
+    """Collect a source whose executor contract explicitly requires finiteness.
+
+    Array-fit, cross-fit and action-only prediction operate on one finite
+    population. Gradient fitting is different: its general ``BatchSource``
+    may be cycling or unbounded, so a fitting gradient action captures batches
+    as the seeded optimiser loop consumes them instead.
+    """
     materialised = list(batches)
     if not materialised:
         raise TrainingError(f"stage {compiled.name!r} received no batches")
@@ -1091,6 +1098,24 @@ def _materialise_batches(
                 "expected XTYBatch"
             )
     return materialised
+
+
+def _capture_step_batches(
+    batches: BatchSource,
+    compiled: CompiledStage,
+    captured: list[XTYBatch],
+) -> Iterator[XTYBatch]:
+    """Yield exactly ``steps`` batches and retain immutable prediction copies.
+
+    This wrapper is consumed inside ``_run_stage`` after its torch seed is set,
+    preserving the ordinary gradient executor's stochastic batch-source
+    semantics. It never asks an unbounded source for a batch beyond the fit.
+    """
+    source = iter(batches)
+    for step in range(compiled.steps):
+        batch = _next_batch(source, step, compiled)
+        captured.append(batch.clone())
+        yield batch
 
 
 def _combine_batches(batches: Sequence[XTYBatch]) -> XTYBatch:

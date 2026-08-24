@@ -696,6 +696,14 @@ def _check_static_leakage(recipe: Recipe, stages: tuple[CompiledStage, ...]) -> 
                 continue  # Program validation already prevents this.
             if not source.action_uses_y:
                 continue
+            if source.action_rows is not None and any(
+                populations_are_disjoint(rows, "t_missing")
+                for rows in source.action_rows
+            ):
+                # Labels emitted only for already-observed treatments never
+                # replace the arbitrary placeholder of an originally missing
+                # row, so the consumer cannot form the circular staged fit.
+                continue
             if source.executor == "cross_fit":
                 continue
             if recipe.purpose == "predictive" and consumer.stage.allow_leakage:

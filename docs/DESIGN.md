@@ -656,7 +656,10 @@ stage may predict from its named initial checkpoint. At consumption, a matching
 marks that value available through `t_observed`; the source batch and its
 missingness mask remain bit-identical. Consequently an objective whose
 effective §7.0 scope still requires `t_missing` cannot train on joined labels,
-which the static leakage check accounts for.
+which the static leakage check accounts for. A fitting gradient action captures
+exactly the `steps` batches that its optimiser consumes, so a cycling training
+source remains valid and is never exhausted merely to make predictions. An
+action-only prediction source is finite by contract.
 
 `array_fit` is the deliberately narrow functional seam for non-autograd
 estimators: one finite row-keyed batch plus the resolved `RowIndex` and seed go

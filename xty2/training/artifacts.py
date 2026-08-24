@@ -444,13 +444,20 @@ class PseudoLabels:
         if type(used_y) is not bool:
             raise ArtifactError(f"derived used_y must be bool, got {used_y!r}")
 
+        # The side table is keyed by row id, so store it in canonical sorted
+        # order once. ``apply_to`` can then use ``searchsorted`` on every
+        # consuming batch without rebuilding a Python lookup table.
+        row_values = row_id.detach().cpu().clone()
+        fold_values = predicted_by_fold.detach().cpu().clone()
+        label_values = labels.detach().cpu().clone()
+        order = torch.argsort(row_values)
         self._source_stage = source_stage
         self._checkpoints: Mapping[int, Checkpoint] = MappingProxyType(
             dict(sorted(checkpoints.items()))
         )
-        self._predicted_by_fold = predicted_by_fold.detach().cpu().clone()
-        self._row_id = row_id.detach().cpu().clone()
-        self._labels = labels.detach().cpu().clone()
+        self._predicted_by_fold = fold_values.index_select(0, order)
+        self._row_id = row_values.index_select(0, order)
+        self._labels = label_values.index_select(0, order)
         self._used_y = used_y
 
     @classmethod
@@ -635,31 +642,44 @@ class PseudoLabels:
 
     def apply_to(self, batch: XTYBatch, *, treatment_cardinality: int) -> XTYBatch:
         """Functionally join the hard-label side table by ``row_id``."""
-        lookup = {
-            int(row): int(label)
-            for row, label in zip(
-                self._row_id.tolist(), self._labels.tolist(), strict=True
-            )
-        }
         treatment = batch.t.clone()
         observed = batch.t_observed.clone()
-        for index, row in enumerate(batch.row_id.tolist()):
-            label = lookup.get(int(row))
-            if label is None:
-                continue
-            if not 0 <= label < treatment_cardinality:
-                raise ArtifactError(
-                    f"pseudo-label {label} for row {row} is outside [0, "
-                    f"{treatment_cardinality})"
-                )
-            if bool(observed[index]) and int(treatment[index]) != label:
-                raise ArtifactError(
-                    f"pseudo-label {label} for row {row} conflicts with its "
-                    f"observed treatment {int(treatment[index])}; artifact "
-                    "inputs never overwrite observed data"
-                )
-            treatment[index] = label
-            observed[index] = True
+        if self._row_id.numel() == 0 or batch.batch_size == 0:
+            return batch.replace(t=treatment, t_observed=observed)
+
+        source_rows = self._row_id.to(device=batch.device)
+        source_labels = self._labels.to(device=batch.device)
+        positions = torch.searchsorted(source_rows, batch.row_id)
+        safe_positions = positions.clamp(max=source_rows.numel() - 1)
+        joined_labels = source_labels.index_select(0, safe_positions)
+        matched = (positions < source_rows.numel()) & (
+            source_rows.index_select(0, safe_positions) == batch.row_id
+        )
+
+        invalid = matched & (
+            (joined_labels < 0) | (joined_labels >= treatment_cardinality)
+        )
+        if bool(invalid.any()):
+            index = int(torch.nonzero(invalid, as_tuple=False)[0, 0].item())
+            raise ArtifactError(
+                f"pseudo-label {int(joined_labels[index])} for row "
+                f"{int(batch.row_id[index])} is outside [0, "
+                f"{treatment_cardinality})"
+            )
+
+        conflicts = matched & observed & (treatment != joined_labels)
+        if bool(conflicts.any()):
+            index = int(torch.nonzero(conflicts, as_tuple=False)[0, 0].item())
+            raise ArtifactError(
+                f"pseudo-label {int(joined_labels[index])} for row "
+                f"{int(batch.row_id[index])} conflicts with its observed "
+                f"treatment {int(treatment[index])}; artifact inputs never "
+                "overwrite observed data"
+            )
+
+        write = matched & ~observed
+        treatment[write] = joined_labels[write]
+        observed[write] = True
         return batch.replace(t=treatment, t_observed=observed)
 
     def describe(self) -> str:

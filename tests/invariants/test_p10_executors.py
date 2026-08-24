@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -129,6 +129,7 @@ def _p10_recipe(
     purpose: Purpose = "causal",
     allow_leakage: bool = False,
     source_port: Port = Port.T_GIVEN_XY,
+    action_rows: Rows = "t_missing",
 ) -> Recipe:
     source_trainable: tuple[str, ...]
     if source_port == Port.T_GIVEN_XY:
@@ -157,7 +158,7 @@ def _p10_recipe(
                     name="labels",
                     objectives=(source_objective,),
                     trainable=source_trainable,
-                    action=PseudoLabelAction(port=source_port, rows="t_missing"),
+                    action=PseudoLabelAction(port=source_port, rows=action_rows),
                     executor=executor,
                     steps=1,
                 ),
@@ -292,6 +293,16 @@ def test_an_outcome_term_that_excludes_joined_rows_is_not_rejected() -> None:
     assert compile(recipe).stage("outcome").objectives[0].rows == ("t_missing",)
 
 
+def test_labels_restricted_to_observed_treatments_do_not_trigger_leakage() -> None:
+    run = compile(
+        _p10_recipe(
+            executor="gradient",
+            action_rows="t_observed",
+        )
+    )
+    assert run.stage("labels").action_rows == ("t_observed",)
+
+
 # ---------------------------------------------------------------------------
 # Explicit array fitting
 # ---------------------------------------------------------------------------
@@ -353,6 +364,64 @@ def test_cross_fit_earns_out_of_fold_provenance_from_actual_rows() -> None:
         labels.row_id.tolist(), labels.predicted_by_fold.tolist(), strict=True
     ):
         assert row not in result.fold_checkpoints[fold].trained_on_row_ids.tolist()
+
+
+def test_gradient_actions_consume_only_the_declared_step_batches() -> None:
+    run = compile(
+        _p10_recipe(
+            executor="gradient",
+            purpose="predictive",
+            allow_leakage=True,
+        )
+    )
+    batch = make_batch()
+
+    def source() -> Iterator[XTYBatch]:
+        yield batch.replace(x=torch.randn_like(batch.x))
+        raise AssertionError("the executor consumed beyond stage.steps")
+
+    first = run_stage(run, "labels", source(), seed=27)
+    second = run_stage(run, "labels", source(), seed=27)
+    assert first.steps == 1
+    assert first.trace == second.trace
+    assert first.pseudo_labels is not None
+    assert second.pseudo_labels is not None
+    assert torch.equal(first.pseudo_labels.labels, second.pseudo_labels.labels)
+
+
+def test_pseudo_label_join_matches_shuffled_rows_without_overwriting_observed() -> None:
+    run = compile(_p10_recipe(executor="cross_fit"))
+    result = run_cross_fit(
+        run,
+        "labels",
+        [_fold_batch()],
+        seed=28,
+    )
+    labels = result.pseudo_labels
+    assert labels is not None
+    batch = _fold_batch()
+    order = torch.tensor([6, 0, 5, 1, 4, 2, 3])
+    shuffled = XTYBatch(
+        x=batch.x[order],
+        t=batch.t[order],
+        y=batch.y[order],
+        t_observed=batch.t_observed[order],
+        y_observed=batch.y_observed[order],
+        row_id=batch.row_id[order],
+        fold_id=batch.fold_id[order] if batch.fold_id is not None else None,
+        weight=batch.weight[order] if batch.weight is not None else None,
+    )
+    joined = labels.apply_to(
+        shuffled,
+        treatment_cardinality=run.recipe.schema.treatment_cardinality,
+    )
+    lookup = dict(zip(labels.row_id.tolist(), labels.labels.tolist(), strict=True))
+    for index, row in enumerate(shuffled.row_id.tolist()):
+        if bool(shuffled.t_observed[index]):
+            assert joined.t[index] == shuffled.t[index]
+        else:
+            assert int(joined.t[index]) == lookup[row]
+            assert bool(joined.t_observed[index])
 
 
 def test_a_program_joins_labels_without_mutating_the_source_dataset() -> None:
