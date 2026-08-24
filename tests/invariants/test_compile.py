@@ -353,6 +353,13 @@ def test_the_plan_carries_the_resolved_hyperparameters() -> None:
         # of the six card keys are rendered rather than structured, because
         # this dict is what a reviewer diffs against a card's §4 YAML.
         "gradients.gradient_clipping": "none",
+        # Derived from every objective's `detaches`, not bound by one: the key
+        # is per objective, and "none" is a value the card owes rather than an
+        # absence (FIDELITY.md §2).
+        "gradients.stop_gradients": {
+            "fit.outcome_nll": "none",
+            "fit.treatment_nll": "none",
+        },
         "optimisation.lr": 0.05,
         "optimisation.lr_schedule": "constant 1.0",
         "optimisation.optimiser": "sgd(momentum=0.0, nesterov=False)",

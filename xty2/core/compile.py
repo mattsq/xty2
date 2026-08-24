@@ -637,6 +637,13 @@ def _hyperparameters(
             )
     for key, value in _loss_hyperparameters(stages).items():
         _merge_value(resolved, owners, key, value, "the program's weighted terms")
+    _merge_value(
+        resolved,
+        owners,
+        "gradients.stop_gradients",
+        _stop_gradients(stages),
+        "the program's objectives",
+    )
     return resolved
 
 
@@ -676,6 +683,38 @@ def _loss_hyperparameters(
         "losses.schedules": schedules,
         "losses.weights": weights,
     }
+
+
+def _stop_gradients(stages: tuple[CompiledStage, ...]) -> dict[str, Any]:
+    """`gradients.stop_gradients`, derived from every objective's `detaches`.
+
+    Derived rather than bound, for the same reason the four `losses.*` keys
+    are: the key is per objective and a canonical key names one value, so
+    aggregating over the program is what makes it one. There is also nothing
+    for a recipe to declare — `detaches` is already the declaration, and
+    `DESIGN.md` §4 requires it to be derived from the card field that governs
+    it (`gradients.marginal_nll_grad_path`) rather than stated twice. Binding
+    it a third time is how the plan and the arithmetic come to disagree.
+
+    `FIDELITY.md` §2 says of this key that `"none"` must be explicit, so a
+    term that detaches nothing reports `'none'` rather than being absent: a
+    key missing from the mapping would be indistinguishable from an objective
+    the stage does not have.
+    """
+    declared: dict[str, Any] = {}
+    for stage in stages:
+        for objective in stage.objectives:
+            detaches = objective.objective.detaches
+            declared[f"{stage.name}.{objective.name}"] = (
+                ", ".join(
+                    f"{port} @ {realisation}"
+                    for port, realisation in sorted(
+                        detaches, key=lambda pair: (str(pair[0]), pair[1])
+                    )
+                )
+                or "none"
+            )
+    return declared
 
 
 def _merge(

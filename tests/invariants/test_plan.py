@@ -72,6 +72,9 @@ stage fit
 hyperparameters
   architecture.widths_depths         = 5
   gradients.gradient_clipping        = 'none'
+  gradients.stop_gradients
+    fit.outcome_nll   = 'none'
+    fit.treatment_nll = 'none'
   losses.eligible_rows
     fit.outcome_nll   = 'y_observed'
     fit.treatment_nll = 't_observed'
@@ -133,6 +136,9 @@ stage infer
 hyperparameters
   architecture.widths_depths         = 5
   gradients.gradient_clipping        = 'none'
+  gradients.stop_gradients
+    infer.posterior_kl  = 'none'
+    infer.treatment_nll = 'none'
   losses.eligible_rows
     infer.posterior_kl  = 't_observed'
     infer.treatment_nll = 't_observed'
