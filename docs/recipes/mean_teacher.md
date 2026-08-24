@@ -1,6 +1,6 @@
 # Recipe spec card: mean_teacher
 
-**Status:** `implemented`
+**Status:** `smoke-passing`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 ---
