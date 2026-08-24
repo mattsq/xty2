@@ -19,21 +19,24 @@ The static half of the leakage rule is not here yet: it needs artifacts and
 executors to reason about (§8.7, P10). `ComponentGraph` already derives what it
 will ask for — which components transitively read `Y_RAW` — and the plan prints
 it. Views are validated here against the resolved schema before any stage is
-planned (P6, §8.5).
+planned (P6, §8.5). A teacher realisation is stage-local: it exists exactly
+when that stage declares an EMA teacher, and its required ports are always
+detached because the teacher parameter set is structurally gradient-free (P8).
 """
 
 from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from dataclasses import dataclass, field
+from typing import Any, Protocol, cast, runtime_checkable
+
+import torch
 
 from xty2.core.batch import XTYBatch
 from xty2.core.card_keys import card_hyperparameters
-from xty2.core.errors import CompileError, SchemaError, ViewError
+from xty2.core.errors import CompileError, SchemaError, TrainingError, ViewError
 from xty2.core.graph import (
-    DEFAULT,
     IDENTITY_VIEW,
     SOURCE_PORTS,
     ComponentGraph,
@@ -43,7 +46,14 @@ from xty2.core.graph import (
 from xty2.core.loss import Reduction
 from xty2.core.optimisation import OptimiserSpec
 from xty2.core.ports import Port
-from xty2.core.recipe import Objective, Recipe, Stage, Weighted, validate_rows
+from xty2.core.recipe import (
+    Objective,
+    Recipe,
+    Stage,
+    TeacherSpec,
+    Weighted,
+    validate_rows,
+)
 from xty2.core.rows import Rows, populations_are_disjoint
 from xty2.core.schedules import Schedule
 from xty2.core.views import ViewSpec
@@ -136,6 +146,16 @@ class CompiledStage:
     @property
     def trainable(self) -> tuple[str, ...]:
         return self.stage.trainable
+
+    @property
+    def initialise_from(self) -> str | None:
+        """The earlier checkpoint this stage starts from, if any."""
+        return self.stage.initialise_from
+
+    @property
+    def teacher(self) -> TeacherSpec | None:
+        """The stage-local EMA teacher declaration, if any."""
+        return self.stage.teacher
 
     @property
     def optimiser(self) -> OptimiserSpec:
@@ -274,6 +294,12 @@ class ExecutionPlan:
         lines = [
             f"stage {compiled.name}",
             f"  rows: {compiled.stage.rows}",
+        ]
+        if compiled.initialise_from is not None:
+            lines.append(f"  initialise from: {compiled.initialise_from}")
+        if compiled.teacher is not None:
+            lines.append(f"  teacher: {compiled.teacher.describe()}")
+        lines += [
             f"  steps: {compiled.steps}",
             "  optimisation",
             *(f"    {line}" for line in compiled.optimiser.describe_lines()),
@@ -346,6 +372,12 @@ class CompiledRun:
     recipe: Recipe
     stages: tuple[CompiledStage, ...]
     plan: ExecutionPlan
+    _initial_parameters: tuple[tuple[str, torch.Tensor], ...] = field(
+        repr=False, compare=False
+    )
+    _initial_buffers: tuple[tuple[str, torch.Tensor], ...] = field(
+        repr=False, compare=False
+    )
 
     @property
     def graph(self) -> ComponentGraph:
@@ -361,29 +393,60 @@ class CompiledRun:
             f"{[stage.name for stage in self.stages]!r}"
         )
 
+    def initial_parameters(self) -> dict[str, torch.Tensor]:
+        """Fresh clones of the parameter values captured by ``compile()``."""
+        return {
+            name: value.detach().clone() for name, value in self._initial_parameters
+        }
+
+    def initial_buffers(self) -> dict[str, torch.Tensor]:
+        """Fresh clones of the buffer values captured by ``compile()``."""
+        return {name: value.detach().clone() for name, value in self._initial_buffers}
+
     def state(
         self,
         stage: str | CompiledStage,
         batch: XTYBatch,
         *,
         rng_key: int = 0,
+        teacher_graph: ComponentGraph | None = None,
     ) -> State:
         """Run one stage's planned forward passes over `batch`.
 
-        This is the whole of what an executor (P4) needs from the graph: the
+        This is the whole of what an executor needs from the graph: the
         compiler decided which realisations exist and which components each
-        one runs, so nothing here chooses anything.
+        one runs, so nothing here chooses anything. Teacher passes use the
+        stage-local EMA graph supplied by the executor and run under
+        ``torch.no_grad()``; silently falling back to the student would make a
+        teacher objective self-consistency under one parameter set.
         """
         compiled = self.stage(stage) if isinstance(stage, str) else stage
+        if compiled.teacher is None:
+            if teacher_graph is not None:
+                raise TrainingError(
+                    f"stage {compiled.name!r} declares no teacher, but a teacher "
+                    "parameter graph was supplied"
+                )
+        elif teacher_graph is None:
+            raise TrainingError(
+                f"stage {compiled.name!r} declares a teacher, but no teacher "
+                "parameter graph was supplied. Execute the stage through "
+                "run_stage/run_program so its TeacherSpec can build the EMA "
+                "copy (PLAN.md P8)."
+            )
+        elif teacher_graph is self.graph:
+            raise TrainingError(
+                f"stage {compiled.name!r} was given the student graph as its "
+                "teacher. A teacher realisation is a distinct EMA parameter "
+                "set, never an alias of the student."
+            )
+
         values = {}
         batches_by_view: dict[str, XTYBatch] = {IDENTITY_VIEW: batch}
         for forward in compiled.passes:
-            if forward.realisation.params != "student":
-                raise CompileError(
-                    f"stage {compiled.name!r} plans {forward.realisation}, which "
-                    "needs a teacher parameter set (DESIGN.md §7); teacher "
-                    "parameters arrive with P8"
-                )
+            graph = self.graph
+            if forward.realisation.params == "teacher":
+                graph = cast(ComponentGraph, teacher_graph)
             view_name = forward.realisation.view
             viewed = batches_by_view.get(view_name)
             if viewed is None:
@@ -391,9 +454,15 @@ class CompiledRun:
                     batch, self.recipe.schema, rng_key=rng_key
                 )
                 batches_by_view[view_name] = viewed
-            values[forward.realisation] = self.graph.evaluate(
-                viewed, schema=self.recipe.schema, only=forward.components
-            )
+            if forward.realisation.params == "teacher":
+                with torch.no_grad():
+                    values[forward.realisation] = graph.evaluate(
+                        viewed, schema=self.recipe.schema, only=forward.components
+                    )
+            else:
+                values[forward.realisation] = graph.evaluate(
+                    viewed, schema=self.recipe.schema, only=forward.components
+                )
         return State(values)
 
 
@@ -423,9 +492,9 @@ def compile(recipe: Recipe) -> CompiledRun:
     """
     graph = recipe.system
     views = _validated_views(recipe)
-    realisable = _realisable(views)
     stages = tuple(
-        _compile_stage(recipe, stage, realisable) for stage in recipe.program
+        _compile_stage(recipe, stage, _realisable(views, stage))
+        for stage in recipe.program
     )
     plan = ExecutionPlan(
         recipe=recipe.name,
@@ -438,7 +507,20 @@ def compile(recipe: Recipe) -> CompiledRun:
         stages=stages,
         hyperparameters=_hyperparameters(recipe, stages),
     )
-    return CompiledRun(recipe=recipe, stages=stages, plan=plan)
+    return CompiledRun(
+        recipe=recipe,
+        stages=stages,
+        plan=plan,
+        _initial_parameters=_snapshot(graph.named_parameters()),
+        _initial_buffers=_snapshot(graph.named_buffers()),
+    )
+
+
+def _snapshot(
+    tensors: Iterable[tuple[str, torch.Tensor]],
+) -> tuple[tuple[str, torch.Tensor], ...]:
+    """Detach and clone named model state for repeatable program initialisation."""
+    return tuple((name, value.detach().clone()) for name, value in tensors)
 
 
 def _validated_views(recipe: Recipe) -> tuple[ViewSpec, ...]:
@@ -454,14 +536,18 @@ def _validated_views(recipe: Recipe) -> tuple[ViewSpec, ...]:
     return tuple(recipe.views)
 
 
-def _realisable(views: tuple[ViewSpec, ...]) -> frozenset[Realisation]:
+def _realisable(views: tuple[ViewSpec, ...], stage: Stage) -> frozenset[Realisation]:
     """The realisations this recipe can actually produce.
 
-    Views make student realisations available now. ``params="teacher"`` still
-    names a stage-built EMA copy (§7, P8), so asking for one remains
-    unsatisfiable rather than silently reading the student.
+    Every declared view is available under student parameters. The same views
+    are available under teacher parameters exactly when this stage declares a
+    teacher; teacher availability does not leak from an earlier stage.
     """
-    return frozenset({DEFAULT, *(Realisation(view=view.name) for view in views)})
+    view_names = (IDENTITY_VIEW, *(view.name for view in views))
+    realised = {Realisation(view=view) for view in view_names}
+    if stage.teacher is not None:
+        realised.update(Realisation(view=view, params="teacher") for view in view_names)
+    return frozenset(realised)
 
 
 def _compile_stage(
@@ -502,6 +588,7 @@ def _compile_stage(
         for realisation, ports in sorted(demanded.items())
     )
     _check_trainable(graph, stage, passes, trained, where)
+    _check_teacher_use(stage, passes, where)
     _check_weight_decay_scope(stage, where)
     return CompiledStage(stage=stage, passes=passes, objectives=tuple(objectives))
 
@@ -586,6 +673,20 @@ def _check_detaches(
             f"{stray!r}, which it does not require. `detaches` names the subset "
             "of `requires` a term reads without training through (DESIGN.md §4)."
         )
+    teacher_reads = frozenset(
+        requirement for requirement in requires if requirement[1].params == "teacher"
+    )
+    undetached_teacher = sorted(
+        f"{port} @ {realisation}" for port, realisation in teacher_reads - detaches
+    )
+    if undetached_teacher:
+        raise CompileError(
+            f"objective {objective.name!r} in {where} reads teacher target(s) "
+            f"{undetached_teacher!r} without declaring them in `detaches`. "
+            "Teacher parameters are structurally requires_grad=False, so the "
+            "objective must make that stop-gradient visible to the compiler "
+            "and execution plan (FIDELITY.md Tier 0)."
+        )
     trained = requires - detaches
     if requires and not trained:
         raise CompileError(
@@ -595,6 +696,21 @@ def _check_detaches(
             "objective (DESIGN.md §4)."
         )
     return trained
+
+
+def _check_teacher_use(
+    stage: Stage, passes: tuple[ForwardPass, ...], where: str
+) -> None:
+    """Reject a configured teacher that no active objective ever evaluates."""
+    if stage.teacher is None:
+        return
+    if any(forward.realisation.params == "teacher" for forward in passes):
+        return
+    raise CompileError(
+        f"{where} configures a TeacherSpec but no active objective requires a "
+        "teacher realisation. Maintaining an unused EMA copy would be a silent "
+        "no-op; remove the teacher or require params='teacher' explicitly."
+    )
 
 
 def _check_port(
@@ -721,10 +837,12 @@ def _hyperparameters(
 
     Everything that can carry card keys contributes: components, stages and
     objectives. Architecture keys are component-valued by construction and
-    therefore aggregate as `{component_name: value}`; other owners binding one
-    key to different values are rejected. The component namespace is what lets
-    a reviewer see three different width/depth declarations without a
-    last-write-wins collapse.
+    therefore aggregate as `{component_name: value}`. In a multi-stage program,
+    stage and optimiser bindings aggregate by stage, and objective bindings by
+    ``<stage>.<objective>``. A program is allowed to change learning rate,
+    duration or teacher policy between stages; collapsing those values would
+    either reject a valid program or hide the transition from the plan. The
+    single-stage scalar surface remains unchanged for recipe-card compatibility.
 
     The four `losses.*` keys are *derived* from the program rather than bound
     by a `CARD_KEYS` declaration, for the reason `FIDELITY.md` §2 annotates
@@ -737,20 +855,38 @@ def _hyperparameters(
     owners: dict[str, str] = {}
     for component in recipe.system.components:
         _merge_component(resolved, owners, component)
+    scoped = len(recipe.program) > 1
     for stage in recipe.program:
-        _merge(resolved, owners, stage, f"stage {stage.name!r}")
-        _merge(
+        stage_label = f"stage {stage.name!r}"
+        _merge_owner(
+            resolved,
+            owners,
+            stage,
+            stage_label,
+            scope=stage.name if scoped else None,
+        )
+        _merge_owner(
             resolved,
             owners,
             stage.optimiser,
-            f"the optimiser of stage {stage.name!r}",
+            f"the optimiser of {stage_label}",
+            scope=stage.name if scoped else None,
         )
+        if stage.teacher is not None:
+            _merge_owner(
+                resolved,
+                owners,
+                stage.teacher,
+                f"the teacher of {stage_label}",
+                scope=stage.name if scoped else None,
+            )
         for weighted in stage.objectives:
-            _merge(
+            _merge_owner(
                 resolved,
                 owners,
                 weighted.objective,
                 f"objective {weighted.name!r} in stage {stage.name!r}",
+                scope=f"{stage.name}.{weighted.name}" if scoped else None,
             )
     for key, value in _loss_hyperparameters(stages).items():
         _merge_value(resolved, owners, key, value, "the program's weighted terms")
@@ -843,11 +979,49 @@ def _gradient_hyperparameters(
     return {"gradients.stop_gradients": paths}
 
 
-def _merge(
-    resolved: dict[str, Any], owners: dict[str, str], owner: object, label: str
+def _merge_owner(
+    resolved: dict[str, Any],
+    owners: dict[str, str],
+    owner: object,
+    label: str,
+    *,
+    scope: str | None,
 ) -> None:
     for key, value in card_hyperparameters(owner).items():
-        _merge_value(resolved, owners, key, value, label)
+        if scope is None:
+            _merge_value(resolved, owners, key, value, label)
+        else:
+            _merge_scoped_value(resolved, owners, key, scope, value, label)
+
+
+def _merge_scoped_value(
+    resolved: dict[str, Any],
+    owners: dict[str, str],
+    key: str,
+    scope: str,
+    value: object,
+    label: str,
+) -> None:
+    """Merge a stage/objective-valued binding without collapsing its scope."""
+    existing = resolved.get(key)
+    if existing is None:
+        values: dict[str, Any] = {}
+        resolved[key] = values
+    elif isinstance(existing, dict):
+        values = existing
+    else:
+        raise CompileError(
+            f"card key {key!r} is program-scoped, but {owners[key]} already "
+            f"set the scalar {existing!r}. Multi-stage bindings are keyed by "
+            "stage so the plan cannot hide a transition."
+        )
+    if scope in values and values[scope] != value:
+        raise CompileError(
+            f"card key {key!r} is bound twice with different values in "
+            f"scope {scope!r}: {values[scope]!r} and {value!r} from {label}."
+        )
+    values[scope] = value
+    owners.setdefault(key, label)
 
 
 def _merge_value(

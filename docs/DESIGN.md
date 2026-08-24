@@ -557,16 +557,24 @@ weighted losses.
 @dataclass(frozen=True)
 class Stage:
     name: str
-    objectives: list[Weighted] | None = None
-    action: StageAction | None = None          # non-gradient stages
-    trainable: list[str] = ()                  # component names
+    objectives: tuple[Weighted, ...] = ()
+    trainable: tuple[str, ...] = ()             # component names
     rows: Rows = "all"                         # stage-level row scope (§7.0)
     initialise_from: str | None = None         # a previous stage's checkpoint
-    inputs: list[str] = ()                     # artifacts from previous stages
-    executor: Literal["gradient", "array_fit", "cross_fit"] = "gradient"
+    teacher: TeacherSpec | None = None          # stage-local EMA parameter set
     optimiser: OptimiserSpec = REQUIRED        # §9.1 sentinel, not a default
     steps: int = REQUIRED                      # optimiser steps, never epochs
-    allow_leakage: bool = False                # opt out of §7.2, predictive only
+
+@dataclass(frozen=True)
+class TeacherSpec:
+    decay: float = REQUIRED
+    applies_to_buffers: bool = REQUIRED
+    train_mode: bool = REQUIRED
+    requires_grad: Literal[False] = REQUIRED
+
+@dataclass(frozen=True)
+class Program:
+    stages: tuple[Stage, ...]                  # ordered; names are unique
 ```
 
 `optimiser` and `steps` are written here as `REQUIRED` rather than `None`,
@@ -606,14 +614,50 @@ from the data in a particular batch remains a runtime `n = 0`, logged as
 coverage.
 
 `Program` is an **ordered list** of stages. Not a DAG. Stages run in sequence;
-`initialise_from` and `inputs` reference earlier stages by name. This covers the
-full Beyer-style recipe — representation pretraining → joint fit → build EMA
-teacher → generate pseudo-labels → refit → targeted causal fit — and we will not
-build a scheduler until a fifth model genuinely needs one.
+`initialise_from` references an earlier stage by name and cannot point forward
+or to itself. Each gradient stage begins from the recipe's initial graph state,
+then overlays exactly the parameters and buffers in that named immutable
+checkpoint. There is no implicit "whatever the previous stage left in memory"
+transition: it would make an omitted `initialise_from` change the method while
+leaving the plan silent. Components absent from the named checkpoint retain
+their recipe-initial values, matching the rule in §7.1 that a checkpoint carries
+the trained components and only those.
 
-Making the executor explicit also removes an inference we should never have
-had: XTYLearner decided that "a model with `fit()` but no `loss()` uses
-ArrayTrainer". Now the recipe says `executor="array_fit"`.
+This covers the full Beyer-style recipe — representation pretraining → joint
+fit → generate pseudo-labels → refit → targeted causal fit — and we will not
+build a scheduler until a fifth model genuinely needs one. `inputs`, stage
+actions, `array_fit` / `cross_fit`, and `allow_leakage` arrive together in P10,
+when artifacts other than checkpoints give those declarations something real
+to name and verify.
+
+### Teacher parameters
+
+A `TeacherSpec` makes `params="teacher"` realisable for that stage, under the
+identity view and every declared `ViewSpec`. It is a complete, distinct copy of
+the component graph made immediately before the stage's first forward pass.
+All teacher parameters have `requires_grad=False`, their gradients remain
+`None`, and teacher forward passes run under `torch.no_grad()`. An objective
+reading a teacher target must therefore include that requirement in
+`detaches`; the compiler rejects an undeclared teacher gradient path rather
+than letting the runtime and printed plan disagree.
+
+The update order is fixed: evaluate the current student and teacher, descend
+the student loss, then update teacher parameters as
+`teacher = decay * teacher + (1 - decay) * student`. The four choices in the
+`teacher` checklist are required and plan-visible. `train_mode` independently
+controls dropout and whether the teacher updates its own BatchNorm statistics.
+When `applies_to_buffers=True`, floating and complex buffers receive the same
+EMA update after the step and integral counters are copied exactly; when false,
+the teacher buffers evolve only through a teacher forward in training mode.
+
+Freezing is also component-wide for the student: parameters outside
+`Stage.trainable` have gradients disabled and those components run in evaluation
+mode, so stateful buffers cannot drift while only a downstream component is
+being fitted. All parameter flags and module modes are restored after the stage.
+
+The explicit executor field arriving in P10 also removes an inference we should
+never have had: XTYLearner decided that "a model with `fit()` but no `loss()`
+uses ArrayTrainer". The recipe will instead say `executor="array_fit"`.
 
 ### 7.1 Artifacts and provenance
 
@@ -634,6 +678,7 @@ class Checkpoint:
     fold: int | None
     trained_on_row_ids: Tensor        # [M] exactly the rows this fit saw
     parameters: Mapping[str, Tensor]  # the trained components, and only those
+    buffers: Mapping[str, Tensor]     # buffers of those same components
     components: tuple[str, ...]
     steps: int
     seed: int
@@ -856,9 +901,17 @@ global prose claim cannot hide one exceptional objective.
 canonical field to different values — TARNet has `[200, 200, 200]` in the
 encoder, `[100, 100, 100]` in each outcome arm, and a linear propensity head.
 `compile()` aggregates every `architecture.*` binding as
-`{component_name: value}`. Other cross-owner conflicts remain errors. This is
-the smallest representation that prevents both last-write-wins collapse and an
-opaque compound string in the review plan.
+`{component_name: value}`.
+
+**Program keys are stage-valued when there is more than one stage.** Learning
+rate, duration, optimiser policy and teacher policy commonly change across an
+ordered program. For a multi-stage recipe, bindings owned by a stage, its
+optimiser or its teacher therefore aggregate as `{stage_name: value}`; bindings
+owned by an objective aggregate as `{<stage>.<objective>: value}`. A one-stage
+recipe keeps the scalar surface its card already uses. Conflicts within one
+scope remain errors. This is the smallest representation that lets the plan
+show a real transition instead of either rejecting it or retaining whichever
+stage happened to be merged last.
 
 **What this does not do.** It checks *presence*, never *correctness*: CI can
 prove the recipe sets `teacher.ema_decay`, and cannot prove 0.999 is the number

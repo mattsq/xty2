@@ -143,6 +143,12 @@ buffer handling explicit and card-driven); stage checkpoints are immutable;
 freezing by component name works.
 **Not in scope:** DAG scheduling, parallel stages — ever, without new evidence.
 
+**Implemented contract:** stages start from recipe-initial state plus the named
+earlier checkpoint, never implicit preceding-stage state. EMA updates occur
+after each student step. Frozen student components run in evaluation mode;
+teacher parameter gradients, mode and parameter/buffer update policies are
+covered by Tier 0 invariants.
+
 ### P9 · Recipe 3 — `mean_teacher` ★
 **Card first.** **Proves:** views + teacher realisation + multi-objective mixing
 + ramp schedules, together.

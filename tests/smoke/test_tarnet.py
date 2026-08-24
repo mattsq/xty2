@@ -15,6 +15,7 @@ from xty2.core import (
     GaussianOutcome,
     OutcomeSpec,
     Port,
+    Program,
     Recipe,
     Schema,
     XTYBatch,
@@ -121,7 +122,7 @@ def _complete_case_ablation(recipe: Recipe) -> Recipe:
     assert stage.objectives[-1].name == "missing_treatment_marginal_nll"
     return replace(
         recipe,
-        program=(replace(stage, objectives=stage.objectives[:-1]),),
+        program=Program((replace(stage, objectives=stage.objectives[:-1]),)),
     )
 
 

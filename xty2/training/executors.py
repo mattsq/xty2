@@ -1,4 +1,4 @@
-"""The `gradient` executor: one stage, one loop (`DESIGN.md` §7, `PLAN.md` P4).
+"""The gradient executor and ordered program runner (`DESIGN.md` §7).
 
 Everything the loop does was decided before it started. `compile()` chose the
 forward passes, the eligible row sets and the trainable components; the mixer
@@ -25,9 +25,10 @@ of one number. Same seed, same trace.
 transform, no in-place write, no writing back a prediction. `DESIGN.md` §7.1
 requires it of every stage, and here it is simply what the loop does not do.
 
-The executor runs **one** stage, because `Program` does not exist yet (P8).
-`array_fit` and `cross_fit` are P10. What ships here is the executor the first
-recipe needs, and no seam for the ones it does not.
+P8 adds the deliberately small outer loop: a `Program` is executed in order,
+each stage starts from the recipe's initial state plus exactly the checkpoint
+named by `initialise_from`, and every stage emits its own immutable checkpoint.
+There is still one executor kind. `array_fit` and `cross_fit` remain P10.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 import torch
@@ -53,6 +55,7 @@ from xty2.training.loss_mixer import (
     MixedLoss,
     ObjectiveLog,
 )
+from xty2.training.teacher import EMATeacher
 
 BatchSource = Iterable[XTYBatch]
 """What feeds a stage.
@@ -63,6 +66,9 @@ labelled/unlabelled mix and the epoch boundary are the caller's, because no
 loader exists yet and a half-built one here would own card keys it could not
 check (`FIDELITY.md` §2, `optimisation.batch_size`).
 """
+
+BatchSources = Mapping[str, BatchSource]
+"""One explicitly named source per stage in an ordered program."""
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +149,9 @@ class StageResult:
         seed: The seed the loop ran under.
         records: One `StepRecord` per optimiser step, in order.
         checkpoint: The stage's parameters and provenance (`DESIGN.md` §7.1).
+        teacher: The stage-local EMA parameter set, when one was declared.
+            It is a live model for inspection or inference, not the immutable
+            student checkpoint written as the stage artifact.
     """
 
     stage: str
@@ -150,6 +159,7 @@ class StageResult:
     seed: int
     records: tuple[StepRecord, ...]
     checkpoint: Checkpoint
+    teacher: EMATeacher | None = None
     paths: Mapping[str, str] = field(default_factory=dict)
     """Where the artifacts were written, when a run directory was given."""
 
@@ -177,6 +187,32 @@ class StageResult:
             )
         lines.append(f"  {self.checkpoint.describe()}")
         return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class ProgramResult:
+    """The ordered results and checkpoints produced by one program run."""
+
+    recipe: str
+    seed: int
+    stages: tuple[StageResult, ...]
+
+    def stage(self, name: str) -> StageResult:
+        """The result for stage `name`."""
+        for result in self.stages:
+            if result.stage == name:
+                return result
+        raise TrainingError(
+            f"program result for {self.recipe!r} has no stage {name!r}; it has "
+            f"{[result.stage for result in self.stages]!r}"
+        )
+
+    @property
+    def checkpoints(self) -> Mapping[str, Checkpoint]:
+        """Every stage checkpoint, keyed by stage name and read-only."""
+        return MappingProxyType(
+            {result.stage: result.checkpoint for result in self.stages}
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +316,7 @@ def _emit_checkpoint(
         fold=fold,
         trained_on_row_ids=torch.unique(seen.cpu()),
         parameters=dict(parameters),
+        buffers=dict(_component_buffers(run.graph, stage.trainable)),
         components=tuple(stage.trainable),
         steps=steps,
         seed=seed,
@@ -303,6 +340,9 @@ def run_stage(
 ) -> StageResult:
     """Train one stage for `stage.steps` optimiser steps.
 
+    The graph is restored to the state captured by ``compile()`` before the
+    stage starts, so separate calls cannot form an undeclared transition.
+
     Args:
         run: The compiled recipe. It decided the forward passes, the eligible
             rows and the trainable set; nothing here chooses any of them.
@@ -321,21 +361,136 @@ def run_stage(
         The trace, the per-step log and the stage's checkpoint.
     """
     compiled = _resolve(run, stage)
+    if compiled.initialise_from is not None:
+        raise TrainingError(
+            f"stage {compiled.name!r} initialises from "
+            f"{compiled.initialise_from!r}. Run it through run_program, which "
+            "resolves that earlier immutable checkpoint before executing the "
+            "stage; run_stage cannot silently ignore the declared transition."
+        )
+    _restore_initial_state(
+        run,
+        parameters=run.initial_parameters(),
+        buffers=run.initial_buffers(),
+    )
+    return _run_stage(
+        run,
+        compiled,
+        batches,
+        seed=seed,
+        run_dir=run_dir,
+        probe=probe,
+    )
+
+
+def run_program(
+    run: CompiledRun,
+    batches: BatchSources,
+    *,
+    seed: int,
+    run_dir: RunDirectory | None = None,
+    probes: Mapping[str, GradientProbe] | None = None,
+) -> ProgramResult:
+    """Execute every compiled stage in order.
+
+    Each stage starts from a fresh copy of the recipe's initial graph state.
+    When ``initialise_from`` is set, the named earlier checkpoint is overlaid
+    on that state. This makes stage transitions data rather than an implicit
+    consequence of whichever stage happened to mutate the shared graph last.
+
+    The stage seed is ``seed + stage_index``. It is recorded in each checkpoint
+    and gives distinct, deterministic stochastic streams without adding
+    another paper-governed recipe field.
+    """
+    sources = dict(batches)
+    expected = tuple(stage.name for stage in run.stages)
+    missing = [name for name in expected if name not in sources]
+    extra = sorted(set(sources) - set(expected))
+    if missing or extra:
+        raise TrainingError(
+            f"program {run.recipe.name!r} needs one batch source per stage; "
+            f"missing {missing!r}, unexpected {extra!r}, stages {list(expected)!r}"
+        )
+    probe_map = dict(probes or {})
+    unknown_probes = sorted(set(probe_map) - set(expected))
+    if unknown_probes:
+        raise TrainingError(
+            f"gradient probes name unknown stages {unknown_probes!r}; this "
+            f"program has {list(expected)!r}"
+        )
+
+    # The baseline belongs to compilation, not to this function call. A
+    # CompiledRun may be executed more than once; snapshotting its already-
+    # trained live graph here would make a second execution a different
+    # program despite an identical plan and seed.
+    initial_parameters = run.initial_parameters()
+    initial_buffers = run.initial_buffers()
+    results: list[StageResult] = []
+    by_name: dict[str, StageResult] = {}
+    if run_dir is not None:
+        run_dir.write_plan(run.plan)
+
+    for index, compiled in enumerate(run.stages):
+        _restore_initial_state(
+            run,
+            parameters=initial_parameters,
+            buffers=initial_buffers,
+        )
+        if compiled.initialise_from is not None:
+            source = by_name[compiled.initialise_from].checkpoint
+            _restore_checkpoint(run, source)
+
+        result = _run_stage(
+            run,
+            compiled,
+            sources[compiled.name],
+            seed=seed + index,
+            run_dir=run_dir,
+            probe=probe_map.get(compiled.name),
+        )
+        results.append(result)
+        by_name[compiled.name] = result
+
+    return ProgramResult(recipe=run.recipe.name, seed=seed, stages=tuple(results))
+
+
+def _run_stage(
+    run: CompiledRun,
+    compiled: CompiledStage,
+    batches: BatchSource,
+    *,
+    seed: int,
+    run_dir: RunDirectory | None,
+    probe: GradientProbe | None,
+) -> StageResult:
+    """Execute one already-resolved stage for `run_stage` or `run_program`."""
     spec = compiled.optimiser
     graph = run.graph
     torch.manual_seed(seed)
+    graph.zero_grad(set_to_none=True)
 
     plan_path = run_dir.write_plan(run.plan) if run_dir is not None else None
 
     records: list[StepRecord] = []
     seen: list[Tensor] = []
     with trainable_only(graph, compiled.trainable) as parameters:
+        teacher = (
+            EMATeacher(graph, compiled.teacher)
+            if compiled.teacher is not None
+            else None
+        )
         optimiser = spec.build(parameters)
         tensors = [parameter for _, parameter in parameters]
         mixer = LossMixer.for_stage(compiled, probe=probe)
         source = iter(batches)
         modes = {module: module.training for module in graph.modules()}
         graph.train()
+        # Freezing by component name includes stateful buffers: a frozen
+        # BatchNorm encoder must not change its running statistics while a
+        # downstream head trains. All modes are restored below.
+        for name in graph.names:
+            if name not in compiled.trainable:
+                graph[name].eval()
         try:
             for step in range(compiled.steps):
                 batch = _next_batch(source, step, compiled)
@@ -349,6 +504,7 @@ def run_stage(
                     tensors,
                     step,
                     rng_key=seed * 1_000_000_007 + step,
+                    teacher=teacher,
                 )
                 records.append(
                     StepRecord(
@@ -388,6 +544,7 @@ def run_stage(
         seed=seed,
         records=tuple(records),
         checkpoint=checkpoint,
+        teacher=teacher,
         paths=paths,
     )
 
@@ -414,9 +571,15 @@ def _step(
     step: int,
     *,
     rng_key: int,
+    teacher: EMATeacher | None,
 ) -> _Stepped:
     """Forward, mix, backward, clip, step — in that order and no other."""
-    state = run.state(compiled, batch, rng_key=rng_key)
+    state = run.state(
+        compiled,
+        batch,
+        rng_key=rng_key,
+        teacher_graph=teacher.graph if teacher is not None else None,
+    )
     ctx = TrainContext(global_step=step, schema=run.recipe.schema, stage=compiled.name)
     mixed = mixer.mix(state, batch, ctx, parameters=tensors)
     optimiser.zero_grad(set_to_none=True)
@@ -429,6 +592,10 @@ def _step(
         mixed.total.backward()  # type: ignore[no-untyped-call]
         grad_norm = compiled.optimiser.clipping.apply(tensors)
         optimiser.step()
+    if teacher is not None:
+        # Standard Mean Teacher order: predict with the previous teacher,
+        # update the student, then move the teacher towards the new student.
+        teacher.update(run.graph)
     return _Stepped(loss=mixed, grad_norm=grad_norm)
 
 
@@ -452,6 +619,111 @@ def _resolve(run: CompiledRun, stage: str | CompiledStage) -> CompiledStage:
             "Pass the stage's name, or the CompiledStage from this run."
         )
     return resolved
+
+
+def _restore_checkpoint(run: CompiledRun, checkpoint: Checkpoint) -> None:
+    """Overlay one verified earlier-stage checkpoint on the reset graph."""
+    if checkpoint.recipe != run.recipe.name:
+        raise TrainingError(
+            f"checkpoint {checkpoint.stage!r} belongs to recipe "
+            f"{checkpoint.recipe!r}, not {run.recipe.name!r}"
+        )
+    if checkpoint.plan_digest != run.plan.digest:
+        raise TrainingError(
+            f"checkpoint {checkpoint.stage!r} was produced under plan "
+            f"{checkpoint.plan_digest[:12]}, not this run's "
+            f"{run.plan.digest[:12]}. Stage initialisation may only consume an "
+            "artifact from the exact compiled program."
+        )
+    source = run.stage(checkpoint.stage)
+    if checkpoint.components != source.trainable:
+        raise TrainingError(
+            f"checkpoint {checkpoint.stage!r} carries components "
+            f"{checkpoint.components!r}, but that compiled stage trains "
+            f"{source.trainable!r}"
+        )
+    if checkpoint.steps != source.steps:
+        raise TrainingError(
+            f"checkpoint {checkpoint.stage!r} records {checkpoint.steps} "
+            f"steps, but its compiled stage declares {source.steps}"
+        )
+    _copy_named(
+        _component_parameters(run.graph, checkpoint.components),
+        checkpoint.parameters,
+        what=f"checkpoint {checkpoint.stage!r} parameters",
+    )
+    _copy_named(
+        _component_buffers(run.graph, checkpoint.components),
+        checkpoint.buffers,
+        what=f"checkpoint {checkpoint.stage!r} buffers",
+    )
+
+
+def _restore_initial_state(
+    run: CompiledRun,
+    *,
+    parameters: Mapping[str, Tensor],
+    buffers: Mapping[str, Tensor],
+) -> None:
+    """Restore the graph snapshot captured by ``compile()``."""
+    _copy_named(
+        run.graph.named_parameters(),
+        parameters,
+        what="the recipe's initial parameters",
+    )
+    _copy_named(
+        run.graph.named_buffers(),
+        buffers,
+        what="the recipe's initial buffers",
+    )
+    run.graph.zero_grad(set_to_none=True)
+
+
+def _component_parameters(
+    graph: ComponentGraph, components: Sequence[str]
+) -> tuple[tuple[str, Tensor], ...]:
+    return tuple(
+        (f"{component_name}.{name}", parameter)
+        for component_name in components
+        for name, parameter in graph[component_name].named_parameters()
+    )
+
+
+def _component_buffers(
+    graph: ComponentGraph, components: Sequence[str]
+) -> tuple[tuple[str, Tensor], ...]:
+    return tuple(
+        (f"{component_name}.{name}", buffer)
+        for component_name in components
+        for name, buffer in graph[component_name].named_buffers()
+    )
+
+
+@torch.no_grad()
+def _copy_named(
+    named: Iterable[tuple[str, Tensor]],
+    saved: Mapping[str, Tensor],
+    *,
+    what: str,
+) -> None:
+    """Copy a complete named tensor mapping, rejecting partial restoration."""
+    targets = dict(named)
+    missing = sorted(set(targets) - set(saved))
+    extra = sorted(set(saved) - set(targets))
+    if missing or extra:
+        raise TrainingError(
+            f"{what} do not match the component graph; missing {missing!r}, "
+            f"unexpected {extra!r}"
+        )
+    for name, target in targets.items():
+        source = saved[name]
+        if source.shape != target.shape or source.dtype != target.dtype:
+            raise TrainingError(
+                f"{what} tensor {name!r} has shape {tuple(source.shape)} and "
+                f"dtype {source.dtype}; the live graph expects "
+                f"{tuple(target.shape)} and {target.dtype}"
+            )
+        target.copy_(source.to(device=target.device))
 
 
 def _next_batch(
@@ -484,8 +756,11 @@ def _set_learning_rate(optimiser: torch.optim.Optimizer, lr: float) -> float:
 
 __all__ = [
     "BatchSource",
+    "BatchSources",
+    "ProgramResult",
     "StageResult",
     "StepRecord",
+    "run_program",
     "run_stage",
     "trainable_only",
 ]

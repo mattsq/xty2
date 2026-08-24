@@ -9,7 +9,8 @@ contracts those read (P3, P4).
 
 `xty2.objectives` holds four of the ten losses of `DESIGN.md` §4.2, and
 `xty2.training` the mixer that weights and logs them (P3) together with the
-single-stage `gradient` executor and the immutable artifacts it writes (P4).
+`gradient` executor and immutable artifacts (P4), then the ordered program
+runner and EMA teacher parameter set (P8).
 `xty2.components` and `xty2.recipes` contain two reviewed methods: TARNet's
 fixed-scale treatment heads (P5) and CNFlow's conditional spline outcome
 density (P7). They share the categorical propensity, exact missing-treatment
