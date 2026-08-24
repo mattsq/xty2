@@ -13,12 +13,15 @@ its boundary is exactly the silent difference `FIDELITY.md` §2 lists under
 `losses.schedules`.
 """
 
+import math
+
 import pytest
 from xty2.core import (
     Constant,
     ExponentialDecay,
     Ramp,
     Schedule,
+    SigmoidRamp,
     Step,
     Xty2Error,
     as_schedule,
@@ -86,6 +89,33 @@ def test_a_zero_length_ramp_is_rejected() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Mean Teacher sigmoid ramp
+# ---------------------------------------------------------------------------
+
+
+def test_a_sigmoid_ramp_uses_the_pinned_mean_teacher_formula() -> None:
+    schedule = SigmoidRamp(end=3.0, steps=40)
+    assert schedule(0) == pytest.approx(3.0 * math.exp(-5.0))
+    assert schedule(20) == pytest.approx(3.0 * math.exp(-1.25))
+    assert schedule(40) == 3.0
+    assert schedule(4_000) == 3.0
+
+
+def test_a_sigmoid_ramp_reports_its_end_and_exact_formula() -> None:
+    schedule = SigmoidRamp(end=3.0, steps=40)
+    assert schedule.nominal == 3.0
+    assert schedule.describe() == (
+        "sigmoid ramp to 3.0 over 40 steps: 3.0 * exp(-5 * (1 - min(step/40, 1))^2)"
+    )
+
+
+@pytest.mark.parametrize("steps", [0, -1, 1.5, True])
+def test_a_sigmoid_ramp_needs_a_positive_integer_length(steps: object) -> None:
+    with pytest.raises(Xty2Error, match="integer at least 1"):
+        SigmoidRamp(end=1.0, steps=steps)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
 # Step
 # ---------------------------------------------------------------------------
 
@@ -148,6 +178,7 @@ def _schedules() -> list[Schedule]:
     return [
         Constant(1.0),
         Ramp(0.0, 0.5, steps=100),
+        SigmoidRamp(end=2.0, steps=40),
         Step((0.0, 1.0), (50,)),
         ExponentialDecay(gamma=0.97, every=100),
     ]
