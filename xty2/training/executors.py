@@ -1208,7 +1208,12 @@ def _run_stage(
                     optimiser,
                     tensors,
                     step,
-                    rng_key=seed * 1_000_000_007 + step,
+                    # The caller owns the benchmark's random streams. A stage
+                    # seed is therefore the first view key and each optimiser
+                    # step advances it once. Mean Teacher card §6 pins exactly
+                    # `s_r + 10000 + step`; multiplying the supplied seed here
+                    # silently ran a different reviewed protocol.
+                    rng_key=seed + step,
                     teacher=teacher,
                 )
                 records.append(
