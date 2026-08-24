@@ -3,6 +3,15 @@
 **Status:** `draft`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
+> **On the status.** The implementation exists and both tiers pass: Tier 0
+> covers the components, the compiled plan and the §4 cross-check, and Tier 1
+> fits the synthetic DGP and clears all four assertions of `FIDELITY.md` §3.
+> The status is nevertheless `draft`, because the ladder in `FIDELITY.md` §1.1
+> runs through `reviewed`, and `reviewed` means *a human has approved this
+> card*. Nobody has. Setting `smoke-passing` here would claim a review that
+> did not happen, which is the one thing a status is for. When a reviewer
+> signs §8, it goes straight to `smoke-passing`.
+
 > **Reviewer, read this first.** The paper could not be re-read while this card
 > was written: the authoring environment has no network egress, so `arxiv.org`
 > and the reference implementation were both unreachable. Every §4 entry is

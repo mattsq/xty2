@@ -73,6 +73,10 @@ select = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ANN401"]
+# Snapshot tests hold generated output verbatim. A plan line that is 94
+# characters wide is a fact about the plan printer, and reflowing it inside the
+# snapshot would make the snapshot stop being a snapshot.
+"tests/invariants/test_recipe_tarnet.py" = ["ANN401", "E501"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
