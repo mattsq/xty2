@@ -25,8 +25,10 @@ from xty2.core import (
     CategoricalTreatment,
     ComponentGraph,
     GaussianOutcome,
+    LossError,
     Port,
     PortValue,
+    Realisation,
     Recipe,
     Schema,
     State,
@@ -333,6 +335,30 @@ def test_the_observed_treatment_nll_is_the_categorical_cross_entropy() -> None:
         reduction="mean",
     )
     assert float(term.value) == pytest.approx(float(expected), abs=1e-12)
+
+
+def test_the_observed_treatment_nll_can_consume_a_named_realisation() -> None:
+    batch = _double_batch()
+    _, propensity = _heads(batch)
+    rows = resolve_rows(batch, "t_observed")
+    noisy_student = Realisation(view="student_x")
+    state = State({noisy_student: {Port.T_GIVEN_X: propensity}})
+    objective = ObservedTreatmentNLL(realisation=noisy_student)
+
+    term = objective.compute(state, batch, rows, _ctx())
+
+    expected = torch.nn.functional.cross_entropy(
+        propensity.logits.index_select(0, rows),
+        batch.t.index_select(0, rows),
+        reduction="mean",
+    )
+    assert float(term.value) == pytest.approx(float(expected), abs=1e-12)
+    assert objective.requires == frozenset({(Port.T_GIVEN_X, noisy_student)})
+
+
+def test_the_observed_treatment_nll_rejects_a_non_realisation() -> None:
+    with pytest.raises(LossError, match="must be a Realisation"):
+        ObservedTreatmentNLL(realisation="student_x")  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

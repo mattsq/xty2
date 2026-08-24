@@ -5,7 +5,9 @@ for its weight and an optimiser consults one as a multiplier on its base rate.
 `ExponentialDecay` arrives with TARNet because its pinned reference
 implementation uses staircase exponential learning-rate decay; spelling the
 formula as one declaration keeps the plan readable and the executed schedule
-exact.
+exact. `SigmoidRamp` arrives with Mean Teacher for the same reason: its
+Gaussian-shaped warm-up is part of the method and is not a linear `Ramp` with
+different constants.
 
 They live in `core/` rather than beside the mixer for the reason `DESIGN.md`
 §10 gives for `Stage` and `Recipe`: they are the compiler's *input*. A recipe
@@ -145,6 +147,45 @@ class Ramp(Schedule):
 
 
 @dataclass(frozen=True)
+class SigmoidRamp(Schedule):
+    """Mean Teacher's Gaussian-shaped sigmoid ramp-up.
+
+    The value is
+
+    ``end * exp(-5 * (1 - min(step / steps, 1))**2)``.
+
+    It starts at ``end * exp(-5)`` rather than zero and is exactly ``end``
+    from ``steps`` onwards. `steps` is measured in optimiser steps, matching
+    the executor's global-step unit and the recipe card.
+    """
+
+    end: float
+    steps: int
+
+    def __post_init__(self) -> None:
+        _require_finite("SigmoidRamp.end", self.end)
+        if type(self.steps) is not int or self.steps < 1:
+            raise Xty2Error(
+                f"SigmoidRamp.steps must be an integer at least 1, got {self.steps!r}"
+            )
+
+    def value(self, step: int) -> float:
+        progress = min(step / self.steps, 1.0)
+        return float(self.end) * math.exp(-5.0 * (1.0 - progress) ** 2)
+
+    @property
+    def nominal(self) -> float:
+        return float(self.end)
+
+    def describe(self) -> str:
+        end = float(self.end)
+        return (
+            f"sigmoid ramp to {end!r} over {self.steps} steps: "
+            f"{end!r} * exp(-5 * (1 - min(step/{self.steps}, 1))^2)"
+        )
+
+
+@dataclass(frozen=True)
 class Step(Schedule):
     """A piecewise-constant weight that jumps at `boundaries`.
 
@@ -253,7 +294,8 @@ def as_schedule(weight: float | Schedule) -> Schedule:
     if isinstance(weight, bool) or not isinstance(weight, int | float):
         raise Xty2Error(
             f"a weight is a number or a Schedule, got {type(weight)}. The v1 "
-            "schedules are Constant, Ramp, Step and ExponentialDecay "
+            "schedules are Constant, Ramp, SigmoidRamp, Step and "
+            "ExponentialDecay "
             "(DESIGN.md §6)."
         )
     return Constant(float(weight))
@@ -271,6 +313,7 @@ __all__ = [
     "ExponentialDecay",
     "Ramp",
     "Schedule",
+    "SigmoidRamp",
     "Step",
     "as_schedule",
 ]

@@ -491,10 +491,11 @@ LossMixer([
 ])
 ```
 
-Schedules in v1: `Constant`, `Ramp` (linear), `Step`, and the staircase
-`ExponentialDecay` required by TARNet's pinned reference implementation.
-Schedules are pure functions of `ctx.global_step` and are logged. The same
-types serve objective weights and learning-rate multipliers.
+Schedules in v1: `Constant`, `Ramp` (linear), `SigmoidRamp` (Mean Teacher's
+Gaussian-shaped ramp-up), `Step`, and the staircase `ExponentialDecay` required
+by TARNet's pinned reference implementation. Schedules are pure functions of
+`ctx.global_step` and are logged. The same types serve objective weights and
+learning-rate multipliers.
 
 ### 6.1 Reduction
 
@@ -988,7 +989,7 @@ change the decision:
 | Plugin / entry-point system | a consumer outside this repo exists |
 | Distributed training | a single recipe stops fitting in one process |
 | A loader / sampler, and with it the `optimisation.batch_size` and `labelled_unlabelled_ratio` bindings | a recipe needs a fixed labelled/unlabelled quota per batch rather than whatever the data gives. The gradient executor takes an iterable of batches; a stage field for either key would be a card key nothing could check, which §7.1 rejects for provenance and §9.1 for hyperparameters |
-| LR schedules beyond `Constant`, `Ramp`, `Step` and `ExponentialDecay` (cosine, one-cycle) | a card names one. The rate is a schedule multiplier, so a new type serves both loss weights and the LR; `ExponentialDecay` entered with TARNet, the first real card that names it |
+| LR schedules beyond `Constant`, `Ramp`, `SigmoidRamp`, `Step` and `ExponentialDecay` (cosine, one-cycle) | a card names one. The rate is a schedule multiplier, so a new type serves both loss weights and the LR; `ExponentialDecay` entered with TARNet and `SigmoidRamp` with Mean Teacher, the first real cards that name them |
 | The other ~35 XTYLearner families | one is actually needed for a result |
 
 **Migration is lazy by design.** No model is ported until it is next used. A

@@ -128,6 +128,7 @@ from xty2.core.schedules import (
     ExponentialDecay,
     Ramp,
     Schedule,
+    SigmoidRamp,
     Step,
     as_schedule,
 )
@@ -206,6 +207,7 @@ __all__ = [
     "Schedule",
     "Schema",
     "SchemaError",
+    "SigmoidRamp",
     "Stage",
     "State",
     "Step",

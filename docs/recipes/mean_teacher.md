@@ -1,6 +1,6 @@
 # Recipe spec card: mean_teacher
 
-**Status:** `draft`
+**Status:** `implemented`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 ---
@@ -246,7 +246,7 @@ architecture:
 data:
   standardisation: n/a                          # caller-owned; section 6 records the fixed choice
   outcome_scaling: n/a                          # caller-owned; section 6 records the fixed choice
-  treatment_encoding: integer classes 0..K-1 in XTYBatch; K softmax probabilities
+  treatment_encoding: n/a                       # XTYBatch contract supplies integer classes 0..K-1; propensity emits K probabilities
   split_protocol: n/a                           # Tier 1 fixture and P12 runner own splits
   missingness_mechanism: n/a                    # section 6 fixes treatment MCAR; recipe consumes t_observed
 ```
@@ -259,6 +259,9 @@ remain bit-identical and schema bounds are enforced. A schema with derived
 features must provide the recompute rules required by `DESIGN.md` section 5 or
 the view is rejected at compile time -- stale derived values are never accepted
 as an implicit approximation.
+`mean_teacher(schema, recompute_rules=(...))` supplies the same explicit rules
+to both views; the empty tuple is valid only when masking cannot stale a derived
+column.
 
 The batching and preprocessing `n/a` entries are executable boundaries, not
 missing research. P9 does not add a sampler merely to copy the image
@@ -296,9 +299,13 @@ Run ten paired replicates indexed by `r in {0, ..., 9}` with base seed
 `float32`. Independent train, validation and test populations contain 4,096,
 2,048 and 4,096 rows and use seeds `s_r+1`, `s_r+2` and `s_r+3`. Within each
 population draw, in order, `U_C`, `epsilon_X`, `U_T` and `epsilon_Y`.
+The two uniform tensors are independent draws with
+`U_C, U_T ~ Uniform(0, 1)`. The six entries of `epsilon_X` and the scalar
+`epsilon_Y` are independent `Normal(0, 1)` draws. All of these variables are
+mutually independent within a row and independent across rows.
 
-For each row, draw `C = 1{U_C < 0.5}`, put `S = 2C-1`, and draw six independent
-standard-normal noise values. Define redundant cluster features
+For each row, set `C = 1{U_C < 0.5}` and `S = 2C-1`. Define redundant cluster
+features
 
 $$
 X_j = 0.8S + 0.6\epsilon_j,\quad j=1,\ldots,4,
@@ -464,5 +471,5 @@ reproduction:
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status -> `reviewed`) | | |
-| Plan diffed against section 3.2 and section 4 | | |
+| Card reviewed (status -> `reviewed`) | mattsq | 2026-08-24 |
+| Plan diffed against section 3.2 and section 4 | Codex | 2026-08-24 |

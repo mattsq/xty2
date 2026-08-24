@@ -6,10 +6,10 @@ observed. They are separate objects rather than one configurable loss because
 they train different heads on the same rows, and a bad number has to be
 attributable to one of them (§0).
 
-Neither is parameterised by port or realisation. The two-consumer rule (§11)
-is the reason: a treatment NLL against `q(t|x,y)` and a likelihood under a
-teacher's parameters are both real, and both arrive with the recipe that needs
-them rather than as options nothing exercises.
+Neither is parameterised by port. `ObservedOutcomeNLL` stays on the default
+realisation. `ObservedTreatmentNLL` gains an explicit realisation with Mean
+Teacher, its second consumer: P5 and P7 keep the default identity/student
+behaviour while P9 may supervise the propensity under its student view.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from xty2.core.batch import XTYBatch
+from xty2.core.errors import LossError
 from xty2.core.graph import DEFAULT, Realisation, State
 from xty2.core.loss import (
     LossTerm,
@@ -84,6 +85,14 @@ class ObservedTreatmentNLL:
     """
 
     name: str = "observed_treatment_nll"
+    realisation: Realisation = DEFAULT
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.realisation, Realisation):
+            raise LossError(
+                "ObservedTreatmentNLL.realisation must be a Realisation, got "
+                f"{type(self.realisation)}"
+            )
 
     @property
     def rows(self) -> Rows:
@@ -91,7 +100,7 @@ class ObservedTreatmentNLL:
 
     @property
     def requires(self) -> frozenset[tuple[Port, Realisation]]:
-        return frozenset({(Port.T_GIVEN_X, DEFAULT)})
+        return frozenset({(Port.T_GIVEN_X, self.realisation)})
 
     @property
     def detaches(self) -> frozenset[tuple[Port, Realisation]]:
@@ -103,7 +112,7 @@ class ObservedTreatmentNLL:
     ) -> LossTerm:
         del ctx
         propensity = treatment_distribution(
-            state, Port.T_GIVEN_X, DEFAULT, objective=self.name
+            state, Port.T_GIVEN_X, self.realisation, objective=self.name
         )
         per_row = -propensity.log_prob(treatment_at(batch, rows))
         return reduce_rows(per_row, rows)
