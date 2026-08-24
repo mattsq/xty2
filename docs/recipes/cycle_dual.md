@@ -221,8 +221,10 @@ architecture:
     tarnet_head: K means; fixed Gaussian scale=1.0
 
 data:
-  standardisation: n/a  # external runner; fixed explicitly in section 6
-  outcome_scaling: n/a  # external runner; fixed explicitly in section 6
+  standardisation:
+    posterior_labels: z-score X and Y with training-population statistics
+    outcome_fit: z-score X and Y with the same frozen training-population statistics
+  outcome_scaling: inverse-transform each candidate-treatment mean with the frozen training Y mean and standard deviation before scoring
   treatment_encoding: categorical integers 0..K-1 with t_observed mask; no sentinel
   split_protocol: n/a  # fold_id belongs to the supplied batch; section 6 fixes five folds
   missingness_mechanism: n/a  # dataset property; section 6 fixes MCAR
@@ -272,9 +274,19 @@ The analytic ATE is `1.5`. In the training population set
 treatments remain available to the evaluator but are never passed as observed
 to a fitted posterior. Assign `fold_id = row_id mod 5`. Standardise `X` and `Y`
 with training-population mean and standard deviation only; transform validation
-and test with those frozen statistics.
+and test with those frozen statistics. The outcome head therefore emits means
+in standardised-Y units. Before scoring, inverse-transform every candidate mean
+with the frozen training statistics,
 
-The primary metric is
+$$
+\hat\mu_t^{\mathrm{original}}(x)
+= \bar Y_{train}+s_{Y,train}\hat\mu_t^{\mathrm{standardised}}(x).
+$$
+
+Compute treatment contrasts only after this inverse transform. Equivalently,
+multiply each standardised contrast by `s_Y_train`; the additive mean cancels.
+
+The primary metric, entirely on the original outcome scale, is
 
 $$
 \left|\frac{1}{N_{test}}\sum_i
