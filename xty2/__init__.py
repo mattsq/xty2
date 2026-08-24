@@ -10,10 +10,14 @@ contracts those read (P3, P4).
 `xty2.objectives` holds three of the ten losses of `DESIGN.md` §4.2, and
 `xty2.training` the mixer that weights and logs them (P3) together with the
 single-stage `gradient` executor and the immutable artifacts it writes (P4).
-The rest is still empty: there is no component, view or recipe yet. That is the
-plan's shape rather than an accident — the framework is built only to the depth
-the next recipe demands. Layout, and the packet that fills each subpackage, is
-in `docs/DESIGN.md` §10 and `docs/PLAN.md`.
+`xty2.components` and `xty2.recipes` hold the first recipe and the three
+parameterisations it composes — `mlp_encoder`, `tarnet_head` and
+`categorical_propensity` (P5).
+
+`xty2.views`, `xty2.evaluation` and `xty2.estimators` are still empty, and
+that is the plan's shape rather than an accident — the framework is built only
+to the depth the next recipe demands. Layout, and the packet that fills each
+subpackage, is in `docs/DESIGN.md` §10 and `docs/PLAN.md`.
 """
 
 from importlib.metadata import PackageNotFoundError, version
