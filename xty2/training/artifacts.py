@@ -34,10 +34,10 @@ running statistics vanished at the stage boundary. They remain a separate
 mapping because teacher buffer EMA is independently card-driven and because an
 optimiser never owns them.
 
-`PseudoLabels` — the other §7.1 artifact — is absent rather than stubbed. It
-carries `predicted_by_fold` and a fold-disjointness check, neither of which
-exists until `cross_fit` does (P10), and an artifact whose provenance nothing
-computes is precisely what this module exists to prevent.
+P10 adds ``PseudoLabels`` under the same rules. ``used_y`` is derived from the
+compiled producing port; ``prediction_mode`` is computed from checkpoint row
+sets and ``predicted_by_fold``. A cross-fit artifact is accepted only when the
+loader reruns that disjointness decision against the actual saved fields.
 """
 
 from __future__ import annotations
@@ -48,18 +48,22 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 import torch
 from torch import Tensor
 
-from xty2.core.compile import ExecutionPlan, plan_digest_of
-from xty2.core.errors import ArtifactError
+from xty2.core.batch import XTYBatch
+from xty2.core.compile import CompiledRun, ExecutionPlan, plan_digest_of
+from xty2.core.errors import ArtifactError, CompileError
+from xty2.core.recipe import PseudoLabelAction
 
 ARTIFACT_FORMAT: Final = 1
 """The on-disk payload version. A load of anything else is a loud failure."""
 
 CHECKPOINT_FILE: Final = "checkpoint.pt"
+PSEUDO_LABELS_FILE: Final = "pseudo_labels.pt"
+FOLDS_DIR: Final = "folds"
 LOG_FILE: Final = "log.jsonl"
 PLAN_FILE: Final = "plan.txt"
 STAGES_DIR: Final = "stages"
@@ -90,13 +94,15 @@ class Checkpoint:
             against, which is why it is accumulated from the batches the loop
             actually stepped on rather than from the dataset it was pointed at.
         parameters: `{qualified name: tensor}` for the components the stage
-            trained, and only those: a checkpoint that quietly carried frozen
-            components would restore them over a later stage's work.
-        buffers: `{qualified name: tensor}` for buffers owned by those same
-            trained components. They are separate from parameters because an
-            optimiser never owns them.
-        components: The trained component names, in the stage's order.
-        steps: Optimiser steps taken.
+            trained, and only those. For `array_fit`, this is the action's
+            complete named tensor state under `<action>.<name>`; array
+            checkpoints cannot be used as component-graph initialisers.
+        buffers: `{qualified name: tensor}` for buffers owned by trained graph
+            components; empty for an array-fit checkpoint. They are separate
+            from parameters because an optimiser never owns them.
+        components: The trained component names in stage order, or the single
+            array action name.
+        steps: Optimiser steps taken, or one functional array-fit call.
         seed: The seed the run was executed under.
         plan_digest: `sha256` of the execution plan (`ExecutionPlan.digest`).
     """
@@ -350,6 +356,439 @@ class Checkpoint:
         )
 
 
+PredictionMode = Literal["in_sample", "out_of_fold"]
+
+
+class PseudoLabels:
+    """Immutable hard treatment labels with falsifiable provenance (§7.1).
+
+    ``used_y`` and ``prediction_mode`` are properties, not constructor
+    arguments on the public surface. The executor derives the former from the
+    compiled source port and the latter is recomputed from the saved row sets
+    every time it is asked. Loading against a ``cross_fit`` stage calls
+    :meth:`assert_out_of_fold`, so a forged or corrupted fold assignment fails
+    where a consuming stage crosses the artifact boundary.
+    """
+
+    __slots__ = (
+        "_checkpoints",
+        "_labels",
+        "_predicted_by_fold",
+        "_row_id",
+        "_source_stage",
+        "_used_y",
+    )
+
+    def __init__(
+        self,
+        *,
+        source_stage: str,
+        source_checkpoints: Mapping[int, Checkpoint],
+        predicted_by_fold: Tensor,
+        row_id: Tensor,
+        labels: Tensor,
+        used_y: bool,
+        issued_by: object = None,
+    ) -> None:
+        if issued_by is not _FACTORY_TOKEN:
+            raise ArtifactError(
+                "PseudoLabels are constructed only by the stage executors. "
+                "used_y comes from graph reachability and prediction_mode from "
+                "actual checkpoint row sets, so a direct constructor would "
+                "let a caller assert the provenance the loader must verify "
+                "(DESIGN.md §7.1)."
+            )
+        checkpoints = dict(source_checkpoints)
+        if not checkpoints:
+            raise ArtifactError("PseudoLabels need at least one source checkpoint")
+        if any(type(fold) is not int or fold < 0 for fold in checkpoints):
+            raise ArtifactError(
+                "PseudoLabels source checkpoint keys must be non-negative fold ids"
+            )
+        if row_id.ndim != 1 or row_id.dtype != torch.long:
+            raise ArtifactError(
+                f"PseudoLabels.row_id must be a [N] long tensor, got "
+                f"shape {tuple(row_id.shape)} of {row_id.dtype}"
+            )
+        if len(set(row_id.tolist())) != int(row_id.numel()):
+            raise ArtifactError(
+                "PseudoLabels.row_id must be unique; the side table is keyed by it"
+            )
+        if (
+            predicted_by_fold.shape != row_id.shape
+            or predicted_by_fold.dtype != torch.long
+        ):
+            raise ArtifactError(
+                "PseudoLabels.predicted_by_fold must be a [N] long tensor "
+                f"aligned with row_id, got shape {tuple(predicted_by_fold.shape)} "
+                f"of {predicted_by_fold.dtype}"
+            )
+        if labels.shape != row_id.shape or labels.dtype != torch.long:
+            raise ArtifactError(
+                "P10 PseudoLabels.labels must be hard [N] long treatment labels, "
+                f"got shape {tuple(labels.shape)} of {labels.dtype}"
+            )
+        unknown_folds = sorted(set(predicted_by_fold.tolist()) - set(checkpoints))
+        if unknown_folds:
+            raise ArtifactError(
+                f"predicted_by_fold names folds {unknown_folds!r} with no source "
+                f"checkpoint; available folds are {sorted(checkpoints)!r}"
+            )
+        for fold, checkpoint in checkpoints.items():
+            if checkpoint.fold not in (None, fold):
+                raise ArtifactError(
+                    f"source checkpoint key {fold} holds checkpoint.fold="
+                    f"{checkpoint.fold!r}; cross-fit checkpoint keys and their "
+                    "recorded fold must agree"
+                )
+        if type(used_y) is not bool:
+            raise ArtifactError(f"derived used_y must be bool, got {used_y!r}")
+
+        # The side table is keyed by row id, so store it in canonical sorted
+        # order once. ``apply_to`` can then use ``searchsorted`` on every
+        # consuming batch without rebuilding a Python lookup table.
+        row_values = row_id.detach().cpu().clone()
+        fold_values = predicted_by_fold.detach().cpu().clone()
+        label_values = labels.detach().cpu().clone()
+        order = torch.argsort(row_values)
+        self._source_stage = source_stage
+        self._checkpoints: Mapping[int, Checkpoint] = MappingProxyType(
+            dict(sorted(checkpoints.items()))
+        )
+        self._predicted_by_fold = fold_values.index_select(0, order)
+        self._row_id = row_values.index_select(0, order)
+        self._labels = label_values.index_select(0, order)
+        self._used_y = used_y
+
+    @classmethod
+    def _issue(
+        cls,
+        *,
+        source_stage: str,
+        source_checkpoints: Mapping[int, Checkpoint],
+        predicted_by_fold: Tensor,
+        row_id: Tensor,
+        labels: Tensor,
+        used_y: bool,
+    ) -> PseudoLabels:
+        """Package-private construction point used by executors and loading."""
+        return cls(
+            source_stage=source_stage,
+            source_checkpoints=source_checkpoints,
+            predicted_by_fold=predicted_by_fold,
+            row_id=row_id,
+            labels=labels,
+            used_y=used_y,
+            issued_by=_FACTORY_TOKEN,
+        )
+
+    @property
+    def source_stage(self) -> str:
+        return self._source_stage
+
+    @property
+    def source_checkpoints(self) -> Mapping[int, Checkpoint]:
+        return MappingProxyType(dict(self._checkpoints))
+
+    @property
+    def predicted_by_fold(self) -> Tensor:
+        return self._predicted_by_fold.clone()
+
+    @property
+    def row_id(self) -> Tensor:
+        return self._row_id.clone()
+
+    @property
+    def labels(self) -> Tensor:
+        return self._labels.clone()
+
+    @property
+    def used_y(self) -> bool:
+        """Whether the producing port transitively reads ``Y_RAW``."""
+        return self._used_y
+
+    @property
+    def prediction_mode(self) -> PredictionMode:
+        """Derived from actual prediction/checkpoint row disjointness."""
+        return "in_sample" if self._first_overlap() is not None else "out_of_fold"
+
+    @property
+    def plan_digest(self) -> str:
+        digests = {checkpoint.plan_digest for checkpoint in self._checkpoints.values()}
+        if len(digests) != 1:
+            raise ArtifactError(
+                "PseudoLabels source checkpoints come from different execution "
+                f"plans: {sorted(digests)!r}"
+            )
+        return next(iter(digests))
+
+    def _first_overlap(self) -> tuple[int, int] | None:
+        trained = {
+            fold: set(checkpoint.trained_on_row_ids.tolist())
+            for fold, checkpoint in self._checkpoints.items()
+        }
+        for row, fold in zip(
+            self._row_id.tolist(), self._predicted_by_fold.tolist(), strict=True
+        ):
+            if row in trained[fold]:
+                return int(row), int(fold)
+        return None
+
+    def assert_out_of_fold(self) -> None:
+        """Execute the §7.1 decision procedure, raising on the first overlap."""
+        overlap = self._first_overlap()
+        if overlap is None:
+            return
+        row, fold = overlap
+        raise ArtifactError(
+            f"pseudo-label row {row} was predicted by fold {fold}, whose "
+            "checkpoint trained on that same row. A cross_fit artifact must be "
+            "out of fold for every row (DESIGN.md §7.1); the saved fold "
+            "assignment is overlapping."
+        )
+
+    def validate_for(self, run: CompiledRun) -> None:
+        """Validate this artifact against the compiled program consuming it."""
+        try:
+            source = run.stage(self.source_stage)
+        except CompileError as error:
+            raise ArtifactError(
+                f"PseudoLabels name unknown source stage {self.source_stage!r}"
+            ) from error
+        action = source.action
+        if not isinstance(action, PseudoLabelAction):
+            raise ArtifactError(
+                f"stage {self.source_stage!r} does not declare a "
+                "PseudoLabelAction in this plan"
+            )
+        expected_used_y = run.graph.port_depends_on_raw_outcome(action.port)
+        if self.used_y != expected_used_y:
+            raise ArtifactError(
+                f"PseudoLabels used_y={self.used_y} disagrees with graph-derived "
+                f"used_y={expected_used_y} for {action.port}"
+            )
+        if source.executor == "cross_fit":
+            expected_checkpoint_stage = source.name
+        elif source.objectives:
+            expected_checkpoint_stage = source.name
+            if set(self._checkpoints) != {0}:
+                raise ArtifactError(
+                    f"in-sample PseudoLabels from stage {source.name!r} need "
+                    "exactly source checkpoint key 0"
+                )
+        else:
+            if source.initialise_from is None:  # compile() prevents this plan
+                raise ArtifactError(
+                    f"action-only pseudo-label stage {source.name!r} has no "
+                    "producing checkpoint"
+                )
+            expected_checkpoint_stage = source.initialise_from
+            if set(self._checkpoints) != {0}:
+                raise ArtifactError(
+                    f"action-only PseudoLabels from stage {source.name!r} need "
+                    "exactly source checkpoint key 0"
+                )
+        expected_checkpoint = run.stage(expected_checkpoint_stage)
+        for fold, checkpoint in self._checkpoints.items():
+            if checkpoint.recipe != run.recipe.name:
+                raise ArtifactError(
+                    f"source checkpoint fold {fold} belongs to recipe "
+                    f"{checkpoint.recipe!r}, not {run.recipe.name!r}"
+                )
+            if checkpoint.plan_digest != run.plan.digest:
+                raise ArtifactError(
+                    f"source checkpoint fold {fold} was produced under plan "
+                    f"{checkpoint.plan_digest[:12]}, not {run.plan.digest[:12]}"
+                )
+            if checkpoint.stage != expected_checkpoint_stage:
+                raise ArtifactError(
+                    f"source checkpoint fold {fold} belongs to stage "
+                    f"{checkpoint.stage!r}, but pseudo-label stage "
+                    f"{source.name!r} expects {expected_checkpoint_stage!r}"
+                )
+            if checkpoint.components != expected_checkpoint.trainable:
+                raise ArtifactError(
+                    f"source checkpoint fold {fold} carries components "
+                    f"{checkpoint.components!r}, but stage "
+                    f"{expected_checkpoint_stage!r} trains "
+                    f"{expected_checkpoint.trainable!r}"
+                )
+            if checkpoint.steps != expected_checkpoint.steps:
+                raise ArtifactError(
+                    f"source checkpoint fold {fold} records "
+                    f"{checkpoint.steps} steps, but stage "
+                    f"{expected_checkpoint_stage!r} declares "
+                    f"{expected_checkpoint.steps}"
+                )
+            if source.executor == "cross_fit" and checkpoint.fold != fold:
+                raise ArtifactError(
+                    f"cross-fit source checkpoint key {fold} records fold "
+                    f"{checkpoint.fold!r}; the producing fold must agree"
+                )
+            if source.executor != "cross_fit" and checkpoint.fold is not None:
+                raise ArtifactError(
+                    f"non-cross-fit source checkpoint records fold {checkpoint.fold!r}"
+                )
+        if self._labels.numel() and (
+            int(self._labels.min()) < 0
+            or int(self._labels.max()) >= run.recipe.schema.treatment_cardinality
+        ):
+            raise ArtifactError(
+                "PseudoLabels contain a treatment outside the recipe schema's "
+                "cardinality"
+            )
+        if source.executor == "cross_fit":
+            self.assert_out_of_fold()
+
+    def apply_to(self, batch: XTYBatch, *, treatment_cardinality: int) -> XTYBatch:
+        """Functionally join the hard-label side table by ``row_id``."""
+        treatment = batch.t.clone()
+        observed = batch.t_observed.clone()
+        if self._row_id.numel() == 0 or batch.batch_size == 0:
+            return batch.replace(t=treatment, t_observed=observed)
+
+        source_rows = self._row_id.to(device=batch.device)
+        source_labels = self._labels.to(device=batch.device)
+        positions = torch.searchsorted(source_rows, batch.row_id)
+        safe_positions = positions.clamp(max=source_rows.numel() - 1)
+        joined_labels = source_labels.index_select(0, safe_positions)
+        matched = (positions < source_rows.numel()) & (
+            source_rows.index_select(0, safe_positions) == batch.row_id
+        )
+
+        invalid = matched & (
+            (joined_labels < 0) | (joined_labels >= treatment_cardinality)
+        )
+        if bool(invalid.any()):
+            index = int(torch.nonzero(invalid, as_tuple=False)[0, 0].item())
+            raise ArtifactError(
+                f"pseudo-label {int(joined_labels[index])} for row "
+                f"{int(batch.row_id[index])} is outside [0, "
+                f"{treatment_cardinality})"
+            )
+
+        conflicts = matched & observed & (treatment != joined_labels)
+        if bool(conflicts.any()):
+            index = int(torch.nonzero(conflicts, as_tuple=False)[0, 0].item())
+            raise ArtifactError(
+                f"pseudo-label {int(joined_labels[index])} for row "
+                f"{int(batch.row_id[index])} conflicts with its observed "
+                f"treatment {int(treatment[index])}; artifact inputs never "
+                "overwrite observed data"
+            )
+
+        write = matched & ~observed
+        treatment[write] = joined_labels[write]
+        observed[write] = True
+        return batch.replace(t=treatment, t_observed=observed)
+
+    def describe(self) -> str:
+        return (
+            f"pseudo labels from {self.source_stage}: {self._row_id.numel()} "
+            f"rows, mode {self.prediction_mode}, used_y={self.used_y}"
+        )
+
+    def save(self, path: Path) -> Path:
+        path = Path(path)
+        if path.exists():
+            raise ArtifactError(
+                f"{path} already exists. Artifacts are immutable (DESIGN.md §7.1)."
+            )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload: dict[str, Any] = {
+            "format": ARTIFACT_FORMAT,
+            "kind": "pseudo_labels",
+            "source_stage": self.source_stage,
+            "source_checkpoints": {
+                fold: _checkpoint_payload(checkpoint)
+                for fold, checkpoint in self._checkpoints.items()
+            },
+            "predicted_by_fold": self._predicted_by_fold,
+            "row_id": self._row_id,
+            "labels": self._labels,
+        }
+        torch.save(payload, path)
+        _make_read_only(path)
+        return path
+
+    @classmethod
+    def load(cls, path: Path, run: CompiledRun) -> PseudoLabels:
+        """Load, re-derive lineage, and verify cross-fit disjointness."""
+        path = Path(path)
+        if not path.exists():
+            raise ArtifactError(f"no pseudo labels at {path}")
+        payload = torch.load(path, map_location="cpu", weights_only=True)
+        if not isinstance(payload, dict) or payload.get("kind") != "pseudo_labels":
+            raise ArtifactError(f"{path} does not hold a pseudo-label payload")
+        if payload.get("format") != ARTIFACT_FORMAT:
+            raise ArtifactError(
+                f"{path} was written in artifact format "
+                f"{payload.get('format')!r}; this build reads "
+                f"format {ARTIFACT_FORMAT}"
+            )
+        source_stage = str(payload["source_stage"])
+        try:
+            source = run.stage(source_stage)
+        except CompileError as error:
+            raise ArtifactError(
+                f"PseudoLabels name unknown source stage {source_stage!r}"
+            ) from error
+        action = source.action
+        if not isinstance(action, PseudoLabelAction):
+            raise ArtifactError(
+                f"stage {source_stage!r} does not emit pseudo labels in this plan"
+            )
+        raw_checkpoints = payload["source_checkpoints"]
+        if not isinstance(raw_checkpoints, dict):
+            raise ArtifactError("source_checkpoints must be a mapping")
+        artifact = cls._issue(
+            source_stage=source_stage,
+            source_checkpoints={
+                int(fold): _checkpoint_from_payload(checkpoint)
+                for fold, checkpoint in raw_checkpoints.items()
+            },
+            predicted_by_fold=payload["predicted_by_fold"],
+            row_id=payload["row_id"],
+            labels=payload["labels"],
+            used_y=run.graph.port_depends_on_raw_outcome(action.port),
+        )
+        artifact.validate_for(run)
+        return artifact
+
+
+def _checkpoint_payload(checkpoint: Checkpoint) -> dict[str, Any]:
+    """Plain payload used when a pseudo-label table embeds its producers."""
+    return {
+        "recipe": checkpoint.recipe,
+        "stage": checkpoint.stage,
+        "fold": checkpoint.fold,
+        "trained_on_row_ids": checkpoint.trained_on_row_ids,
+        "parameters": dict(checkpoint.parameters),
+        "buffers": dict(checkpoint.buffers),
+        "components": list(checkpoint.components),
+        "steps": checkpoint.steps,
+        "seed": checkpoint.seed,
+        "plan_digest": checkpoint.plan_digest,
+    }
+
+
+def _checkpoint_from_payload(payload: object) -> Checkpoint:
+    if not isinstance(payload, dict):
+        raise ArtifactError("embedded source checkpoint is not a mapping")
+    return Checkpoint._issue(
+        recipe=str(payload["recipe"]),
+        stage=str(payload["stage"]),
+        fold=payload["fold"],
+        trained_on_row_ids=payload["trained_on_row_ids"],
+        parameters=payload["parameters"],
+        buffers=payload.get("buffers", {}),
+        components=tuple(payload["components"]),
+        steps=int(payload["steps"]),
+        seed=int(payload["seed"]),
+        plan_digest=str(payload["plan_digest"]),
+    )
+
+
 @dataclass(frozen=True)
 class RunDirectory:
     """Where one run's artifacts go (`DESIGN.md` §7.1).
@@ -391,6 +830,12 @@ class RunDirectory:
     def stage_dir(self, stage: str) -> Path:
         """`<root>/stages/<stage>`, created on demand."""
         path = self.root / STAGES_DIR / stage
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def fold_dir(self, stage: str, fold: int) -> Path:
+        """The immutable artifact directory for one cross-fit fold."""
+        path = self.stage_dir(stage) / FOLDS_DIR / str(fold)
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -446,15 +891,55 @@ class RunDirectory:
                 f"{digest[:12]}. One run directory holds one compiled recipe "
                 "(DESIGN.md §7.1)."
             )
-        return checkpoint.save(self.stage_dir(checkpoint.stage) / CHECKPOINT_FILE)
+        directory = (
+            self.stage_dir(checkpoint.stage)
+            if checkpoint.fold is None
+            else self.fold_dir(checkpoint.stage, checkpoint.fold)
+        )
+        return checkpoint.save(directory / CHECKPOINT_FILE)
 
-    def read_checkpoint(self, stage: str) -> Checkpoint:
+    def read_checkpoint(self, stage: str, *, fold: int | None = None) -> Checkpoint:
         """Read the checkpoint a stage wrote."""
-        return Checkpoint.load(self.root / STAGES_DIR / stage / CHECKPOINT_FILE)
+        directory = self.root / STAGES_DIR / stage
+        if fold is not None:
+            directory = directory / FOLDS_DIR / str(fold)
+        return Checkpoint.load(directory / CHECKPOINT_FILE)
 
-    def write_log(self, stage: str, records: Iterable[Mapping[str, Any]]) -> Path:
+    def write_pseudo_labels(self, labels: PseudoLabels) -> Path:
+        """Write one stage's pseudo-label side table against this run's plan."""
+        digest = self.plan_digest()
+        if digest is None:
+            raise ArtifactError(
+                f"{self.root} holds no execution plan, so pseudo labels cannot "
+                "be checked against the run that produced them"
+            )
+        if labels.plan_digest != digest:
+            raise ArtifactError(
+                f"pseudo labels from {labels.source_stage!r} were produced under "
+                f"plan {labels.plan_digest[:12]}, and this directory holds "
+                f"{digest[:12]}"
+            )
+        return labels.save(self.stage_dir(labels.source_stage) / PSEUDO_LABELS_FILE)
+
+    def read_pseudo_labels(self, stage: str, run: CompiledRun) -> PseudoLabels:
+        """Load a side table and execute its plan/fold provenance checks."""
+        return PseudoLabels.load(
+            self.root / STAGES_DIR / stage / PSEUDO_LABELS_FILE,
+            run,
+        )
+
+    def write_log(
+        self,
+        stage: str,
+        records: Iterable[Mapping[str, Any]],
+        *,
+        fold: int | None = None,
+    ) -> Path:
         """Write the §6.2 per-step log as JSON lines."""
-        path = self.stage_dir(stage) / LOG_FILE
+        directory = (
+            self.stage_dir(stage) if fold is None else self.fold_dir(stage, fold)
+        )
+        path = directory / LOG_FILE
         if path.exists():
             raise ArtifactError(
                 f"{path} already exists; a stage's log is written once (DESIGN.md §7.1)"
@@ -464,9 +949,14 @@ class RunDirectory:
         _make_read_only(path)
         return path
 
-    def read_log(self, stage: str) -> tuple[dict[str, Any], ...]:
+    def read_log(
+        self, stage: str, *, fold: int | None = None
+    ) -> tuple[dict[str, Any], ...]:
         """Read back what `write_log` wrote."""
-        path = self.root / STAGES_DIR / stage / LOG_FILE
+        path = self.root / STAGES_DIR / stage
+        if fold is not None:
+            path = path / FOLDS_DIR / str(fold)
+        path = path / LOG_FILE
         if not path.exists():
             raise ArtifactError(f"no log at {path}")
         text = path.read_text(encoding="utf-8")
@@ -501,10 +991,14 @@ def is_read_only(path: Path) -> bool:
 __all__ = [
     "ARTIFACT_FORMAT",
     "CHECKPOINT_FILE",
+    "FOLDS_DIR",
     "LOG_FILE",
     "PLAN_FILE",
+    "PSEUDO_LABELS_FILE",
     "STAGES_DIR",
     "Checkpoint",
+    "PredictionMode",
+    "PseudoLabels",
     "RunDirectory",
     "is_read_only",
 ]

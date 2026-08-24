@@ -27,15 +27,17 @@ requires it of every stage, and here it is simply what the loop does not do.
 
 P8 adds the deliberately small outer loop: a `Program` is executed in order,
 each stage starts from the recipe's initial state plus exactly the checkpoint
-named by `initialise_from`, and every stage emits its own immutable checkpoint.
-There is still one executor kind. `array_fit` and `cross_fit` remain P10.
+named by `initialise_from`. P10 makes execution explicit rather than inferred:
+``gradient`` keeps this loop, ``array_fit`` calls a functional array action
+once over resolved rows, and ``cross_fit`` repeats the gradient fit per actual
+``fold_id`` then emits held-out pseudo labels whose provenance can be checked.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any
 
@@ -44,10 +46,12 @@ from torch import Tensor
 
 from xty2.core.batch import XTYBatch
 from xty2.core.compile import CompiledRun, CompiledStage
-from xty2.core.errors import TrainingError
+from xty2.core.errors import ArtifactError, TrainingError
 from xty2.core.graph import ComponentGraph
-from xty2.core.loss import TrainContext
-from xty2.training.artifacts import Checkpoint, RunDirectory
+from xty2.core.loss import TrainContext, treatment_distribution
+from xty2.core.recipe import ArrayFitAction, PseudoLabelAction
+from xty2.core.rows import resolve_rows
+from xty2.training.artifacts import Checkpoint, PseudoLabels, RunDirectory
 from xty2.training.loss_mixer import (
     GradientProbe,
     GradientReport,
@@ -148,7 +152,10 @@ class StageResult:
         recipe: The recipe it belongs to.
         seed: The seed the loop ran under.
         records: One `StepRecord` per optimiser step, in order.
-        checkpoint: The stage's parameters and provenance (`DESIGN.md` §7.1).
+        checkpoint: Gradient and array-fit stages expose one primary immutable
+            checkpoint. A cross-fit/action-only stage instead exposes fold
+            checkpoints and/or pseudo labels; accessing ``checkpoint`` then is
+            a loud error rather than an arbitrary fold choice.
         teacher: The stage-local EMA parameter set, when one was declared.
             It is a live model for inspection or inference, not the immutable
             student checkpoint written as the stage artifact.
@@ -158,10 +165,21 @@ class StageResult:
     recipe: str
     seed: int
     records: tuple[StepRecord, ...]
-    checkpoint: Checkpoint
+    _checkpoint: Checkpoint | None = field(repr=False)
+    fold_checkpoints: Mapping[int, Checkpoint] = field(default_factory=dict)
+    pseudo_labels: PseudoLabels | None = None
     teacher: EMATeacher | None = None
     paths: Mapping[str, str] = field(default_factory=dict)
     """Where the artifacts were written, when a run directory was given."""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "records", tuple(self.records))
+        object.__setattr__(
+            self,
+            "fold_checkpoints",
+            MappingProxyType(dict(sorted(self.fold_checkpoints.items()))),
+        )
+        object.__setattr__(self, "paths", MappingProxyType(dict(self.paths)))
 
     @property
     def trace(self) -> tuple[float, ...]:
@@ -171,6 +189,21 @@ class StageResult:
     @property
     def steps(self) -> int:
         return len(self.records)
+
+    @property
+    def has_checkpoint(self) -> bool:
+        return self._checkpoint is not None
+
+    @property
+    def checkpoint(self) -> Checkpoint:
+        """The stage's single primary checkpoint, when it has one."""
+        if self._checkpoint is None:
+            raise TrainingError(
+                f"stage {self.stage!r} has no single checkpoint. Cross-fit "
+                "stages expose fold_checkpoints and action-only stages expose "
+                "their pseudo-label artifact."
+            )
+        return self._checkpoint
 
     def render(self, *, every: int = 1) -> str:
         """The trace as text, for a run log or a PR body."""
@@ -185,7 +218,12 @@ class StageResult:
                 f"  step {record.step:<6} lr {record.lr:.6g}  "
                 f"total {record.total:.6g}  |grad| {record.grad_norm:.6g}  {terms}"
             )
-        lines.append(f"  {self.checkpoint.describe()}")
+        if self._checkpoint is not None:
+            lines.append(f"  {self._checkpoint.describe()}")
+        for fold, checkpoint in sorted(self.fold_checkpoints.items()):
+            lines.append(f"  fold {fold}: {checkpoint.describe()}")
+        if self.pseudo_labels is not None:
+            lines.append(f"  {self.pseudo_labels.describe()}")
         return "\n".join(lines)
 
 
@@ -209,9 +247,24 @@ class ProgramResult:
 
     @property
     def checkpoints(self) -> Mapping[str, Checkpoint]:
-        """Every stage checkpoint, keyed by stage name and read-only."""
+        """Every primary stage checkpoint, keyed by stage name and read-only."""
         return MappingProxyType(
-            {result.stage: result.checkpoint for result in self.stages}
+            {
+                result.stage: result.checkpoint
+                for result in self.stages
+                if result.has_checkpoint
+            }
+        )
+
+    @property
+    def pseudo_labels(self) -> Mapping[str, PseudoLabels]:
+        """Every emitted pseudo-label table, keyed by producing stage."""
+        return MappingProxyType(
+            {
+                result.stage: result.pseudo_labels
+                for result in self.stages
+                if result.pseudo_labels is not None
+            }
         )
 
 
@@ -324,6 +377,92 @@ def _emit_checkpoint(
     )
 
 
+def _emit_array_checkpoint(
+    run: CompiledRun,
+    stage: CompiledStage,
+    action: ArrayFitAction,
+    state: object,
+    row_ids: Tensor,
+    *,
+    seed: int,
+) -> Checkpoint:
+    """Issue tensor state returned by one functional array fit."""
+    if not isinstance(state, Mapping) or not state:
+        raise TrainingError(
+            f"array-fit action {action.name!r} returned no tensor state. A "
+            "checkpoint must contain the complete fitted state, not merely a "
+            "success flag."
+        )
+    qualified: dict[str, Tensor] = {}
+    for name, value in state.items():
+        if not isinstance(name, str) or not name or "\n" in name:
+            raise TrainingError(
+                f"array-fit action {action.name!r} returned invalid state name {name!r}"
+            )
+        if not isinstance(value, Tensor):
+            raise TrainingError(
+                f"array-fit action {action.name!r} state {name!r} is "
+                f"{type(value)}, expected Tensor"
+            )
+        qualified[f"{action.name}.{name}"] = value
+    return Checkpoint._issue(
+        recipe=run.recipe.name,
+        stage=stage.name,
+        fold=None,
+        trained_on_row_ids=torch.unique(row_ids.detach().cpu()),
+        parameters=qualified,
+        buffers={},
+        components=(action.name,),
+        steps=1,
+        seed=seed,
+        plan_digest=run.plan.digest,
+    )
+
+
+def _emit_pseudo_labels(
+    run: CompiledRun,
+    stage: CompiledStage,
+    checkpoints: Mapping[int, Checkpoint],
+    row_ids: Sequence[Tensor],
+    predicted_by_fold: Sequence[Tensor],
+    labels: Sequence[Tensor],
+) -> PseudoLabels:
+    """Issue one deduplicated side table from predictions the executor made."""
+    action = stage.action
+    if not isinstance(action, PseudoLabelAction):
+        raise TrainingError(
+            f"stage {stage.name!r} does not declare a PseudoLabelAction"
+        )
+    rows = torch.cat([value.reshape(-1).cpu() for value in row_ids])
+    folds = torch.cat([value.reshape(-1).cpu() for value in predicted_by_fold])
+    values = torch.cat([value.reshape(-1).cpu() for value in labels])
+    if not (rows.numel() == folds.numel() == values.numel()):
+        raise TrainingError("pseudo-label prediction fields are not row-aligned")
+    by_row: dict[int, tuple[int, int]] = {}
+    for row, fold, label in zip(
+        rows.tolist(), folds.tolist(), values.tolist(), strict=True
+    ):
+        candidate = (int(fold), int(label))
+        existing = by_row.get(int(row))
+        if existing is not None and existing != candidate:
+            raise TrainingError(
+                f"row {row} was pseudo-labelled more than once with conflicting "
+                f"(fold, label) values {existing!r} and {candidate!r}"
+            )
+        by_row[int(row)] = candidate
+    ordered = sorted(by_row)
+    return PseudoLabels._issue(
+        source_stage=stage.name,
+        source_checkpoints=checkpoints,
+        predicted_by_fold=torch.tensor(
+            [by_row[row][0] for row in ordered], dtype=torch.long
+        ),
+        row_id=torch.tensor(ordered, dtype=torch.long),
+        labels=torch.tensor([by_row[row][1] for row in ordered], dtype=torch.long),
+        used_y=run.graph.port_depends_on_raw_outcome(action.port),
+    )
+
+
 # ---------------------------------------------------------------------------
 # The loop
 # ---------------------------------------------------------------------------
@@ -361,6 +500,12 @@ def run_stage(
         The trace, the per-step log and the stage's checkpoint.
     """
     compiled = _resolve(run, stage)
+    if compiled.executor != "gradient":
+        raise TrainingError(
+            f"stage {compiled.name!r} declares executor={compiled.executor!r}; "
+            "call run_array_fit or run_cross_fit so the declared executor is "
+            "not silently replaced by the gradient loop."
+        )
     if compiled.initialise_from is not None:
         raise TrainingError(
             f"stage {compiled.name!r} initialises from "
@@ -368,18 +513,106 @@ def run_stage(
             "resolves that earlier immutable checkpoint before executing the "
             "stage; run_stage cannot silently ignore the declared transition."
         )
+    if not compiled.objectives:
+        raise TrainingError(
+            f"stage {compiled.name!r} is action-only. Run it through "
+            "run_program so its source checkpoint and artifact edge are "
+            "resolved before prediction."
+        )
+    prediction_batches: list[XTYBatch] | None = None
+    fit_batches: BatchSource = batches
+    if isinstance(compiled.action, PseudoLabelAction):
+        prediction_batches = []
+        fit_batches = _capture_step_batches(batches, compiled, prediction_batches)
     _restore_initial_state(
         run,
         parameters=run.initial_parameters(),
         buffers=run.initial_buffers(),
     )
-    return _run_stage(
+    result = _run_stage(
         run,
         compiled,
-        batches,
+        fit_batches,
         seed=seed,
         run_dir=run_dir,
         probe=probe,
+    )
+    if prediction_batches is None:
+        return result
+    labels = _predict_pseudo_labels(
+        run,
+        compiled,
+        prediction_batches,
+        checkpoints={0: result.checkpoint},
+        fold=0,
+        seed=seed,
+        teacher=result.teacher,
+    )
+    paths = dict(result.paths)
+    if run_dir is not None:
+        paths["pseudo_labels"] = str(run_dir.write_pseudo_labels(labels))
+    return replace(result, pseudo_labels=labels, paths=paths)
+
+
+def run_array_fit(
+    run: CompiledRun,
+    stage: str | CompiledStage,
+    batches: BatchSource,
+    *,
+    seed: int,
+    run_dir: RunDirectory | None = None,
+) -> StageResult:
+    """Execute one explicit functional ``array_fit`` stage."""
+    compiled = _resolve(run, stage)
+    if compiled.executor != "array_fit":
+        raise TrainingError(
+            f"stage {compiled.name!r} declares executor={compiled.executor!r}, "
+            "not 'array_fit'"
+        )
+    _restore_initial_state(
+        run,
+        parameters=run.initial_parameters(),
+        buffers=run.initial_buffers(),
+    )
+    return _run_array_fit(
+        run,
+        compiled,
+        _materialise_batches(batches, compiled),
+        seed=seed,
+        run_dir=run_dir,
+    )
+
+
+def run_cross_fit(
+    run: CompiledRun,
+    stage: str | CompiledStage,
+    batches: BatchSource,
+    *,
+    seed: int,
+    run_dir: RunDirectory | None = None,
+    probe: GradientProbe | None = None,
+) -> StageResult:
+    """Fit every actual fold and emit held-out treatment pseudo labels."""
+    compiled = _resolve(run, stage)
+    if compiled.executor != "cross_fit":
+        raise TrainingError(
+            f"stage {compiled.name!r} declares executor={compiled.executor!r}, "
+            "not 'cross_fit'"
+        )
+    if compiled.initialise_from is not None:
+        raise TrainingError(
+            f"stage {compiled.name!r} initialises from "
+            f"{compiled.initialise_from!r}. Run it through run_program so the "
+            "named checkpoint can be restored independently for every fold."
+        )
+    return _run_cross_fit(
+        run,
+        compiled,
+        _materialise_batches(batches, compiled),
+        seed=seed,
+        run_dir=run_dir,
+        probe=probe,
+        initialise_from=None,
     )
 
 
@@ -436,22 +669,493 @@ def run_program(
             parameters=initial_parameters,
             buffers=initial_buffers,
         )
+        source_checkpoint: Checkpoint | None = None
         if compiled.initialise_from is not None:
-            source = by_name[compiled.initialise_from].checkpoint
-            _restore_checkpoint(run, source)
+            source_checkpoint = by_name[compiled.initialise_from].checkpoint
+            _restore_checkpoint(run, source_checkpoint)
 
-        result = _run_stage(
-            run,
-            compiled,
+        inputs: list[PseudoLabels] = []
+        for input_name in compiled.inputs:
+            labels = by_name[input_name].pseudo_labels
+            if labels is None:
+                raise TrainingError(
+                    f"stage {compiled.name!r} consumes {input_name!r}, but that "
+                    "stage emitted no PseudoLabels"
+                )
+            try:
+                labels.validate_for(run)
+            except ArtifactError as error:
+                raise TrainingError(
+                    f"stage {compiled.name!r} could not load pseudo-label input "
+                    f"{input_name!r}: {error}"
+                ) from error
+            inputs.append(labels)
+
+        stage_batches: BatchSource = _apply_inputs(
             sources[compiled.name],
-            seed=seed + index,
-            run_dir=run_dir,
-            probe=probe_map.get(compiled.name),
+            inputs,
+            treatment_cardinality=run.recipe.schema.treatment_cardinality,
         )
+        stage_seed = seed + index
+        if compiled.executor == "gradient":
+            result = _run_gradient_or_action(
+                run,
+                compiled,
+                stage_batches,
+                seed=stage_seed,
+                run_dir=run_dir,
+                probe=probe_map.get(compiled.name),
+                source_checkpoint=source_checkpoint,
+            )
+        elif compiled.executor == "array_fit":
+            result = _run_array_fit(
+                run,
+                compiled,
+                _materialise_batches(stage_batches, compiled),
+                seed=stage_seed,
+                run_dir=run_dir,
+            )
+        else:
+            result = _run_cross_fit(
+                run,
+                compiled,
+                _materialise_batches(stage_batches, compiled),
+                seed=stage_seed,
+                run_dir=run_dir,
+                probe=probe_map.get(compiled.name),
+                initialise_from=source_checkpoint,
+            )
         results.append(result)
         by_name[compiled.name] = result
 
     return ProgramResult(recipe=run.recipe.name, seed=seed, stages=tuple(results))
+
+
+def _run_gradient_or_action(
+    run: CompiledRun,
+    compiled: CompiledStage,
+    batches: BatchSource,
+    *,
+    seed: int,
+    run_dir: RunDirectory | None,
+    probe: GradientProbe | None,
+    source_checkpoint: Checkpoint | None,
+) -> StageResult:
+    """Execute a normal fit, optionally followed by a pseudo-label action."""
+    materialised: list[XTYBatch] | None = None
+    fit_batches: BatchSource = batches
+    if isinstance(compiled.action, PseudoLabelAction):
+        if compiled.objectives:
+            materialised = []
+            fit_batches = _capture_step_batches(batches, compiled, materialised)
+        else:
+            materialised = _materialise_batches(batches, compiled)
+    if compiled.objectives:
+        result = _run_stage(
+            run,
+            compiled,
+            fit_batches,
+            seed=seed,
+            run_dir=run_dir,
+            probe=probe,
+        )
+        if materialised is None:
+            return result
+        labels = _predict_pseudo_labels(
+            run,
+            compiled,
+            materialised,
+            checkpoints={0: result.checkpoint},
+            fold=0,
+            seed=seed,
+            teacher=result.teacher,
+        )
+        paths = dict(result.paths)
+        if run_dir is not None:
+            paths["pseudo_labels"] = str(run_dir.write_pseudo_labels(labels))
+        return replace(result, pseudo_labels=labels, paths=paths)
+
+    if not isinstance(compiled.action, PseudoLabelAction):
+        raise TrainingError(
+            f"gradient stage {compiled.name!r} has neither objectives nor a "
+            "PseudoLabelAction"
+        )
+    if source_checkpoint is None:
+        raise TrainingError(
+            f"action-only stage {compiled.name!r} needs initialise_from so its "
+            "predictions name the checkpoint that produced them"
+        )
+    assert materialised is not None
+    teacher = (
+        EMATeacher(run.graph, compiled.teacher)
+        if compiled.teacher is not None
+        else None
+    )
+    labels = _predict_pseudo_labels(
+        run,
+        compiled,
+        materialised,
+        checkpoints={0: source_checkpoint},
+        fold=0,
+        seed=seed,
+        teacher=teacher,
+    )
+    action_paths: dict[str, str] = {}
+    if run_dir is not None:
+        action_paths["plan"] = str(run_dir.write_plan(run.plan))
+        action_paths["pseudo_labels"] = str(run_dir.write_pseudo_labels(labels))
+    return StageResult(
+        stage=compiled.name,
+        recipe=run.recipe.name,
+        seed=seed,
+        records=(),
+        _checkpoint=None,
+        pseudo_labels=labels,
+        teacher=teacher,
+        paths=action_paths,
+    )
+
+
+def _run_array_fit(
+    run: CompiledRun,
+    compiled: CompiledStage,
+    batches: Sequence[XTYBatch],
+    *,
+    seed: int,
+    run_dir: RunDirectory | None,
+) -> StageResult:
+    action = compiled.action
+    if not isinstance(action, ArrayFitAction) or isinstance(action, PseudoLabelAction):
+        raise TrainingError(f"array-fit stage {compiled.name!r} has no ArrayFitAction")
+    for candidate in batches:
+        run.recipe.schema.validate_batch(candidate)
+    batch = _combine_batches(batches)
+    rows = resolve_rows(batch, *(compiled.action_rows or ("all",)))
+    if rows.numel() == 0:
+        raise TrainingError(
+            f"array-fit stage {compiled.name!r} has zero eligible rows; an "
+            "estimator fit on an empty array is not a valid stage"
+        )
+    before = batch.clone()
+    torch.manual_seed(seed)
+    state = action.fit(batch, rows, seed=seed)
+    if not batch.equal_to(before):
+        raise TrainingError(
+            f"array-fit action {action.name!r} mutated its input batch. Stage "
+            "actions return state and never write into the source dataset "
+            "(DESIGN.md §7.1)."
+        )
+    checkpoint = _emit_array_checkpoint(
+        run,
+        compiled,
+        action,
+        state,
+        batch.row_id[rows],
+        seed=seed,
+    )
+    paths: dict[str, str] = {}
+    if run_dir is not None:
+        paths["plan"] = str(run_dir.write_plan(run.plan))
+        paths["checkpoint"] = str(run_dir.write_checkpoint(checkpoint))
+    return StageResult(
+        stage=compiled.name,
+        recipe=run.recipe.name,
+        seed=seed,
+        records=(),
+        _checkpoint=checkpoint,
+        paths=paths,
+    )
+
+
+def _run_cross_fit(
+    run: CompiledRun,
+    compiled: CompiledStage,
+    batches: Sequence[XTYBatch],
+    *,
+    seed: int,
+    run_dir: RunDirectory | None,
+    probe: GradientProbe | None,
+    initialise_from: Checkpoint | None,
+) -> StageResult:
+    action = compiled.action
+    if not isinstance(action, PseudoLabelAction):
+        raise TrainingError(
+            f"cross-fit stage {compiled.name!r} has no PseudoLabelAction"
+        )
+    for candidate in batches:
+        run.recipe.schema.validate_batch(candidate)
+    data = _combine_batches(batches)
+    if data.fold_id is None:
+        raise TrainingError(
+            f"cross-fit stage {compiled.name!r} needs batch.fold_id on every row"
+        )
+    folds = sorted(set(data.fold_id.tolist()))
+    if len(folds) < 2:
+        raise TrainingError(
+            f"cross-fit stage {compiled.name!r} needs at least two folds, got {folds!r}"
+        )
+
+    checkpoints: dict[int, Checkpoint] = {}
+    row_ids: list[Tensor] = []
+    predicted_by_fold: list[Tensor] = []
+    predictions: list[Tensor] = []
+    records: list[StepRecord] = []
+    paths: dict[str, str] = {}
+    for offset, fold in enumerate(folds):
+        assert data.fold_id is not None
+        train_rows = torch.nonzero(data.fold_id != fold, as_tuple=False).flatten()
+        predict_rows = torch.nonzero(data.fold_id == fold, as_tuple=False).flatten()
+        if train_rows.numel() == 0 or predict_rows.numel() == 0:
+            raise TrainingError(
+                f"fold {fold} of stage {compiled.name!r} has "
+                f"{train_rows.numel()} train rows and {predict_rows.numel()} "
+                "prediction rows; both must be non-empty"
+            )
+        train_batch = _slice_batch(data, train_rows)
+        predict_batch = _slice_batch(data, predict_rows)
+        _restore_initial_state(
+            run,
+            parameters=run.initial_parameters(),
+            buffers=run.initial_buffers(),
+        )
+        if initialise_from is not None:
+            _restore_checkpoint(run, initialise_from)
+        fold_seed = seed + offset
+        fold_result = _run_stage(
+            run,
+            compiled,
+            [train_batch] * compiled.steps,
+            seed=fold_seed,
+            run_dir=run_dir,
+            probe=probe,
+            fold=fold,
+        )
+        checkpoint = fold_result.checkpoint
+        checkpoints[fold] = checkpoint
+        records.extend(fold_result.records)
+        for key, value in fold_result.paths.items():
+            paths[f"fold.{fold}.{key}"] = value
+        batch_rows, batch_folds, batch_predictions = _pseudo_predictions(
+            run,
+            compiled,
+            [predict_batch],
+            fold=fold,
+            seed=fold_seed,
+            teacher=fold_result.teacher,
+        )
+        row_ids.extend(batch_rows)
+        predicted_by_fold.extend(batch_folds)
+        predictions.extend(batch_predictions)
+
+    labels = _emit_pseudo_labels(
+        run,
+        compiled,
+        checkpoints,
+        row_ids,
+        predicted_by_fold,
+        predictions,
+    )
+    try:
+        labels.validate_for(run)
+    except ArtifactError as error:
+        raise TrainingError(
+            f"cross-fit stage {compiled.name!r} produced invalid provenance: {error}"
+        ) from error
+    if run_dir is not None:
+        paths["plan"] = str(run_dir.write_plan(run.plan))
+        paths["pseudo_labels"] = str(run_dir.write_pseudo_labels(labels))
+    return StageResult(
+        stage=compiled.name,
+        recipe=run.recipe.name,
+        seed=seed,
+        records=tuple(records),
+        _checkpoint=None,
+        fold_checkpoints=MappingProxyType(dict(sorted(checkpoints.items()))),
+        pseudo_labels=labels,
+        paths=paths,
+    )
+
+
+def _predict_pseudo_labels(
+    run: CompiledRun,
+    compiled: CompiledStage,
+    batches: Sequence[XTYBatch],
+    *,
+    checkpoints: Mapping[int, Checkpoint],
+    fold: int,
+    seed: int,
+    teacher: EMATeacher | None,
+) -> PseudoLabels:
+    row_ids, folds, labels = _pseudo_predictions(
+        run,
+        compiled,
+        batches,
+        fold=fold,
+        seed=seed,
+        teacher=teacher,
+    )
+    artifact = _emit_pseudo_labels(
+        run,
+        compiled,
+        checkpoints,
+        row_ids,
+        folds,
+        labels,
+    )
+    try:
+        artifact.validate_for(run)
+    except ArtifactError as error:
+        raise TrainingError(
+            f"stage {compiled.name!r} produced invalid pseudo-label provenance: {error}"
+        ) from error
+    return artifact
+
+
+def _pseudo_predictions(
+    run: CompiledRun,
+    compiled: CompiledStage,
+    batches: Sequence[XTYBatch],
+    *,
+    fold: int,
+    seed: int,
+    teacher: EMATeacher | None,
+) -> tuple[list[Tensor], list[Tensor], list[Tensor]]:
+    action = compiled.action
+    if not isinstance(action, PseudoLabelAction):
+        raise TrainingError(
+            f"stage {compiled.name!r} has no PseudoLabelAction to evaluate"
+        )
+    row_ids: list[Tensor] = []
+    folds: list[Tensor] = []
+    labels: list[Tensor] = []
+    torch.manual_seed(seed)
+    with torch.no_grad():
+        for batch_index, batch in enumerate(batches):
+            state = run.state(
+                compiled,
+                batch,
+                rng_key=(seed * 1_000_000_007 + fold * 1_000_003 + batch_index),
+                teacher_graph=teacher.graph if teacher is not None else None,
+            )
+            rows = resolve_rows(batch, *(compiled.action_rows or ("all",)))
+            distribution = treatment_distribution(
+                state,
+                action.port,
+                action.realisation,
+                objective=f"pseudo-label action {compiled.name}",
+            )
+            predicted = distribution.probs.argmax(dim=1)
+            row_ids.append(batch.row_id[rows].detach().cpu())
+            folds.append(torch.full((rows.numel(),), fold, dtype=torch.long))
+            labels.append(predicted[rows].detach().cpu())
+    return row_ids, folds, labels
+
+
+def _apply_inputs(
+    batches: BatchSource,
+    inputs: Sequence[PseudoLabels],
+    *,
+    treatment_cardinality: int,
+) -> Iterator[XTYBatch]:
+    """Functionally join every declared side table as batches are loaded."""
+    for batch in batches:
+        if not isinstance(batch, XTYBatch):
+            raise TrainingError(
+                f"a stage batch source yielded {type(batch)}, expected XTYBatch"
+            )
+        loaded = batch
+        for labels in inputs:
+            try:
+                loaded = labels.apply_to(
+                    loaded,
+                    treatment_cardinality=treatment_cardinality,
+                )
+            except ArtifactError as error:
+                raise TrainingError(
+                    f"could not join pseudo labels from {labels.source_stage!r}: "
+                    f"{error}"
+                ) from error
+        yield loaded
+
+
+def _materialise_batches(
+    batches: BatchSource, compiled: CompiledStage
+) -> list[XTYBatch]:
+    """Collect a source whose executor contract explicitly requires finiteness.
+
+    Array-fit, cross-fit and action-only prediction operate on one finite
+    population. Gradient fitting is different: its general ``BatchSource``
+    may be cycling or unbounded, so a fitting gradient action captures batches
+    as the seeded optimiser loop consumes them instead.
+    """
+    materialised = list(batches)
+    if not materialised:
+        raise TrainingError(f"stage {compiled.name!r} received no batches")
+    for index, batch in enumerate(materialised):
+        if not isinstance(batch, XTYBatch):
+            raise TrainingError(
+                f"stage {compiled.name!r} batch {index} is {type(batch)}, "
+                "expected XTYBatch"
+            )
+    return materialised
+
+
+def _capture_step_batches(
+    batches: BatchSource,
+    compiled: CompiledStage,
+    captured: list[XTYBatch],
+) -> Iterator[XTYBatch]:
+    """Yield exactly ``steps`` batches and retain immutable prediction copies.
+
+    This wrapper is consumed inside ``_run_stage`` after its torch seed is set,
+    preserving the ordinary gradient executor's stochastic batch-source
+    semantics. It never asks an unbounded source for a batch beyond the fit.
+    """
+    source = iter(batches)
+    for step in range(compiled.steps):
+        batch = _next_batch(source, step, compiled)
+        captured.append(batch.clone())
+        yield batch
+
+
+def _combine_batches(batches: Sequence[XTYBatch]) -> XTYBatch:
+    """Concatenate one finite dataset, preserving every optional field."""
+    if not batches:
+        raise TrainingError("cannot combine an empty batch sequence")
+
+    def optional(name: str) -> Tensor | None:
+        values = [getattr(batch, name) for batch in batches]
+        if all(value is None for value in values):
+            return None
+        if any(value is None for value in values):
+            raise TrainingError(
+                f"batch field {name!r} is present for only part of the dataset"
+            )
+        return torch.cat([value for value in values if value is not None], dim=0)
+
+    return XTYBatch(
+        x=torch.cat([batch.x for batch in batches], dim=0),
+        t=torch.cat([batch.t for batch in batches], dim=0),
+        y=torch.cat([batch.y for batch in batches], dim=0),
+        t_observed=torch.cat([batch.t_observed for batch in batches], dim=0),
+        y_observed=torch.cat([batch.y_observed for batch in batches], dim=0),
+        row_id=torch.cat([batch.row_id for batch in batches], dim=0),
+        fold_id=optional("fold_id"),
+        weight=optional("weight"),
+    )
+
+
+def _slice_batch(batch: XTYBatch, rows: Tensor) -> XTYBatch:
+    return XTYBatch(
+        x=batch.x[rows],
+        t=batch.t[rows],
+        y=batch.y[rows],
+        t_observed=batch.t_observed[rows],
+        y_observed=batch.y_observed[rows],
+        row_id=batch.row_id[rows],
+        fold_id=batch.fold_id[rows] if batch.fold_id is not None else None,
+        weight=batch.weight[rows] if batch.weight is not None else None,
+    )
 
 
 def _run_stage(
@@ -462,6 +1166,7 @@ def _run_stage(
     seed: int,
     run_dir: RunDirectory | None,
     probe: GradientProbe | None,
+    fold: int | None = None,
 ) -> StageResult:
     """Execute one already-resolved stage for `run_stage` or `run_program`."""
     spec = compiled.optimiser
@@ -528,7 +1233,13 @@ def _run_stage(
             for module, was in modes.items():
                 module.training = was
         checkpoint = _emit_checkpoint(
-            run, compiled, parameters, seen, steps=len(records), seed=seed
+            run,
+            compiled,
+            parameters,
+            seen,
+            steps=len(records),
+            seed=seed,
+            fold=fold,
         )
 
     paths: dict[str, str] = {}
@@ -536,14 +1247,18 @@ def _run_stage(
         paths["plan"] = str(plan_path)
         paths["checkpoint"] = str(run_dir.write_checkpoint(checkpoint))
         paths["log"] = str(
-            run_dir.write_log(compiled.name, [r.as_json() for r in records])
+            run_dir.write_log(
+                compiled.name,
+                [r.as_json() for r in records],
+                fold=fold,
+            )
         )
     return StageResult(
         stage=compiled.name,
         recipe=run.recipe.name,
         seed=seed,
         records=tuple(records),
-        checkpoint=checkpoint,
+        _checkpoint=checkpoint,
         teacher=teacher,
         paths=paths,
     )
@@ -760,6 +1475,8 @@ __all__ = [
     "ProgramResult",
     "StageResult",
     "StepRecord",
+    "run_array_fit",
+    "run_cross_fit",
     "run_program",
     "run_stage",
     "trainable_only",

@@ -489,6 +489,20 @@ class ComponentGraph(nn.Module):
         """Every component whose transitive inputs include `Y_RAW`."""
         return tuple(name for name in self._order if self.depends_on_raw_outcome(name))
 
+    def port_depends_on_raw_outcome(self, port: Port) -> bool:
+        """Whether producing ``port`` transitively reads ``Y_RAW``.
+
+        This is the single derivation used by the P10 compiler guard and the
+        pseudo-label executor. Keeping it on the graph prevents those two
+        enforcement points from growing subtly different definitions of
+        ``used_y`` (`DESIGN.md` §2.2, §7.2).
+        """
+        if port == Port.Y_RAW:
+            return True
+        if port in SOURCE_PORTS:
+            return False
+        return self.depends_on_raw_outcome(self.producer(port))
+
     # -- execution ---------------------------------------------------------
 
     def evaluate(

@@ -50,6 +50,7 @@ data lineage
 
 stage fit
   rows: all
+  executor: gradient
   steps: 3
   optimisation
     optimiser     sgd(momentum=0.0, nesterov=False)
@@ -115,6 +116,7 @@ data lineage
 
 stage infer
   rows: t_observed
+  executor: gradient
   steps: 3
   optimisation
     optimiser     sgd(momentum=0.0, nesterov=False)
@@ -190,7 +192,7 @@ def test_the_plan_prints_the_expected_bytes() -> None:
 
 def test_the_plan_shows_which_components_reach_the_raw_outcome() -> None:
     # `used_y` is derived from the graph rather than declared (DESIGN.md §2.2),
-    # and the plan is where a reviewer sees it before P10 enforces it.
+    # and the plan is where a reviewer sees the lineage P10 enforces.
     assert compile(_posterior_recipe()).plan.render() == POSTERIOR_PLAN
 
 

@@ -15,13 +15,14 @@ components each one runs, the active objectives with their eligible rows and
 declared ports, and the trainable parameter groups. It is deterministic: the
 same recipe prints the same bytes, or a diff means nothing.
 
-The static half of the leakage rule is not here yet: it needs artifacts and
-executors to reason about (§8.7, P10). `ComponentGraph` already derives what it
-will ask for — which components transitively read `Y_RAW` — and the plan prints
-it. Views are validated here against the resolved schema before any stage is
-planned (P6, §8.5). A teacher realisation is stage-local: it exists exactly
-when that stage declares an EMA teacher, and its required ports are always
-detached because the teacher parameter set is structurally gradient-free (P8).
+P10 adds the static half of the leakage guard here. A pseudo-label action names
+the treatment-distribution port it reads, so ``used_y`` is the graph fact
+``port_depends_on_raw_outcome`` rather than a producer-set flag. The runtime
+half remains at artifact load, where actual fold row ids exist. Views are
+validated here against the resolved schema before any stage is planned (P6,
+§8.5). A teacher realisation is stage-local: it exists exactly when that stage
+declares an EMA teacher, and its required ports are always detached because the
+teacher parameter set is structurally gradient-free (P8).
 """
 
 from __future__ import annotations
@@ -47,7 +48,10 @@ from xty2.core.loss import Reduction
 from xty2.core.optimisation import OptimiserSpec
 from xty2.core.ports import Port
 from xty2.core.recipe import (
+    ArrayFitAction,
+    Executor,
     Objective,
+    PseudoLabelAction,
     Recipe,
     Stage,
     TeacherSpec,
@@ -138,6 +142,8 @@ class CompiledStage:
     stage: Stage
     passes: tuple[ForwardPass, ...]
     objectives: tuple[CompiledObjective, ...]
+    action_rows: tuple[Rows, ...] | None = None
+    action_uses_y: bool | None = None
 
     @property
     def name(self) -> str:
@@ -166,6 +172,19 @@ class CompiledStage:
     def steps(self) -> int:
         """Optimiser steps, not epochs (`FIDELITY.md` §2)."""
         return self.stage.steps
+
+    @property
+    def executor(self) -> Executor:
+        """The explicit executor kind; execution never infers one."""
+        return self.stage.executor
+
+    @property
+    def action(self) -> PseudoLabelAction | ArrayFitAction | None:
+        return self.stage.action
+
+    @property
+    def inputs(self) -> tuple[str, ...]:
+        return self.stage.inputs
 
 
 @dataclass(frozen=True)
@@ -294,17 +313,33 @@ class ExecutionPlan:
         lines = [
             f"stage {compiled.name}",
             f"  rows: {compiled.stage.rows}",
+            f"  executor: {compiled.executor}",
         ]
         if compiled.initialise_from is not None:
             lines.append(f"  initialise from: {compiled.initialise_from}")
+        if compiled.inputs:
+            lines.append(f"  inputs: {', '.join(compiled.inputs)}")
+        if compiled.stage.allow_leakage:
+            lines.append("  allow leakage: true (predictive only)")
         if compiled.teacher is not None:
             lines.append(f"  teacher: {compiled.teacher.describe()}")
-        lines += [
-            f"  steps: {compiled.steps}",
-            "  optimisation",
-            *(f"    {line}" for line in compiled.optimiser.describe_lines()),
-            f"  forward passes ({len(compiled.passes)})",
-        ]
+        if isinstance(compiled.action, PseudoLabelAction):
+            lines.append(f"  action: {compiled.action.describe()}")
+            lines.append(f"  action rows: {_rows(compiled.action_rows or ('all',))}")
+            lines.append(
+                "  action uses raw y: "
+                + ("true" if compiled.action_uses_y else "false")
+            )
+        elif compiled.action is not None:
+            lines.append(f"  action: array fit {compiled.action.name}")
+            lines.append(f"  action rows: {_rows(compiled.action_rows or ('all',))}")
+        if compiled.objectives:
+            lines += [
+                f"  steps: {compiled.steps}",
+                "  optimisation",
+                *(f"    {line}" for line in compiled.optimiser.describe_lines()),
+            ]
+        lines.append(f"  forward passes ({len(compiled.passes)})")
         for forward in compiled.passes:
             components = " -> ".join(forward.components) or "nothing"
             lines.append(f"    {forward.realisation}: {components}")
@@ -336,6 +371,8 @@ class ExecutionPlan:
             )
             if detaches:
                 lines.append(f"      detaches  {detaches}")
+        if not compiled.objectives:
+            lines.append("    none")
         lines.append("  trainable")
         lines.append(f"    {_names(compiled.trainable)}")
         return lines
@@ -496,6 +533,7 @@ def compile(recipe: Recipe) -> CompiledRun:
         _compile_stage(recipe, stage, _realisable(views, stage))
         for stage in recipe.program
     )
+    _check_static_leakage(recipe, stages)
     plan = ExecutionPlan(
         recipe=recipe.name,
         purpose=recipe.purpose,
@@ -556,13 +594,14 @@ def _compile_stage(
     graph = recipe.system
     where = f"stage {stage.name!r} of recipe {recipe.name!r}"
 
-    if not stage.objectives:
+    if not stage.objectives and stage.action is None:
         raise CompileError(
-            f"{where} has no objectives, so it would train nothing. A stage that "
-            "does something other than descend a gradient is a StageAction "
-            "(DESIGN.md §7), which does not exist yet."
+            f"{where} has neither objectives nor an action, so it would do "
+            "nothing. A stage either descends declared objectives or executes "
+            "an explicit P10 action (DESIGN.md §7)."
         )
-    _reject_duplicate_objectives(stage, where)
+    if stage.objectives:
+        _reject_duplicate_objectives(stage, where)
 
     demanded: dict[Realisation, set[Port]] = {}
     trained: set[Port] = set()
@@ -583,14 +622,119 @@ def _compile_stage(
             )
         )
 
+    action_rows: tuple[Rows, ...] | None = None
+    action_uses_y: bool | None = None
+    if isinstance(stage.action, PseudoLabelAction):
+        action = stage.action
+        action_rows = _intersect_rows(
+            stage.rows,
+            action.rows,
+            item=f"pseudo-label action {action.name!r}",
+            where=where,
+        )
+        _check_action_port(graph, action.port, where)
+        _check_action_realisation(action.realisation, realisable, where)
+        demanded.setdefault(action.realisation, set()).add(action.port)
+        action_uses_y = graph.port_depends_on_raw_outcome(action.port)
+    elif stage.action is not None:
+        action_rows = (stage.rows,)
+
     passes = tuple(
         ForwardPass(realisation=realisation, components=graph.subgraph_for(ports))
         for realisation, ports in sorted(demanded.items())
     )
-    _check_trainable(graph, stage, passes, trained, where)
+    if stage.objectives:
+        _check_trainable(graph, stage, passes, trained, where)
     _check_teacher_use(stage, passes, where)
-    _check_weight_decay_scope(stage, where)
-    return CompiledStage(stage=stage, passes=passes, objectives=tuple(objectives))
+    if stage.objectives:
+        _check_weight_decay_scope(stage, where)
+    return CompiledStage(
+        stage=stage,
+        passes=passes,
+        objectives=tuple(objectives),
+        action_rows=action_rows,
+        action_uses_y=action_uses_y,
+    )
+
+
+def _check_static_leakage(recipe: Recipe, stages: tuple[CompiledStage, ...]) -> None:
+    """Reject outcome-dependent in-sample treatment labels before execution.
+
+    The compiler knows the producing port's ``Y_RAW`` lineage, executor kind,
+    ordered artifact edge and downstream trainable set. It deliberately does
+    not inspect fold row ids here; those exist only on the artifact and are
+    checked when it is loaded (`DESIGN.md` §7.2).
+    """
+    for compiled in stages:
+        if compiled.stage.allow_leakage and recipe.purpose != "predictive":
+            raise CompileError(
+                f"stage {compiled.name!r} of causal recipe {recipe.name!r} sets "
+                "allow_leakage=True. The opt-out is available only to a recipe "
+                "whose purpose is explicitly 'predictive' (DESIGN.md §7.2)."
+            )
+
+    graph = recipe.system
+    if Port.Y_GIVEN_XT not in graph.provides:
+        return
+    outcome_component = graph.producer(Port.Y_GIVEN_XT)
+    by_name = {stage.name: stage for stage in stages}
+    for consumer in stages:
+        if outcome_component not in consumer.trainable:
+            continue
+        # Hard labels are joined as available treatments. An objective whose
+        # effective scope still requires t_missing cannot touch those joined
+        # rows, even if another objective in the same stage can.
+        if not any(
+            "t_missing" not in objective.rows
+            and _objective_trains_component(graph, objective, outcome_component)
+            for objective in consumer.objectives
+        ):
+            continue
+        for source_name in consumer.inputs:
+            source = by_name[source_name]
+            if not isinstance(source.action, PseudoLabelAction):
+                continue  # Program validation already prevents this.
+            if not source.action_uses_y:
+                continue
+            if source.action_rows is not None and any(
+                populations_are_disjoint(rows, "t_missing")
+                for rows in source.action_rows
+            ):
+                # Labels emitted only for already-observed treatments never
+                # replace the arbitrary placeholder of an originally missing
+                # row, so the consumer cannot form the circular staged fit.
+                continue
+            if source.executor == "cross_fit":
+                continue
+            if recipe.purpose == "predictive" and consumer.stage.allow_leakage:
+                continue
+            opt_out = (
+                " Set purpose='predictive' on the Recipe and "
+                "allow_leakage=True on the consuming stage only if this is "
+                "intentionally a predictive experiment."
+            )
+            raise CompileError(
+                f"stage {consumer.name!r} consumes in-sample treatment labels "
+                f"from stage {source.name!r}, whose source port "
+                f"{source.action.port} transitively depends on Y_RAW, and "
+                f"trains outcome component {outcome_component!r} on those "
+                "rows. That is the circular q(t|x,y) -> p(y|x,t) fit rejected "
+                f"by DESIGN.md §7.2.{opt_out} Otherwise use executor='cross_fit' "
+                "so actual fold disjointness can be verified at artifact load."
+            )
+
+
+def _objective_trains_component(
+    graph: ComponentGraph,
+    compiled: CompiledObjective,
+    component: str,
+) -> bool:
+    """Whether this term has a non-detached path through ``component``."""
+    detached = compiled.objective.detaches
+    return any(
+        (port, realisation) not in detached and component in graph.subgraph_for({port})
+        for port, realisation in compiled.objective.requires
+    )
 
 
 def _reject_duplicate_objectives(stage: Stage, where: str) -> None:
@@ -610,17 +754,33 @@ def _reject_duplicate_objectives(stage: Stage, where: str) -> None:
 def _effective_rows(stage: Stage, objective: Objective, where: str) -> tuple[Rows, ...]:
     """`Stage.rows ∩ Objective.rows`, rejecting a pairing empty by construction."""
     validate_rows(objective.rows, f"objective {objective.name!r} in {where}")
-    if populations_are_disjoint(stage.rows, objective.rows):
+    return _intersect_rows(
+        stage.rows,
+        objective.rows,
+        item=f"objective {objective.name!r}",
+        where=where,
+    )
+
+
+def _intersect_rows(
+    stage_rows: Rows,
+    item_rows: Rows,
+    *,
+    item: str,
+    where: str,
+) -> tuple[Rows, ...]:
+    """Resolve two declared scopes without consulting a runtime batch."""
+    if populations_are_disjoint(stage_rows, item_rows):
         raise CompileError(
-            f"{where} scopes rows to {stage.rows!r} but objective "
-            f"{objective.name!r} is entitled to {objective.rows!r}, and the two "
+            f"{where} scopes rows to {stage_rows!r} but {item} is entitled to "
+            f"{item_rows!r}, and the two "
             "are empty by construction. That is a compile error rather than a "
             "term returning n = 0 on every batch forever, which is precisely the "
             "silently-dead objective the zero-eligible-row rule exists to make "
             "visible (DESIGN.md §7.0)."
         )
     populations: list[Rows] = []
-    for rows in (stage.rows, objective.rows):
+    for rows in (stage_rows, item_rows):
         # "all" constrains nothing, and a population named on both sides is one
         # constraint, not two: `t_observed & t_observed` in a plan is noise.
         if rows != "all" and rows not in populations:
@@ -701,15 +861,16 @@ def _check_detaches(
 def _check_teacher_use(
     stage: Stage, passes: tuple[ForwardPass, ...], where: str
 ) -> None:
-    """Reject a configured teacher that no active objective ever evaluates."""
+    """Reject a configured teacher that no objective or action evaluates."""
     if stage.teacher is None:
         return
     if any(forward.realisation.params == "teacher" for forward in passes):
         return
     raise CompileError(
-        f"{where} configures a TeacherSpec but no active objective requires a "
-        "teacher realisation. Maintaining an unused EMA copy would be a silent "
-        "no-op; remove the teacher or require params='teacher' explicitly."
+        f"{where} configures a TeacherSpec but no active objective or action requires "
+        "a teacher realisation. Maintaining an unused EMA copy would be a "
+        "silent no-op; remove the teacher or require params='teacher' "
+        "explicitly."
     )
 
 
@@ -742,6 +903,30 @@ def _check_realisation(
     )
 
 
+def _check_action_port(graph: ComponentGraph, port: Port, where: str) -> None:
+    if port in SOURCE_PORTS or port in graph.provides:
+        return
+    raise CompileError(
+        f"pseudo-label action in {where} requires port {str(port)!r}, which no "
+        f"component provides. This graph provides "
+        f"{sorted(str(candidate) for candidate in graph.provides)!r}."
+    )
+
+
+def _check_action_realisation(
+    realisation: Realisation,
+    realisable: frozenset[Realisation],
+    where: str,
+) -> None:
+    if realisation in realisable:
+        return
+    raise CompileError(
+        f"pseudo-label action in {where} requires {realisation}, which this "
+        f"stage cannot produce; it realises "
+        f"{[str(candidate) for candidate in sorted(realisable)]}."
+    )
+
+
 def _check_trainable(
     graph: ComponentGraph,
     stage: Stage,
@@ -757,8 +942,9 @@ def _check_trainable(
             f"{where} has objectives but an empty `trainable`, so it would "
             "descend a gradient into nothing: the optimiser gets no parameter "
             "group and every step is a no-op. Name the components this stage "
-            "updates. A stage that deliberately runs without training is a "
-            "StageAction (DESIGN.md §7), which does not exist yet."
+            "updates. A stage that deliberately emits an artifact without "
+            "training removes the objectives and declares an explicit action "
+            "and executor (DESIGN.md §7)."
         )
     unknown = [name for name in stage.trainable if name not in graph]
     if unknown:
@@ -858,26 +1044,35 @@ def _hyperparameters(
     scoped = len(recipe.program) > 1
     for stage in recipe.program:
         stage_label = f"stage {stage.name!r}"
-        _merge_owner(
-            resolved,
-            owners,
-            stage,
-            stage_label,
-            scope=stage.name if scoped else None,
-        )
-        _merge_owner(
-            resolved,
-            owners,
-            stage.optimiser,
-            f"the optimiser of {stage_label}",
-            scope=stage.name if scoped else None,
-        )
+        if stage.objectives:
+            _merge_owner(
+                resolved,
+                owners,
+                stage,
+                stage_label,
+                scope=stage.name if scoped else None,
+            )
+            _merge_owner(
+                resolved,
+                owners,
+                stage.optimiser,
+                f"the optimiser of {stage_label}",
+                scope=stage.name if scoped else None,
+            )
         if stage.teacher is not None:
             _merge_owner(
                 resolved,
                 owners,
                 stage.teacher,
                 f"the teacher of {stage_label}",
+                scope=stage.name if scoped else None,
+            )
+        if stage.action is not None:
+            _merge_owner(
+                resolved,
+                owners,
+                stage.action,
+                f"the action of {stage_label}",
                 scope=stage.name if scoped else None,
             )
         for weighted in stage.objectives:
@@ -955,6 +1150,8 @@ def _loss_hyperparameters(
             schedules[label] = objective.weight.describe()
             reductions[label] = objective.reduction
             eligible[label] = _rows(objective.rows)
+    if not weights:
+        return {}
     return {
         "losses.eligible_rows": eligible,
         "losses.reduction": reductions,
@@ -976,6 +1173,8 @@ def _gradient_hyperparameters(
                 for port, realisation in objective.objective.detaches
             )
             paths[label] = ", ".join(detached) or "none"
+    if not paths:
+        return {}
     return {"gradients.stop_gradients": paths}
 
 

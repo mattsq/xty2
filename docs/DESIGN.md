@@ -563,8 +563,24 @@ class Stage:
     rows: Rows = "all"                         # stage-level row scope (§7.0)
     initialise_from: str | None = None         # a previous stage's checkpoint
     teacher: TeacherSpec | None = None          # stage-local EMA parameter set
+    action: PseudoLabelAction | ArrayFitAction | None = None
+    inputs: tuple[str, ...] = ()                # earlier pseudo-label artifacts
+    executor: Literal["gradient", "array_fit", "cross_fit"] = "gradient"
+    allow_leakage: bool = False                # predictive consumer only
     optimiser: OptimiserSpec = REQUIRED        # §9.1 sentinel, not a default
     steps: int = REQUIRED                      # optimiser steps, never epochs
+
+@dataclass(frozen=True)
+class PseudoLabelAction:
+    port: Literal[Port.T_GIVEN_X, Port.T_GIVEN_XY]
+    rows: Rows = "t_missing"
+    realisation: Realisation = DEFAULT
+
+class ArrayFitAction(Protocol):
+    name: str
+    def fit(
+        self, batch: XTYBatch, rows: RowIndex, *, seed: int
+    ) -> Mapping[str, Tensor]: ...
 
 @dataclass(frozen=True)
 class TeacherSpec:
@@ -582,11 +598,11 @@ class Program:
 amending an earlier draft that gave them optional defaults. Every field of an
 `OptimiserSpec` binds a card key from the `optimisation` block of
 `FIDELITY.md` §2, and so does `steps` — so a default is precisely the silent
-inheritance §9.1 exists to make impossible. A stage with no objectives is
-exempt: it has nothing to descend and is already a compile error. `steps` is
-**optimiser steps**, because "epochs on a semi-supervised loader are
-ambiguous" (`FIDELITY.md` §2); a card stating epochs converts, and writes the
-conversion into its §7.
+inheritance §9.1 exists to make impossible. They are required exactly when a
+stage has objectives to descend; action-only and `array_fit` stages do not
+pretend to optimise. `steps` is **optimiser steps**, because "epochs on a
+semi-supervised loader are ambiguous" (`FIDELITY.md` §2); a card stating epochs
+converts, and writes the conversion into its §7.
 
 `OptimiserSpec` itself lives in `core/optimisation.py` (§10) with the two value
 objects it needs: `WeightDecay`, which carries the coefficient, its component
@@ -626,10 +642,40 @@ the trained components and only those.
 
 This covers the full Beyer-style recipe — representation pretraining → joint
 fit → generate pseudo-labels → refit → targeted causal fit — and we will not
-build a scheduler until a fifth model genuinely needs one. `inputs`, stage
-actions, `array_fit` / `cross_fit`, and `allow_leakage` arrive together in P10,
-when artifacts other than checkpoints give those declarations something real
-to name and verify.
+build a scheduler until a fifth model genuinely needs one. P10 makes every
+transition explicit: `inputs` names earlier pseudo-label side tables,
+`initialise_from` names one earlier graph checkpoint, and `executor` names the
+mechanism rather than asking the runtime to infer it from a `fit` method.
+
+`PseudoLabelAction` is a declaration over the component graph. It names the
+treatment-distribution port, realisation and row scope, and P10 emits hard
+argmax labels only. The port is also the lineage root from which `used_y` is
+derived. A `gradient` stage may emit labels after its fit, or an action-only
+stage may predict from its named initial checkpoint. At consumption, a matching
+`row_id` replaces the arbitrary treatment placeholder in a fresh batch and
+marks that value available through `t_observed`; the source batch and its
+missingness mask remain bit-identical. Consequently an objective whose
+effective §7.0 scope still requires `t_missing` cannot train on joined labels,
+which the static leakage check accounts for. A fitting gradient action captures
+exactly the `steps` batches that its optimiser consumes, so a cycling training
+source remains valid and is never exhausted merely to make predictions. An
+action-only prediction source is finite by contract.
+
+`array_fit` is the deliberately narrow functional seam for non-autograd
+estimators: one finite row-keyed batch plus the resolved `RowIndex` and seed go
+in, and a complete mapping of named tensors comes out as immutable checkpoint
+state. The input batch is checked for mutation. This is explicit estimator
+behaviour assembled by the recipe, not executor selection inferred from the
+presence of a method.
+
+P10's `cross_fit` path repeats a gradient stage with a `PseudoLabelAction` over
+the actual non-negative `fold_id` values in a finite dataset. Every fold starts
+from the same recipe-initial state plus the same named initial checkpoint,
+trains on the complement, and predicts only the held-out fold. At least two
+folds and unique `row_id` values are required. The fold checkpoints and their
+held-out predictions are what make the §7.1 decision procedure executable;
+P11 may add a second cross-fit action kind only if its real array estimator
+needs one.
 
 ### Teacher parameters
 
@@ -656,9 +702,9 @@ Freezing is also component-wide for the student: parameters outside
 mode, so stateful buffers cannot drift while only a downstream component is
 being fitted. All parameter flags and module modes are restored after the stage.
 
-The explicit executor field arriving in P10 also removes an inference we should
+The explicit executor field added in P10 also removes an inference we should
 never have had: XTYLearner decided that "a model with `fit()` but no `loss()`
-uses ArrayTrainer". The recipe will instead say `executor="array_fit"`.
+uses ArrayTrainer". The recipe instead says `executor="array_fit"`.
 
 ### 7.1 Artifacts and provenance
 
@@ -678,8 +724,8 @@ class Checkpoint:
     stage: str
     fold: int | None
     trained_on_row_ids: Tensor        # [M] exactly the rows this fit saw
-    parameters: Mapping[str, Tensor]  # the trained components, and only those
-    buffers: Mapping[str, Tensor]     # buffers of those same components
+    parameters: Mapping[str, Tensor]  # graph params, or named array-fit state
+    buffers: Mapping[str, Tensor]     # graph buffers; empty for array_fit
     components: tuple[str, ...]
     steps: int
     seed: int
@@ -714,7 +760,8 @@ labels = cross_fit.emit_pseudo_labels(plan, checkpoints, predictions)
 The factory takes the compiled plan, so `used_y` comes from graph reachability
 (§2.2); it takes the checkpoints, so `prediction_mode` is computed from the
 actual row sets and `out_of_fold` is *earned* by passing the disjointness check
-below rather than asserted. A direct constructor call is a type error.
+below rather than asserted. A direct constructor call is rejected with an
+`ArtifactError`.
 
 **And the factory itself is not public.** A factory anyone can call is a
 factory anyone can hand invented row ids to, which moves the hole up one level
@@ -770,7 +817,7 @@ producing stage has run.
 
 `Recipe` carries `purpose: Literal["causal", "predictive"]` and `Stage` carries
 `allow_leakage: bool`. The compiler walks the program in order and rejects when
-all of the following hold and `purpose == "causal"`:
+all of the following hold, unless the predictive opt-out below applies:
 
 1. a stage produces treatment labels from a subgraph whose transitive closure
    contains `Y_RAW` (i.e. `used_y` will be true — derivable statically, §2.2);
