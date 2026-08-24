@@ -1,6 +1,6 @@
 # Recipe spec card: ssdml
 
-**Status:** `draft`
+**Status:** `smoke-passing`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 ---
@@ -284,7 +284,7 @@ composition; it does not make the staged estimator inferentially valid.
 
 ```yaml
 reproduction:
-  dataset: fixed project-local linear IRM DGP
+  dataset: fixed project-local staged-imputation IRM DGP
   variant: binary treatment; 50% treatment MCAR; staged hard imputation; five-fold DML2
   split: one independent 4000-row estimation population per replicate; five held-out folds
   metric: absolute_ATE_error
@@ -318,5 +318,5 @@ reproduction:
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status -> `reviewed`) | | |
-| Plan diffed against section 3.2 and section 4 | | |
+| Card reviewed (status -> `reviewed`) | Matt | 2026-08-24 |
+| Plan diffed against section 3.2 and section 4 | Codex | 2026-08-24 |

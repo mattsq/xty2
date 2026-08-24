@@ -1,6 +1,6 @@
 # Recipe spec card: cycle_dual
 
-**Status:** `draft`
+**Status:** `smoke-passing`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 ---
@@ -334,5 +334,5 @@ reproduction:
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status -> `reviewed`) | | |
-| Plan diffed against section 3.2 and section 4 | | |
+| Card reviewed (status -> `reviewed`) | Matt | 2026-08-24 |
+| Plan diffed against section 3.2 and section 4 | Codex | 2026-08-24 |
