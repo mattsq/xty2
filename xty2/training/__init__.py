@@ -5,13 +5,16 @@ recipe *declares* â€” `Stage`, `Weighted`, the schedules, the `OptimiserSpec` â€
 live in the leaf layer and only the machinery that *runs* them lives here. So
 far that is the loss mixer and its gradient probe (P3), the `gradient`
 executor and immutable artifacts (P4), plus the ordered program runner and EMA
-teacher parameter set (P8). The `array_fit` and `cross_fit` executors and the
-pseudo-label artifact arrive in P10.
+teacher parameter set (P8). P10 adds functional `array_fit`, fold-aware
+`cross_fit`, and pseudo-label artifacts whose lineage and disjointness are
+derived rather than asserted.
 """
 
 from xty2.training.artifacts import (
     ARTIFACT_FORMAT,
     Checkpoint,
+    PredictionMode,
+    PseudoLabels,
     RunDirectory,
     is_read_only,
 )
@@ -21,6 +24,8 @@ from xty2.training.executors import (
     ProgramResult,
     StageResult,
     StepRecord,
+    run_array_fit,
+    run_cross_fit,
     run_program,
     run_stage,
     trainable_only,
@@ -48,12 +53,16 @@ __all__ = [
     "LossMixer",
     "MixedLoss",
     "ObjectiveLog",
+    "PredictionMode",
     "ProgramResult",
+    "PseudoLabels",
     "RunDirectory",
     "StageResult",
     "StepRecord",
     "gradient_report",
     "is_read_only",
+    "run_array_fit",
+    "run_cross_fit",
     "run_program",
     "run_stage",
     "trainable_only",

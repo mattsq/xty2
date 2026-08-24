@@ -170,6 +170,17 @@ disjointness check of `DESIGN.md` §7.1 and **fails on a deliberately overlappin
 fold assignment**. That mutation test is the acceptance criterion; a provenance
 label that nothing can falsify is not "checked".
 
+**Implemented contract:** executor selection is explicit. `array_fit` calls a
+functional action once on its resolved finite rows and checkpoints the returned
+tensor state. `cross_fit` resets and fits a declared gradient stage once per
+actual `fold_id`, records each complement's `trained_on_row_ids`, and emits hard
+pseudo labels keyed by `row_id` with `predicted_by_fold`. Artifact inputs are
+functional joins and never rewrite the source batch. `used_y` is re-derived
+from graph reachability; `prediction_mode` is computed from the checkpoint row
+sets; both in-memory consumption and disk loading rerun the fold-disjointness
+check. The Tier 0 mutation changes a saved prediction's fold to one whose
+checkpoint trained on that row and proves the load fails.
+
 ### P11 · Recipes 4 and 5 — `cycle_dual`, `ssdml` ★
 **Cards first.** `cycle_dual` exercises the posterior `q(t|x,y)`, staged
 pseudo-labelling and the leakage guardrail; `ssdml` exercises `array_fit` and

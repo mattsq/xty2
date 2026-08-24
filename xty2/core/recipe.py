@@ -15,15 +15,16 @@ the gradient executor needs — the optimiser and the step count, both of them
 card-bound and so both `REQUIRED`. `Program` is the ordered, immutable stage
 sequence; `initialise_from` may point only backwards through it. `TeacherSpec`
 makes every paper-governed EMA choice explicit before a teacher realisation can
-be planned. The remaining §7 fields (`inputs`, `executor`, `allow_leakage`)
-arrive with the second executor and leakage rule that need them (P10).
+be planned. P10 adds explicit executors, pseudo-label actions, artifact inputs
+and the narrow functional array-fit contract. Those declarations make the
+causal leakage rule program data rather than runtime convention.
 """
 
 from __future__ import annotations
 
 import math
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     ClassVar,
@@ -32,6 +33,8 @@ from typing import (
     overload,
     runtime_checkable,
 )
+
+from torch import Tensor
 
 from xty2.core.card_keys import REQUIRED, card_hyperparameters, is_required
 from xty2.core.errors import CompileError, Xty2Error, require_str
@@ -55,6 +58,79 @@ if TYPE_CHECKING:  # pragma: no cover - the batch is only named in a signature
 Purpose = Literal["causal", "predictive"]
 """What the recipe is for. `predictive` is what may opt out of the leakage
 rule (`DESIGN.md` §7.2); `causal` may not."""
+
+Executor = Literal["gradient", "array_fit", "cross_fit"]
+"""The three deliberately explicit stage executors (`DESIGN.md` §7)."""
+
+
+@runtime_checkable
+class ArrayFitAction(Protocol):
+    """A functional array-based fit executed outside autograd (P10).
+
+    The action receives one immutable ``XTYBatch`` plus the stage's resolved
+    rows and returns tensor state for an immutable checkpoint. It does not
+    mutate the recipe, graph or batch. Returning tensors keeps checkpoint state
+    portable instead of pickling an opaque estimator object.
+
+    P11 supplies the first real implementation (SSDML). P10 defines and tests
+    this executor seam with a minimal double; the runtime never infers it from
+    the accidental presence of a ``fit`` method.
+    """
+
+    @property
+    def name(self) -> str:
+        """Stable identifier used in the plan and checkpoint state names."""
+
+    def fit(
+        self,
+        batch: XTYBatch,
+        rows: RowIndex,
+        *,
+        seed: int,
+    ) -> Mapping[str, Tensor]:
+        """Fit on ``rows`` and return a complete tensor state mapping."""
+
+
+@dataclass(frozen=True)
+class PseudoLabelAction:
+    """Emit hard treatment labels from one distribution port.
+
+    The source is a port, never a caller-set ``used_y`` flag. Outcome
+    dependence is therefore derived from the producing subgraph by the
+    compiler and executor (`DESIGN.md` §2.2, §7.2). P10 deliberately emits
+    argmax labels only; confidence gates and soft-label policies arrive with
+    the first reviewed card that needs them.
+    """
+
+    port: Port
+    rows: Rows = "t_missing"
+    realisation: Realisation = field(default_factory=Realisation)
+
+    def __post_init__(self) -> None:
+        if self.port not in (Port.T_GIVEN_X, Port.T_GIVEN_XY):
+            raise CompileError(
+                "PseudoLabelAction emits treatment labels from T_GIVEN_X or "
+                f"T_GIVEN_XY, got {self.port!r}. The source port is what makes "
+                "outcome dependence derivable (DESIGN.md §7.2)."
+            )
+        validate_rows(self.rows, "PseudoLabelAction")
+        if not isinstance(self.realisation, Realisation):
+            raise CompileError(
+                "PseudoLabelAction.realisation must be a Realisation, got "
+                f"{type(self.realisation)}"
+            )
+
+    @property
+    def name(self) -> str:
+        return "pseudo_labels"
+
+    @property
+    def requires(self) -> frozenset[tuple[Port, Realisation]]:
+        return frozenset({(self.port, self.realisation)})
+
+    def describe(self) -> str:
+        """One stable execution-plan line."""
+        return f"hard argmax of {self.port} @ {self.realisation}, rows {self.rows}"
 
 
 @runtime_checkable
@@ -256,11 +332,11 @@ class TeacherSpec:
                 f"{self.decay!r}"
             )
         object.__setattr__(self, "decay", decay)
-        for field in ("applies_to_buffers", "train_mode", "requires_grad"):
-            value = getattr(self, field)
+        for field_name in ("applies_to_buffers", "train_mode", "requires_grad"):
+            value = getattr(self, field_name)
             if type(value) is not bool:
                 raise CompileError(
-                    f"TeacherSpec.{field} must be bool, got {value!r} "
+                    f"TeacherSpec.{field_name} must be bool, got {value!r} "
                     f"({type(value).__name__})"
                 )
         if self.requires_grad:
@@ -302,6 +378,14 @@ class Stage:
             is inherited implicitly.
         teacher: The EMA teacher this stage maintains, or `None`. A teacher
             realisation is compilable only when this is present.
+        action: An optional pseudo-label emission or functional array fit.
+            Actions are explicit program data, never conditionals in a recipe.
+        inputs: Earlier pseudo-label stages whose immutable side tables are
+            joined functionally when this stage loads its batches.
+        executor: ``gradient``, ``array_fit`` or ``cross_fit``. The recipe says
+            which one; the runtime never guesses from an object's methods.
+        allow_leakage: A per-consuming-stage opt-out from §7.2, valid only for
+            a recipe whose purpose is ``predictive``.
         optimiser: How the stage descends. `REQUIRED` for a stage that has
             objectives: it binds four card keys, none of which may fall
             through to a framework default (§9.1).
@@ -325,6 +409,10 @@ class Stage:
     rows: Rows = "all"
     initialise_from: str | None = None
     teacher: TeacherSpec | None = None
+    action: PseudoLabelAction | ArrayFitAction | None = None
+    inputs: tuple[str, ...] = ()
+    executor: Executor = "gradient"
+    allow_leakage: bool = False
     optimiser: OptimiserSpec = REQUIRED
     steps: int = REQUIRED
 
@@ -335,6 +423,7 @@ class Stage:
     def __post_init__(self) -> None:
         object.__setattr__(self, "objectives", tuple(self.objectives))
         object.__setattr__(self, "trainable", tuple(self.trainable))
+        object.__setattr__(self, "inputs", tuple(self.inputs))
         if not require_str("stage name", self.name, error=CompileError).isidentifier():
             raise CompileError(
                 f"stage name {self.name!r} must be a Python identifier: it names "
@@ -364,12 +453,120 @@ class Stage:
                 f"stage {self.name!r} holds {type(self.teacher)} as its teacher; "
                 "expected TeacherSpec or None"
             )
+        if self.executor not in ("gradient", "array_fit", "cross_fit"):
+            raise CompileError(
+                f"stage {self.name!r} has executor {self.executor!r}; expected "
+                "'gradient', 'array_fit' or 'cross_fit' (DESIGN.md §7)."
+            )
+        if type(self.allow_leakage) is not bool:
+            raise CompileError(
+                f"stage {self.name!r} has allow_leakage={self.allow_leakage!r}; "
+                "it must be bool"
+            )
+        if self.allow_leakage and not self.inputs:
+            raise CompileError(
+                f"stage {self.name!r} sets allow_leakage=True but consumes no "
+                "artifact inputs. The §7.2 opt-out belongs on the consuming "
+                "stage whose outcome fit intentionally uses unsafe labels."
+            )
+        self._check_action()
         self._check_gradient_fields()
         duplicates = _duplicates(self.trainable)
         if duplicates:
             raise CompileError(
                 f"stage {self.name!r} lists {duplicates!r} in `trainable` more "
                 "than once"
+            )
+        duplicate_inputs = _duplicates(self.inputs)
+        if duplicate_inputs:
+            raise CompileError(
+                f"stage {self.name!r} lists artifact inputs {duplicate_inputs!r} "
+                "more than once"
+            )
+        for source in self.inputs:
+            source_name = require_str("Stage.inputs entry", source, error=CompileError)
+            if not source_name.isidentifier():
+                raise CompileError(
+                    f"stage {self.name!r} input {source_name!r} must be a Python "
+                    "identifier naming an earlier pseudo-label stage"
+                )
+
+    def _check_action(self) -> None:
+        """Keep each executor's public contract narrow and unambiguous."""
+        action = self.action
+        is_pseudo = isinstance(action, PseudoLabelAction)
+        is_array = action is not None and isinstance(action, ArrayFitAction)
+        if action is not None and not is_pseudo and not is_array:
+            raise CompileError(
+                f"stage {self.name!r} holds {type(action)} as its action; "
+                "expected PseudoLabelAction or an ArrayFitAction"
+            )
+        if action is not None:
+            action_name = require_str(
+                "stage action name", action.name, error=CompileError
+            )
+            if not action_name.isidentifier():
+                raise CompileError(
+                    f"stage {self.name!r} action name {action_name!r} must be a "
+                    "Python identifier"
+                )
+
+        if self.executor == "array_fit":
+            if not is_array or is_pseudo:
+                raise CompileError(
+                    f"stage {self.name!r} uses array_fit, so its action must "
+                    "implement ArrayFitAction.fit(batch, rows, seed=...)."
+                )
+            if self.objectives or self.trainable or self.teacher is not None:
+                raise CompileError(
+                    f"stage {self.name!r} uses array_fit outside autograd; it "
+                    "cannot also declare objectives, graph trainables or an EMA "
+                    "teacher. Put gradient work in a separate stage."
+                )
+            if self.initialise_from is not None:
+                raise CompileError(
+                    f"stage {self.name!r} uses array_fit and cannot initialise "
+                    "the component graph from a checkpoint it does not fit. Use "
+                    "artifact inputs for data dependencies."
+                )
+            return
+
+        if is_array:
+            raise CompileError(
+                f"stage {self.name!r} holds an ArrayFitAction but declares "
+                f"executor={self.executor!r}; array actions run only under "
+                "executor='array_fit'."
+            )
+        if self.executor == "cross_fit":
+            if not is_pseudo:
+                raise CompileError(
+                    f"stage {self.name!r} uses cross_fit but declares no "
+                    "PseudoLabelAction. P10 cross-fitting fits the declared "
+                    "gradient objectives per fold and emits their held-out "
+                    "treatment predictions."
+                )
+            if not self.objectives:
+                raise CompileError(
+                    f"stage {self.name!r} uses cross_fit but has no objectives "
+                    "to fit in each training fold"
+                )
+        if (
+            is_pseudo
+            and self.executor == "gradient"
+            and not self.objectives
+            and self.initialise_from is None
+        ):
+            raise CompileError(
+                f"action-only pseudo-label stage {self.name!r} needs "
+                "initialise_from naming the checkpoint whose parameters make "
+                "its predictions. Without it the artifact has no producing "
+                "checkpoint provenance (DESIGN.md §7.1)."
+            )
+        if not self.objectives and self.trainable:
+            raise CompileError(
+                f"stage {self.name!r} has no objectives but declares trainable "
+                f"components {list(self.trainable)!r}; an action-only stage "
+                "does not descend a gradient"
             )
 
     def _check_gradient_fields(self) -> None:
@@ -381,19 +578,18 @@ class Stage:
         default, and a sentinel that survives construction is one that reaches
         a plan and prints as a number.
 
-        A stage with no objectives is left alone: it is already a compile
-        error (`DESIGN.md` §8), and rejecting it here for the wrong reason
-        would replace that message with a less useful one.
+        A stage with no objectives is left alone because P10 action-only and
+        array-fit stages intentionally do not descend a gradient.
         """
         if not self.objectives:
             return
-        for field, key in (
+        for field_name, key in (
             ("optimiser", "the optimisation.* keys"),
             ("steps", "optimisation.total_steps_or_epochs"),
         ):
-            if is_required(getattr(self, field)):
+            if is_required(getattr(self, field_name)):
                 raise CompileError(
-                    f"stage {self.name!r} has objectives but no {field!r}, so "
+                    f"stage {self.name!r} has objectives but no {field_name!r}, so "
                     "nothing says how it descends. It binds card key(s) "
                     f"{key} and is governed by the paper, so it has no usable "
                     "default — the recipe sets it explicitly (DESIGN.md §9.1)."
@@ -442,21 +638,52 @@ class Program(Sequence[Stage]):
         positions = {stage.name: index for index, stage in enumerate(self.stages)}
         for index, stage in enumerate(self.stages):
             source = stage.initialise_from
-            if source is None:
-                continue
-            source_index = positions.get(source)
-            if source_index is None:
-                raise CompileError(
-                    f"stage {stage.name!r} initialises from unknown stage "
-                    f"{source!r}; this program has {list(positions)!r}"
-                )
-            if source_index >= index:
-                raise CompileError(
-                    f"stage {stage.name!r} initialises from {source!r}, which is "
-                    "not an earlier stage. Program is an ordered list, not a "
-                    "DAG; initialise_from may only point backwards "
-                    "(DESIGN.md §7)."
-                )
+            if source is not None:
+                source_index = positions.get(source)
+                if source_index is None:
+                    raise CompileError(
+                        f"stage {stage.name!r} initialises from unknown stage "
+                        f"{source!r}; this program has {list(positions)!r}"
+                    )
+                if source_index >= index:
+                    raise CompileError(
+                        f"stage {stage.name!r} initialises from {source!r}, which "
+                        "is not an earlier stage. Program is an ordered list, "
+                        "not a DAG; initialise_from may only point backwards "
+                        "(DESIGN.md §7)."
+                    )
+                producer = self.stages[source_index]
+                if producer.executor != "gradient" or not producer.objectives:
+                    raise CompileError(
+                        f"stage {stage.name!r} initialises from {source!r}, but "
+                        f"that stage uses executor={producer.executor!r} and "
+                        "does not emit one restorable component-graph "
+                        "checkpoint. Use inputs for pseudo-label artifacts; "
+                        "cross-fit fold checkpoints are prediction provenance, "
+                        "not implicit initialisation state."
+                    )
+
+            for input_name in stage.inputs:
+                input_index = positions.get(input_name)
+                if input_index is None:
+                    raise CompileError(
+                        f"stage {stage.name!r} consumes unknown artifact stage "
+                        f"{input_name!r}; this program has {list(positions)!r}"
+                    )
+                if input_index >= index:
+                    raise CompileError(
+                        f"stage {stage.name!r} consumes artifact {input_name!r}, "
+                        "which is not from an earlier stage. Program is an "
+                        "ordered list, not a DAG (DESIGN.md §7)."
+                    )
+                input_stage = self.stages[input_index]
+                if not isinstance(input_stage.action, PseudoLabelAction):
+                    raise CompileError(
+                        f"stage {stage.name!r} names {input_name!r} in inputs, "
+                        "but that stage does not emit PseudoLabels. P10 inputs "
+                        "name immutable pseudo-label side tables; checkpoint "
+                        "state is named by initialise_from."
+                    )
 
     def __iter__(self) -> Iterator[Stage]:
         return iter(self.stages)

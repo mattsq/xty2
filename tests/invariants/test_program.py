@@ -102,9 +102,15 @@ def test_duplicate_stage_names_are_rejected_by_the_program() -> None:
 
 def test_the_plan_prints_checkpoint_transitions() -> None:
     plan = compile(_recipe()).plan.render()
-    assert "stage base\n  rows: all\n  steps: 1" in plan
-    assert "stage branch\n  rows: all\n  initialise from: base\n  steps: 1" in plan
-    assert "stage replay\n  rows: all\n  initialise from: base\n  steps: 1" in plan
+    assert "stage base\n  rows: all\n  executor: gradient\n  steps: 1" in plan
+    assert (
+        "stage branch\n  rows: all\n  executor: gradient\n"
+        "  initialise from: base\n  steps: 1"
+    ) in plan
+    assert (
+        "stage replay\n  rows: all\n  executor: gradient\n"
+        "  initialise from: base\n  steps: 1"
+    ) in plan
 
 
 def test_multistage_card_bindings_are_keyed_by_stage() -> None:

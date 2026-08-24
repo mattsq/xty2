@@ -220,7 +220,7 @@ def test_a_row_pairing_empty_by_construction_is_rejected() -> None:
 
 
 def test_a_stage_with_no_objectives_is_rejected() -> None:
-    with pytest.raises(CompileError, match="would train nothing"):
+    with pytest.raises(CompileError, match="neither objectives nor an action"):
         compile(two_head_recipe(program=(Stage(name="fit"),)))
 
 
@@ -245,9 +245,8 @@ def test_a_stage_that_descends_says_how(field: str) -> None:
 
 
 def test_a_stage_with_no_objectives_needs_neither() -> None:
-    # It is already rejected for having no objectives, and replacing that
-    # message with one about an optimiser would be a worse error, not an
-    # earlier one.
+    # An empty stage is rejected by compile(), while an action-only stage is
+    # valid and has nothing to descend. Neither should inherit an optimiser.
     assert Stage(name="fit").steps is REQUIRED
 
 
