@@ -13,6 +13,7 @@ from xty2.evaluation import (
     mean_and_stderr,
     update_card_text,
 )
+from xty2.evaluation.benchmarks import cycle_dual
 
 ROOT = Path(__file__).parents[2]
 
@@ -127,3 +128,89 @@ def test_fresh_result_must_match_the_status_recorded_in_the_card(
     card.write_text(_card("reproduced"), encoding="utf-8")
     with pytest.raises(AssertionError, match="fresh benchmark is 'deviating'"):
         assert_result_matches_card(result, card)
+
+
+def test_the_template_ledger_header_spelling_is_also_accepted() -> None:
+    # The template writes "Value ± stderr"; the cards written before P12 write
+    # "Value +/- stderr". A card made from the template must not be rejected as
+    # having no ledger.
+    template = _card().replace("Value +/- stderr", "Value ± stderr")
+    updated = update_card_text(template, _result(passed=True))
+    assert "| 2026-08-24 | `abc1234` | error | 0.1 +/- 0 | yes |" in updated
+    assert "Value ± stderr" in updated
+
+
+def test_the_shipped_template_carries_a_writeable_result_ledger() -> None:
+    template = (ROOT / "docs" / "recipes" / "_TEMPLATE.md").read_text(encoding="utf-8")
+    updated = update_card_text(template, _result(passed=True))
+    assert "| 2026-08-24 | `abc1234` | error | 0.1 +/- 0 | yes |" in updated
+
+
+def test_a_one_seed_card_is_rejected_when_it_is_parsed(tmp_path: Path) -> None:
+    # `mean_and_stderr` needs two replicates; the card is where that is said.
+    source = (ROOT / "docs" / "recipes" / "cycle_dual.md").read_text(encoding="utf-8")
+    card = tmp_path / "cycle_dual.md"
+    card.write_text(source.replace("  seeds: 10", "  seeds: 1"), encoding="utf-8")
+    with pytest.raises(ValueError, match="at least two"):
+        load_reproduction_spec(card)
+
+
+def _spec(tmp_path: Path, recipe: str = "cycle_dual") -> Path:
+    source = (ROOT / "docs" / "recipes" / f"{recipe}.md").read_text(encoding="utf-8")
+    card = tmp_path / f"{recipe}.md"
+    card.write_text(source, encoding="utf-8")
+    return card
+
+
+def test_bind_accounts_for_every_declared_reproduction_scalar(
+    tmp_path: Path,
+) -> None:
+    spec = load_reproduction_spec(_spec(tmp_path))
+    implemented = {
+        key: value for key, value in spec.values.items() if key != "published_source"
+    }
+    spec.bind(implemented, documentation=("published_source",))
+
+    # A scalar the card declares but the benchmark never reads is what lets an
+    # amended protocol run under this block's digest.
+    partial = dict(implemented)
+    del partial["split"]
+    with pytest.raises(ValueError, match=r"declares \['split'\]"):
+        spec.bind(partial, documentation=("published_source",))
+
+    # A scalar the benchmark binds but the card no longer declares.
+    with pytest.raises(ValueError, match=r"no longer declares \['folds'\]"):
+        spec.bind({**implemented, "folds": "5"}, documentation=("published_source",))
+
+    # A reviewed value the card changed without the benchmark changing.
+    with pytest.raises(ValueError, match="Amend and review the card"):
+        spec.bind(
+            {**implemented, "variant": "ternary treatment; 70% treatment MCAR"},
+            documentation=("published_source",),
+        )
+
+    with pytest.raises(ValueError, match="one or the other"):
+        spec.bind(implemented, documentation=("split",))
+
+
+def test_amending_a_protocol_scalar_stops_the_benchmark(tmp_path: Path) -> None:
+    # The failure this guards: the digest recorded on the artifact is taken
+    # over the whole block, so an amended `split` that no adapter reads would
+    # otherwise be stamped onto evidence produced by the old protocol.
+    source = (ROOT / "docs" / "recipes" / "cycle_dual.md").read_text(encoding="utf-8")
+    card = tmp_path / "cycle_dual.md"
+    card.write_text(
+        source.replace(
+            "  split: independent 2048 train / 1024 validation / 2048 test per "
+            "replicate",
+            "  split: independent 4096 train / 1024 validation / 2048 test per "
+            "replicate",
+        ),
+        encoding="utf-8",
+    )
+    amended = load_reproduction_spec(card)
+    assert amended.digest != load_reproduction_spec(_spec(tmp_path)).digest
+    with pytest.raises(ValueError, match="Amend and review the card"):
+        cycle_dual.run(
+            amended, commit="abc1234", date="2026-08-25", workers=1, cache_root=tmp_path
+        )

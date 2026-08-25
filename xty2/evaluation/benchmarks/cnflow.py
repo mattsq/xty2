@@ -87,15 +87,50 @@ def run(
 ) -> BenchmarkResult:
     """Run the card's ten paired flow/Gaussian fits."""
     del cache_root
-    spec.require("dataset", "xty2 analytic non-Gaussian outcome DGP")
-    spec.require(
-        "primary_metric",
-        "test conditional outcome NLL p(Y|X,T), explicitly not joint or "
-        "missing-treatment marginal NLL",
-    )
-    spec.require(
-        "tolerance",
-        "mean paired d_NLL <= -0.10 nat/row; mean paired d_PEHE <= 0.10",
+    spec.bind(
+        {
+            "dataset": "xty2 analytic non-Gaussian outcome DGP",
+            "variant": (
+                "section 6.1 scalar-Y equations; six Gaussian X; binary "
+                "confounded T; centred heteroskedastic two-component outcome "
+                "mixture"
+            ),
+            "samples": "{train: 4096, validation: 2048, test: 4096}",
+            "missingness": (
+                "exactly 2048 training treatments MCAR; all outcomes and all "
+                "validation/test treatments observed"
+            ),
+            "preprocessing": (
+                "raw X; population-standardise Y from all training outcomes; "
+                "evaluate in original Y units"
+            ),
+            "pairing": (
+                "identical populations, missingness mask, ordered batches and "
+                "bit-identical initial shared parameters"
+            ),
+            "training": (
+                "batch_size=256; 3000 final-checkpoint Adam steps; validation "
+                "is diagnostic only"
+            ),
+            "primary_metric": (
+                "test conditional outcome NLL p(Y|X,T), explicitly not joint "
+                "or missing-treatment marginal NLL"
+            ),
+            "guardrail": "test sqrt_PEHE against analytic tau(X)",
+            "published": "n/a",
+            "tolerance": (
+                "mean paired d_NLL <= -0.10 nat/row; mean paired d_PEHE <= 0.10"
+            ),
+            "seeds": (
+                "r=0..9 with base 70000+100*r and fixed stream offsets from "
+                "sections 6.1-6.2"
+            ),
+            "report": (
+                "per-model means plus paired-difference means and sample "
+                "stderrs over 10 replicates"
+            ),
+        },
+        documentation=("published_source",),
     )
     if spec.seed_count != 10:
         raise ValueError(f"CNFlow card reviewed ten replicates, got {spec.seed_count}")
@@ -457,6 +492,7 @@ def _model_metrics(
                 distribution,
                 batch_size=chunk.batch_size,
                 num_treatments=2,
+                device=chunk.t.device,
             )
             effect = treatment_contrast(means) * outcome_scale
             truth = true_effect.index_select(0, rows)

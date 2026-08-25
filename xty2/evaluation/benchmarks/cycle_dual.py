@@ -54,9 +54,21 @@ def run(
 ) -> BenchmarkResult:
     """Run ten deterministic posterior/outcome programs."""
     del cache_root
-    spec.require("dataset", "fixed project-local posterior-imputation DGP")
-    spec.require("metric", "absolute_ATE_error")
-    spec.require("tolerance", "0.35 from analytic ATE 1.5")
+    spec.bind(
+        {
+            "dataset": "fixed project-local posterior-imputation DGP",
+            "variant": "binary treatment; 70% treatment MCAR; five folds",
+            "split": (
+                "independent 2048 train / 1024 validation / 2048 test per replicate"
+            ),
+            "metric": "absolute_ATE_error",
+            "published": "n/a",
+            "tolerance": "0.35 from analytic ATE 1.5",
+            "seeds": "10",
+            "report": "mean_and_stderr",
+        },
+        documentation=("published_source",),
+    )
     if spec.seed_count != 10:
         raise ValueError(
             f"cycle_dual card reviewed ten replicates, got {spec.seed_count}"
@@ -231,6 +243,7 @@ def _ate(run: CompiledRun, batch: XTYBatch, *, outcome_scale: float) -> float:
             distribution,
             batch_size=batch.batch_size,
             num_treatments=2,
+            device=batch.t.device,
         )
         effect = treatment_contrast(means) * outcome_scale
         return float(average_treatment_effect(effect))

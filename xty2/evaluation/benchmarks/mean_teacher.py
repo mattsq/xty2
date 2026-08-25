@@ -59,15 +59,35 @@ def run(
 ) -> BenchmarkResult:
     """Run ten paired scheduled/zero-consistency fits."""
     del cache_root
-    spec.require("dataset", "xty2 analytic redundant-cluster treatment DGP")
-    spec.require(
-        "metric",
-        "held-out masked-view student/teacher probability-MSE ratio; "
-        "treatment NLL and sqrt_PEHE guardrails",
-    )
-    spec.require(
-        "tolerance",
-        "mean ratio <= 0.90; mean d_NLL <= 0.02 nat/row; mean d_sqrt_PEHE <= 0.10",
+    spec.bind(
+        {
+            "dataset": "xty2 analytic redundant-cluster treatment DGP",
+            "variant": (
+                "section 6.1; six continuous X; binary overlapping T; "
+                "continuous heterogeneous-effect Y"
+            ),
+            "split": (
+                "independent 4096 train / 2048 validation / 4096 test; exactly "
+                "205 train treatments observed"
+            ),
+            "metric": (
+                "held-out masked-view student/teacher probability-MSE ratio; "
+                "treatment NLL and sqrt_PEHE guardrails"
+            ),
+            "published": "n/a",
+            "tolerance": (
+                "mean ratio <= 0.90; mean d_NLL <= 0.02 nat/row; "
+                "mean d_sqrt_PEHE <= 0.10"
+            ),
+            "seeds": (
+                "r=0..9 with base 90000+100*r and fixed stream offsets in "
+                "sections 6.1-6.2"
+            ),
+            "report": (
+                "per-fit means plus paired means and sample stderrs over 10 replicates"
+            ),
+        },
+        documentation=("published_source",),
     )
     if spec.seed_count != 10:
         raise ValueError(
@@ -284,6 +304,7 @@ def _teacher_metrics(
             outcome,
             batch_size=population.batch.batch_size,
             num_treatments=2,
+            device=population.batch.t.device,
         )
         effect = treatment_contrast(means) * outcome_scale
         pehe = sqrt_pehe(effect, population.true_effect)

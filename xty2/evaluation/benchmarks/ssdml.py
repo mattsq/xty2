@@ -38,9 +38,25 @@ def run(
 ) -> BenchmarkResult:
     """Run the twenty-replicate staged and oracle-treatment DML fits."""
     del cache_root
-    spec.require("dataset", "fixed project-local staged-imputation IRM DGP")
-    spec.require("metric", "absolute_ATE_error")
-    spec.require("tolerance", "0.30 from analytic ATE 1.0")
+    spec.bind(
+        {
+            "dataset": "fixed project-local staged-imputation IRM DGP",
+            "variant": (
+                "binary treatment; 50% treatment MCAR; staged hard imputation; "
+                "five-fold DML2"
+            ),
+            "split": (
+                "one independent 4000-row estimation population per replicate; "
+                "five held-out folds"
+            ),
+            "metric": "absolute_ATE_error",
+            "published": "n/a",
+            "tolerance": "0.30 from analytic ATE 1.0",
+            "seeds": "20",
+            "report": "mean_and_stderr",
+        },
+        documentation=("published_source",),
+    )
     if spec.seed_count != 20:
         raise ValueError(
             f"SSDML card reviewed twenty replicates, got {spec.seed_count}"

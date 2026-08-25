@@ -6,18 +6,28 @@ from pathlib import Path
 import pytest
 import torch
 from xty2.core import (
+    CompiledRun,
+    CompiledStage,
     CompileError,
     ComponentGraph,
     Program,
     Recipe,
     Stage,
+    State,
     TrainingError,
     Weighted,
     XTYBatch,
     compile,
 )
 from xty2.objectives import ObservedOutcomeNLL
-from xty2.training import RunDirectory, is_read_only, run_program, run_stage
+from xty2.training import (
+    MAX_STAGE_STEPS,
+    STREAM_STRIDE,
+    RunDirectory,
+    is_read_only,
+    run_program,
+    run_stage,
+)
 
 from tests.invariants.conftest import (
     HIDDEN,
@@ -134,7 +144,14 @@ def test_branches_start_from_the_named_checkpoint_not_the_previous_stage() -> No
     branch = result.stage("branch").checkpoint
     replay = result.stage("replay").checkpoint
     assert result.seed == 7
-    assert [entry.seed for entry in result.stages] == [7, 8, 9]
+    # Stage seeds are spaced by STREAM_STRIDE, not by one: a stage walks one
+    # view key per step from its own seed, so consecutive seeds would make
+    # stage i step 1 and stage i+1 step 0 the same key.
+    assert [entry.seed for entry in result.stages] == [
+        7,
+        7 + STREAM_STRIDE,
+        7 + 2 * STREAM_STRIDE,
+    ]
     for name, value in branch.parameters.items():
         assert torch.equal(value, replay.parameters[name])
 
@@ -206,3 +223,69 @@ def test_a_program_writes_one_immutable_checkpoint_per_stage(tmp_path: Path) -> 
         path = directory.root / "stages" / name / "checkpoint.pt"
         assert path.exists()
         assert is_read_only(path)
+
+
+def _multi_step_recipe(steps: int) -> Recipe:
+    def fit(name: str) -> Stage:
+        return stage(
+            name=name,
+            objectives=(Weighted(ObservedOutcomeNLL(), weight=1.0, reduction="mean"),),
+            trainable=("encoder", "outcome_head"),
+            steps=steps,
+        )
+
+    return Recipe(
+        name="streams",
+        schema=make_schema(),
+        system=ComponentGraph([ToyEncoder(width=HIDDEN), ToyOutcomeHead()]),
+        program=Program((fit("first"), fit("second"), fit("third"))),
+        card="docs/recipes/streams.md",
+    )
+
+
+@pytest.mark.parametrize("seed", [0, 7])
+def test_stages_never_share_a_view_key(
+    seed: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A stage walks one view key per optimiser step upwards from its own seed
+    # (the Mean Teacher card pins `s_r + 10000 + j`). Sibling seeds one apart
+    # would therefore give stage i step 1 the key stage i+1 used at step 0, and
+    # a recipe with stochastic views across stages would silently replay one
+    # realisation instead of getting the distinct streams promised above.
+    steps = 4
+    run = compile(_multi_step_recipe(steps))
+    batch = make_batch()
+
+    keys: list[int] = []
+    original = type(run).state
+
+    def spy(
+        self: CompiledRun,
+        stage: str | CompiledStage,
+        batch: XTYBatch,
+        *,
+        rng_key: int = 0,
+        teacher_graph: ComponentGraph | None = None,
+    ) -> State:
+        keys.append(rng_key)
+        return original(
+            self, stage, batch, rng_key=rng_key, teacher_graph=teacher_graph
+        )
+
+    monkeypatch.setattr(type(run), "state", spy)
+    run_program(
+        run,
+        {name: [batch] * steps for name in ("first", "second", "third")},
+        seed=seed,
+    )
+
+    assert len(keys) == 3 * steps
+    assert len(set(keys)) == len(keys)
+
+
+def test_a_stage_longer_than_the_stream_stride_is_refused() -> None:
+    # The disjointness above holds only while no stage walks as far as the
+    # gap between sibling seeds, so the loop refuses the stage that would.
+    run = compile(_multi_step_recipe(MAX_STAGE_STEPS + 1))
+    with pytest.raises(TrainingError, match="STREAM_STRIDE"):
+        run_stage(run, "first", [make_batch()], seed=0)

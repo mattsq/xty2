@@ -14,13 +14,22 @@ def candidate_treatment_means(
     *,
     batch_size: int,
     num_treatments: int,
+    device: torch.device | str,
 ) -> Tensor:
-    """Return all candidate means with shape ``[B,K,*Dy]``."""
+    """Return all candidate means with shape ``[B,K,*Dy]``.
+
+    ``device`` is required rather than defaulted, for the same reason
+    ``core.conformance._candidate_matrix`` takes one: a CPU-backed index
+    tensor reaches ``torch.gather`` inside a head whose parameters live on an
+    accelerator and fails there, so the caller names the device its
+    distribution was built on. `core.loss.candidate_treatments` reads it from
+    ``batch.t.device``; an evaluation caller does the same.
+    """
     if batch_size < 1:
         raise ValueError(f"batch_size must be positive, got {batch_size}")
     if num_treatments < 2:
         raise ValueError(f"num_treatments must be at least two, got {num_treatments}")
-    candidates = torch.arange(num_treatments, dtype=torch.long).expand(
+    candidates = torch.arange(num_treatments, dtype=torch.long, device=device).expand(
         batch_size, num_treatments
     )
     means = distribution.mean(candidates)

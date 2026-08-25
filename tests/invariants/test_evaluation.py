@@ -63,6 +63,7 @@ def test_candidate_means_and_causal_metrics_keep_the_candidate_axis() -> None:
         outcome,
         batch_size=2,
         num_treatments=3,
+        device=loc.device,
     )
     assert torch.equal(means, loc)
     effect = treatment_contrast(means, treated=2, control=0)
@@ -105,3 +106,42 @@ def test_calibration_metrics_have_exact_small_examples() -> None:
 def test_metric_contract_failures_are_actionable(call: object, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         call()  # type: ignore[operator]
+
+
+def test_candidate_indices_are_built_on_the_device_the_caller_names() -> None:
+    # A CPU-backed index tensor reaching a head whose parameters live on an
+    # accelerator fails inside `torch.gather`, so the device the caller names
+    # has to reach `torch.arange` rather than being dropped.
+    seen: list[torch.device] = []
+
+    class RecordingOutcome:
+        def __init__(self, loc: torch.Tensor) -> None:
+            self._loc = loc
+
+        def log_prob(self, y: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+            raise AssertionError("the metric must not score outcomes")
+
+        def mean(self, t: torch.Tensor) -> torch.Tensor:
+            seen.append(t.device)
+            return self._loc
+
+        def sample(self, t: torch.Tensor, n: int) -> torch.Tensor:
+            raise AssertionError("the metric must not sample")
+
+    loc = torch.tensor([[[1.0], [2.0]], [[3.0], [4.0]]])
+    means = candidate_treatment_means(
+        RecordingOutcome(loc),
+        batch_size=2,
+        num_treatments=2,
+        device=torch.device("cpu"),
+    )
+    assert torch.equal(means, loc)
+    assert seen == [torch.device("cpu")]
+
+    candidate_treatment_means(
+        RecordingOutcome(loc),
+        batch_size=2,
+        num_treatments=2,
+        device=torch.device("meta"),
+    )
+    assert seen[-1].type == "meta"

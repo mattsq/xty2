@@ -30,7 +30,12 @@ _STATUS = re.compile(
 )
 _LEDGER = re.compile(
     r"(?P<head>### 6\.\d+ Result ledger\n\n"
-    r"\| Date \| Commit \| Metric \| Value \+/- stderr \| Within tolerance\? \|\n"
+    # The template writes the header as "Value ± stderr" and the cards
+    # written before P12 write it as "Value +/- stderr". Both spellings name
+    # the same reviewed column, so a card created from the template must not
+    # be rejected as having no ledger.
+    r"\| Date \| Commit \| Metric \| Value (?:\+/-|±) stderr \| "
+    r"Within tolerance\? \|\n"
     r"\|---\|---\|---\|---\|---\|\n)"
     r"(?P<rows>(?:\|.*\|\n)+)"
 )
@@ -54,10 +59,14 @@ class ReproductionSpec:
         object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
         if not self.recipe or not self.recipe.isidentifier():
             raise ValueError(f"invalid recipe name {self.recipe!r}")
-        if self.seed_count < 1:
+        # Every Tier 2 row is reported as a sample mean plus a sample
+        # standard error, and `mean_and_stderr` needs two replicates to have
+        # one. Rejecting a one-seed card here names the card, rather than
+        # failing deep inside aggregation after the whole benchmark has run.
+        if self.seed_count < 2:
             raise ValueError(
-                f"{self.recipe} reproduction seed count must be positive, got "
-                f"{self.seed_count}"
+                f"{self.recipe} reproduction seed count must be at least two "
+                f"so that a sample stderr exists, got {self.seed_count}"
             )
 
     @property
@@ -89,6 +98,51 @@ class ReproductionSpec:
                 "the card before changing the runner."
             )
         return value
+
+    def bind(
+        self,
+        implemented: Mapping[str, str],
+        *,
+        documentation: Iterable[str] = (),
+    ) -> None:
+        """Account for *every* scalar the card's section-6 block declares.
+
+        ``require`` binds one key; ``bind`` binds the block. Each declared
+        scalar is either implemented at a named reviewed value or listed in
+        ``documentation`` as prose no code reads. Binding only a subset is
+        what makes Tier 2 provenance forgeable: the artifact carries
+        ``spec.digest``, the digest of the whole block, so a card whose
+        ``split`` or ``variant`` is amended without a matching benchmark
+        change would still run the old protocol and stamp the new digest on
+        the evidence. An unaccounted key stops the run instead.
+        """
+        expected = dict(implemented)
+        inert = set(documentation)
+        overlap = sorted(inert & set(expected))
+        if overlap:
+            raise ValueError(
+                f"{self.card} benchmark binds {overlap!r} as both implemented "
+                "and documentation; a key is one or the other"
+            )
+        declared = set(self.values)
+        unbound = sorted(declared - set(expected) - inert)
+        if unbound:
+            raise ValueError(
+                f"{self.card} reproduction block declares {unbound!r}, which "
+                "this benchmark neither implements nor records as "
+                "documentation. Implement the reviewed control or declare it "
+                "inert before running Tier 2; otherwise the artifact would "
+                "carry this block's digest for a protocol it did not execute."
+            )
+        absent = sorted((set(expected) | inert) - declared)
+        if absent:
+            raise ValueError(
+                f"{self.card} reproduction block no longer declares {absent!r}, "
+                "which this benchmark binds. Amend and review the card before "
+                "changing the runner."
+            )
+        for key, value in expected.items():
+            self.require(key, value)
 
 
 @dataclass(frozen=True)

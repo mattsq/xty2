@@ -63,10 +63,25 @@ def run(
     cache_root: Path,
 ) -> BenchmarkResult:
     """Run the ten-replicate, explicitly partial IHDP diagnostic."""
-    spec.require("dataset", "IHDP")
-    spec.require("metric", "sqrt_PEHE_in_sample")
-    spec.require("published", "0.88")
-    spec.require("tolerance", "0.10")
+    spec.bind(
+        {
+            "dataset": "IHDP",
+            "variant": (
+                "1000 realisations, Hill (2011) / NPCI setting A; binary "
+                "treatment; fully observed t"
+            ),
+            "split": (
+                "63/27/10 train/validation/test; within-sample metric over "
+                "train plus validation"
+            ),
+            "metric": "sqrt_PEHE_in_sample",
+            "published": "0.88",
+            "tolerance": "0.10",
+            "seeds": "10",
+            "report": "mean_and_stderr",
+        },
+        documentation=("published_source",),
+    )
     if spec.seed_count != 10:
         raise ValueError(
             f"TARNet card reviewed 10 seeds, got {spec.seed_count}; amend the "
@@ -172,6 +187,7 @@ def _replicate(index: int, *, train_path: str) -> dict[str, float]:
             outcome_distribution,
             batch_size=rows,
             num_treatments=2,
+            device=population.t.device,
         )
         estimated_effect = treatment_contrast(means)
         pehe = float(sqrt_pehe(estimated_effect, true_effect))

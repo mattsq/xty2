@@ -19,6 +19,8 @@ from xty2.training.artifacts import (
     is_read_only,
 )
 from xty2.training.executors import (
+    MAX_STAGE_STEPS,
+    STREAM_STRIDE,
     BatchSource,
     BatchSources,
     ProgramResult,
@@ -43,7 +45,9 @@ from xty2.training.teacher import EMATeacher
 
 __all__ = [
     "ARTIFACT_FORMAT",
+    "MAX_STAGE_STEPS",
     "PERIODIC_STEPS",
+    "STREAM_STRIDE",
     "BatchSource",
     "BatchSources",
     "Checkpoint",
