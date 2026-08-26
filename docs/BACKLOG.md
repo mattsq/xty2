@@ -119,6 +119,20 @@ A useful sequence after P12 is:
 The point of this sequence is not to reproduce a leaderboard progression. It is
 to make each new recipe probe a different architectural claim.
 
+**Where the sequence has got to.** Steps 1 and 2 have landed —
+`docs/recipes/scarf.md` and `docs/recipes/fixmatch.md`, both `draft` and
+neither Tier 2'd. SCARF's port carries a result worth reading before picking up
+step 5 or 6: the contrastive pretraining works as a representation learner and
+its encoder does carry treatment-predictive structure under a frozen probe,
+but the end-to-end gain the paper's protocol predicts is *absent* on the
+project fixture at every fine-tuning budget tried (`scarf.md` §6.2). The
+mechanism appears to be the obvious one — instance discrimination treats
+same-class rows as negatives, and on a fixture where the scarce label is the
+cluster structure it spends its capacity pushing apart exactly the rows the
+propensity head wants together. That is the gap CoMatch (step 5), SimMatch
+(step 6) and PAWS exist to close, which makes them a sharper next step than
+they looked before the measurement existed.
+
 ---
 
 ## 2. Composite SSL lineage

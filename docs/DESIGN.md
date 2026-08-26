@@ -138,6 +138,7 @@ class Port(str, Enum):
     Y_RAW           = "y"
     # Computed quantities
     X_REPR          = "x_repr"
+    X_PROJ          = "x_proj"
     Y_GIVEN_XT      = "p(y|x,t)"
     T_GIVEN_X       = "p(t|x)"
     T_GIVEN_XY      = "q(t|x,y)"
@@ -157,6 +158,7 @@ compile time and asserted in tests:
 | `X_RAW` | `Tensor` | `[B, D]`, as `batch.x` |
 | `Y_RAW` | `Tensor` | `[B, *Dy]`, as `batch.y` |
 | `X_REPR` | `Tensor` | `[B, H]` |
+| `X_PROJ` | `Tensor` | `[B, H]` |
 | `T_GIVEN_X` | `TreatmentDistribution` | `probs: [B, K]`, rows sum to 1 |
 | `T_GIVEN_XY` | `TreatmentDistribution` | `probs: [B, K]` |
 | `Y_GIVEN_XT` | `OutcomeDistribution` | `log_prob(y, t)` broadcasts over t (§3.1) |
@@ -168,6 +170,18 @@ Ports are the framework's vocabulary — the load-bearing quadrant of §11.2.
 reviewed card that cannot state its §4 mechanics without it is enough to build
 it, but the shape is designed against a named second consumer, and that naming
 is written down before the code.
+
+`X_PROJ` is the one port added under that rule so far, and it is the worked
+example of it. `scarf` needs SCARF's pre-train head `g` — a component the paper
+specifies and specifies *discarding* after pretraining — so its card §4
+`architecture.widths_depths` names a component that has nowhere to write, which
+is Q1 answered yes. The shape was designed against CoMatch (`BACKLOG.md` §2.7),
+whose §3 defines "a non-linear projection head (a MLP) `g(·)`, which transforms
+a feature `f(x)` into a normalized low-dimensional embedding `z(x) = g(f(x))`":
+per-realisation, coexisting with `T_GIVEN_X` over one encoder, and 64-wide
+where SCARF is 256-wide — which is why the contract is `[B, H]` with a free
+width rather than one the schema fixes. `scarf.md` §5.1 carries that reasoning
+in the form §11.2 requires.
 
 ### 2.2 Raw inputs are ports too
 
@@ -466,6 +480,13 @@ stage transition: FixMatch's artificial label is a per-batch detached target,
 where §7's `PseudoLabelAction` emits an immutable side table between stages.
 Both exist because those are two different mechanisms, not two spellings of
 one.
+
+`InfoNCEContrastive` is the second, and arrived with `docs/recipes/scarf.md`.
+It is the first objective whose per-row value depends on the *other* rows of
+the batch, which is why its card §3.2 argues, and its `plan_details` prints,
+where its negatives come from: the eligible set is both the anchors and the
+candidates, since a negative taken from a row the objective is not entitled to
+would be reading outside its declared population by another route.
 
 ---
 

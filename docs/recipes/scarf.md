@@ -9,6 +9,13 @@
 > The implementation follows in the same branch. Section 8 is unsigned: nothing
 > below has been reviewed, and a reviewer moving section 8 is what moves this
 > status line.
+>
+> The code is at what `FIDELITY.md` §1.1 calls `smoke-passing`. Read section 6.2
+> before reading section 6: the mechanism is assembled and works as a
+> representation learner, and the **downstream target section 6 declares is not
+> met** — measured over five seeds and four fine-tuning budgets, and recorded
+> rather than tuned away. Sections 2 and 6.2 were rewritten around that
+> measurement; the target itself is left exactly as it was declared.
 
 ---
 
@@ -35,11 +42,21 @@
   of itself — a random subset of its features replaced by draws from those
   features' empirical marginals — pretrains an encoder that improves downstream
   classification on 69 OpenML-CC18 tabular datasets, and that the improvement
-  is largest where labels are scarce or noisy. This card claims only that the
-  mechanism is faithfully assembled in xty2, and that on the fixed
-  project-local target in section 6 — where the scarce label is the *treatment*
-  — the pretrained encoder improves held-out `p(t | x)` against the identical
-  fit with no pretraining, without damaging the outcome stack.
+  is largest where labels are scarce or noisy. This card claims two much
+  smaller things, and the second is smaller than the draft of this section
+  claimed before section 6.2 was measured:
+  1. the mechanism is faithfully assembled in xty2 — the corrupted view reaches
+     the loss, the loss is the paper's expression, and the representation it
+     produces separates a row from the other rows of its batch rather than
+     collapsing;
+  2. that representation carries structure the *treatment* head can use: with
+     the encoder held fixed, `p(t | x)` fitted on it beats the same fit on an
+     untrained encoder (section 6.2, mean ratio 0.87 over five seeds).
+
+  It does **not** claim the thing section 6 declares a target for — that
+  pretraining improves the end-to-end scarce-label fit the paper's own protocol
+  prescribes. That was measured, at four fine-tuning budgets and five seeds,
+  and it is absent. Section 6.2 has the numbers and what they appear to mean.
 - **Not claimed:** no OpenML-CC18 number is claimed, and none could be: the
   datasets, the architecture, the metric and the label are all different. Two
   further limits are structural and are stated here rather than left to
@@ -53,7 +70,19 @@
      not necessarily what predicts `t` or `y`. Where the two disagree,
      pretraining is a cost rather than a benefit, and the paired ablation in
      section 6 is what would show it.
-  2. **The corrupted view is a statement about the feature distribution, not
+  2. **Instance discrimination is not class discrimination, and on this
+     fixture they are in tension.** SCARF's loss treats every other row of the
+     batch as a negative, including rows that share the cluster — and on the
+     section 6 DGP the cluster is what the treatment is assigned from. The
+     objective is therefore spending capacity pushing apart exactly the rows a
+     propensity head wants together, which section 6.2 measures directly: the
+     mean similarity between different rows falls to 0.002 while a row's
+     similarity to its own corrupted copy stays near 0.48. This is a property
+     of unsupervised instance discrimination rather than a fault in the port,
+     and it is the reason the backlog's next contrastive cards — CoMatch,
+     SimMatch, PAWS — put class or pseudo-label information into the
+     contrastive graph.
+  3. **The corrupted view is a statement about the feature distribution, not
      about the treatment.** Replacing a feature by a draw from its marginal
      destroys that feature's dependence with every other column, including any
      column the treatment assignment depends on. The view is legitimate for
@@ -179,7 +208,8 @@ gradients:
   gradient_clipping:
     pretrain: none                               # paper names none
     joint_fit: none
-  marginal_nll_grad_path: both                   # reviewed P5 choice; project-local addition
+  marginal_nll_grad_path:
+    joint_fit.missing_treatment_marginal_nll: both   # reviewed P5 choice; project-local addition
 
 teacher:
   ema_decay: n/a                                 # SCARF maintains no EMA
@@ -208,7 +238,8 @@ losses:
     joint_fit.observed_outcome_nll: constant 1.0
     joint_fit.observed_treatment_nll: constant 1.0
     joint_fit.missing_treatment_marginal_nll: ramp 0.0 -> 0.5 over 1000 steps
-  temperature: 1.0                               # section 4 ablation: "a default of 1 ... works the best in our setting"
+  temperature:
+    pretrain.info_nce_contrastive: 1.0           # section 4 ablation: "a default of 1 ... works the best in our setting"
   sharpening: n/a                                # no pseudo-label is formed anywhere in this recipe
   confidence_threshold: n/a
 
@@ -279,8 +310,14 @@ touched and are not counted in `M`; a schema with derived features must supply
 recompute rules or the view is rejected at compile time, and
 `scarf(schema, recompute_rules=(...))` is how they arrive.
 
-One property of this transform is worth stating because no other view in the
-repository has it: **a corrupted value is always a value the column actually
+`projection_head`'s `[256, 256]` is two *layers*, and the second of them is
+affine: `Linear(200, 256) -> ReLU -> Linear(256, 256)`, then the `l2`
+normalisation. The count and the width come from the paper; the absence of a
+terminal activation is §7's, and it is the difference between a head that
+trains and one that dies.
+
+One property of the corruption transform is worth stating because no other view
+in the repository has it: **a corrupted value is always a value the column actually
 took.** Bounds, kinds and any implicit support constraint hold by construction
 rather than by a clamp, which is what makes the augmentation defensible on
 tabular physical data where a jitter or a constant fill can produce an
@@ -377,7 +414,83 @@ this DGP: under a 0.02/0.98 propensity the counterfactual arm within a cluster
 is nearly unobserved, so `sqrt_PEHE` is not identified at this sample size and
 claiming a band for it would be claiming a number the design cannot support.
 
-### 6.2 Result ledger
+### 6.2 What the Tier 1 fixture already shows, including against §6
+
+These are Tier 1 numbers from `tests/smoke/test_scarf.py` and the paired sweep
+it was written from — not a Tier 2 result, and not evidence about Bahri et al.
+They are recorded because they answer §6's question in the direction §6 did not
+predict, and because two of them rewrote §2.
+
+All rows use the §6.1 DGP. "Seeds" are five distinct (data, initialisation,
+batch-stream) seeds; the Tier 1 fixture is the first of them. Every pair shares
+its initial parameters and its batch stream, so the only difference between the
+arms is the pretraining.
+
+**The pretraining itself works.** On the fixture seed, `L_cont` falls from
+`-0.234` to `-0.370` over 1,000 steps while the similarity of a row to its own
+corrupted copy stays high and its similarity to the other rows of the batch goes
+to nothing:
+
+| | step 0 | step 999 |
+|---|---|---|
+| `L_cont` | -0.234 | -0.370 |
+| alignment (a row vs its own corrupted copy) | 0.590 | 0.479 |
+| uniformity (a row vs the other rows) | 0.325 | 0.002 |
+
+The gap is 0.477 against §6's declared 0.2, and it is not the gap the network
+was born with. This is also the measurement that distinguishes learning from
+collapse: a collapsed encoder drives `L_cont` to exactly 0 — *higher* than the
+untrained network's -0.234 — with alignment and uniformity equal, which is what
+an earlier version of the projection head actually did (§7, terminal
+activation).
+
+**The declared §6 target is not met.** Held-out `p(t | x)` NLL, pretrained arm
+against the no-pretraining arm, at four fine-tuning budgets:
+
+| `joint_fit` steps | mean NLL ratio, pretrained / not | per-seed pairs |
+|---|---|---|
+| 150 | 1.042 | 0.252/0.245, 0.313/0.300, 0.346/0.356, 0.357/0.299, 0.323/0.334 |
+| 300 | 1.004 | 0.231/0.229, 0.295/0.287, 0.380/0.368, 0.328/0.304, 0.278/0.318 |
+| 1,000 | 1.084 | 0.324/0.265, 0.402/0.383, 0.499/0.458, 0.324/0.314, 0.444/0.432 |
+| **3,000 (the recipe)** | **1.081** | 0.559/0.564, 0.932/0.682, 0.677/0.708, 0.605/0.578, 0.727/0.696 |
+
+The marginal-frequency baseline is 0.70 on every seed. §6's tolerance is a mean
+ratio below 1.0 and no budget reaches it, so the shorter budgets are reported
+for what they rule out rather than as an alternative to be adopted: the null is
+not an artefact of deviation 4's fixed 3,000-step fine-tune. The held-out
+outcome NLL ratios at 3,000 steps are 0.996, 1.030, 1.023, 0.980 and 1.042, so
+§6's non-inferiority guardrail holds — the pretraining is not damaging the
+outcome stack, it is simply not helping the treatment one.
+
+**The representation is not empty, though — the fine-tuning erases it.** The
+same pair with the encoder *frozen* during the fit, which is the standard
+linear-probe question asked with the framework's own vocabulary (it is a
+measurement, not the recipe: SCARF fine-tunes `f`, and freezing it to move a
+number would be the tuning this project refuses):
+
+| | pretrained | untrained | |
+|---|---|---|---|
+| held-out `p(t\|x)` NLL, 5 seeds | 0.245, 0.315, 0.257, 0.283, 0.238 | 0.292, 0.338, 0.356, 0.282, 0.285 | mean ratio **0.867** |
+| held-out outcome NLL, 5 seeds | 1.169, 1.181, 1.193, 1.160, 1.183 | 1.128, 1.148, 1.116, 1.112, 1.154 | pretrained worse on all five |
+
+Four wins and one tie on the treatment side. So the contrastive encoder does
+carry treatment-predictive structure — and 1,000 or 3,000 steps of gradient from
+40 labels takes both arms far enough from their initialisations that where they
+started stops mattering. The outcome row is the other half of the same fact and
+is not a happy one: a representation shaped by the covariance of `x` alone is
+not shaped for `p(y | x, t)`, and a frozen encoder gives the outcome head no way
+to reshape it. Both halves are asserted in Tier 1 so that they stay visible.
+
+**What this is not.** One DGP, one architecture, 40 labels, five seeds. SCARF's
+published evidence is 69 datasets under three label regimes, and nothing here
+contradicts it: what is measured is that on a fixture where the scarce label is
+the cluster structure, an objective that pushes same-cluster rows apart does not
+hand the propensity head anything that survives fine-tuning. §2 now says that,
+and it is a concrete argument for running the class-aware contrastive cards
+(CoMatch, SimMatch, PAWS) that `BACKLOG.md` §1 sequences immediately after this
+one.
+
+### 6.3 Result ledger
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
@@ -387,7 +500,10 @@ claiming a band for it would be claiming a number the design cannot support.
 module per recipe and this recipe has none, exactly as `fixmatch.md` §6.3
 records for its own. Until that module exists this card's status may not go past
 `smoke-passing`, and the block above is a declared protocol rather than a
-result.
+result. On §6.2's evidence the protocol as declared should be expected to
+return a `deviating` outcome; the tolerance stays as written, because a
+tolerance rewritten after seeing the numbers is worth nothing
+(`FIDELITY.md` §3).
 
 ## 7. Unknowns
 
@@ -396,6 +512,7 @@ result.
 | Whether `I_i` is drawn independently per row or once per batch. | Independently per row. | Algorithm 1 draws `I_i` inside the loop over `i`, and the subscript is the row's. Recorded because a per-batch mask is the cheaper implementation and would be invisible in a diff. |
 | Whether the marginal draw for a corrupted cell is independent per `(row, feature)` or one donor row is used for all of a row's corrupted features. | Independent per `(row, feature)`. | "`x̃_j^(i) = v`, where `v ~ X̂_j`" is written per feature `j`, and `X̂_j` is a distribution over one column. Drawing one donor row instead would preserve that row's cross-feature dependence, which is exactly what the corruption is meant to destroy. |
 | The initialisation of `f` and `g`. | The reviewed CFRNet initialisation this repository's other components use: `normal(std=0.1/sqrt(fan_in))`, zero bias. | Project convention. The paper names none, and `g`'s output is `l2`-normalised, so the scale of its initialisation affects the first few steps and not the geometry. |
+| Whether the pre-train head's last layer is followed by an activation. "2 layers, hidden dimension 256" fixes the count and the width and not the shape of the output. | No terminal activation: `Linear -> ReLU -> Linear`, then the `l2` normalisation. | The convention every projection head this lineage descends from uses (SimCLR's `g(h) = W2 sigma(W1 h)`), and — after the alternative was implemented by accident and measured — the only one that trains. A terminal ReLU confines the embedding to the non-negative orthant, where two rows can be orthogonal but never opposed, so the loss's only route to a low off-diagonal similarity is disjoint sparse supports: 99.6% of the head's units were zero by step 1,000, alignment fell to 0.11 and `L_cont` climbed back toward the collapsed value of 0. Recorded because the failure looks like ordinary optimisation noise in a loss curve and is not. |
 | Whether the pre-train head is discarded or retained for a later stage. | Discarded, and *provably* so: `projection_head` appears in no `joint_fit` forward pass and in no `trainable` list, so the compiler would reject it as dead weight if a later edit tried to train it without using it. | The paper: "after pre-training, `g` is discarded". |
 | Weight decay during either phase. | None. | The paper names only "the Adam optimizer using the default learning rate of 0.001". A decay nobody stated would be a hyperparameter this card could not source. |
 | Whether the fine-tuning phase re-uses the pretraining optimiser state. | No — each stage constructs its own optimiser. | `DESIGN.md` §7.0: a stage begins from the recipe's initial graph state overlaid with the named checkpoint, and a `Checkpoint` carries parameters and buffers, not optimiser moments. The paper is silent, and carrying Adam moments across a change of objective would be the surprising choice. |
