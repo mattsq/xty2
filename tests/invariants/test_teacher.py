@@ -22,6 +22,7 @@ from xty2.core import (
     Program,
     Realisation,
     Recipe,
+    TeacherRole,
     TeacherSpec,
     TrainingError,
     Weighted,
@@ -65,13 +66,18 @@ class BufferedEncoder(Component):
 
 
 def _teacher_spec(
-    *, applies_to_buffers: bool = True, train_mode: bool = False, decay: float = 0.5
+    *,
+    applies_to_buffers: bool = True,
+    train_mode: bool = False,
+    decay: float = 0.5,
+    role: TeacherRole = "consistency_target",
 ) -> TeacherSpec:
     return TeacherSpec(
         decay=decay,
         applies_to_buffers=applies_to_buffers,
         train_mode=train_mode,
         requires_grad=False,
+        role=role,
     )
 
 
@@ -80,9 +86,10 @@ def _recipe(
     teacher: TeacherSpec | None = None,
     stop_grad: StopGrad = "right",
     trainable: tuple[str, ...] = ("encoder", "propensity"),
+    consistency: bool = True,
 ) -> Recipe:
     objectives = [Weighted(ObservedTreatmentNLL(), weight=1.0, reduction="mean")]
-    if teacher is not None:
+    if teacher is not None and consistency:
         objectives.append(
             Weighted(
                 ConsistencyLoss(
@@ -135,7 +142,7 @@ def test_every_teacher_choice_is_required_and_card_bound() -> None:
     assert plan.hyperparameters["teacher.teacher_requires_grad"] is False
     assert (
         "teacher: ema(decay=0.5, buffers=ema, mode=eval, "
-        "requires_grad=False)" in plan.render()
+        "requires_grad=False, role=consistency_target)" in plan.render()
     )
 
 
@@ -161,6 +168,7 @@ def test_teacher_decay_is_a_finite_fraction(decay: object) -> None:
             applies_to_buffers=True,
             train_mode=False,
             requires_grad=False,
+            role="consistency_target",
         )
 
 
@@ -171,6 +179,7 @@ def test_a_teacher_can_never_require_gradients() -> None:
             applies_to_buffers=True,
             train_mode=False,
             requires_grad=True,  # type: ignore[arg-type]
+            role="consistency_target",
         )
 
 
@@ -372,3 +381,25 @@ def test_checkpoint_buffers_round_trip_immutably(tmp_path: Path) -> None:
     borrowed = reloaded.buffers["encoder.running"]
     borrowed.fill_(99.0)
     assert reloaded.buffer("encoder.running").item() == 1.0
+
+
+def test_an_evaluation_teacher_needs_no_objective_and_rejects_one() -> None:
+    """The role is checked against the planned passes, not inferred from them.
+
+    An EMA kept only to report with is the FixMatch case: nothing reads it, and
+    the old rule called that a silent no-op. An EMA an objective *does* read
+    while the stage calls it evaluation-only is the opposite lie, and both are
+    named errors rather than one permissive rule.
+    """
+    evaluation = _teacher_spec(role="evaluation")
+    plan = compile(_recipe(teacher=evaluation, consistency=False)).plan
+    assert "role=evaluation" in plan.render()
+    assert not any(
+        forward.realisation.params == "teacher" for forward in plan.stages[0].passes
+    )
+
+    with pytest.raises(CompileError, match="role='evaluation'"):
+        compile(_recipe(teacher=evaluation))
+
+    with pytest.raises(CompileError, match="silent no-op"):
+        compile(_recipe(teacher=_teacher_spec(), consistency=False))

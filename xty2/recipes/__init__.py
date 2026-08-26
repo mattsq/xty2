@@ -7,6 +7,12 @@ from xty2.recipes.cycle_dual import (
     CYCLE_DUAL_POSTERIOR_WIDTHS,
     cycle_dual,
 )
+from xty2.recipes.fixmatch import (
+    FIXMATCH_STEPS,
+    STRONG_MASK_RATE,
+    WEAK_MASK_RATE,
+    fixmatch,
+)
 from xty2.recipes.mean_teacher import mean_teacher
 from xty2.recipes.ssdml import SSDML_ENCODER_WIDTHS, ssdml
 from xty2.recipes.tarnet import ENCODER_WIDTHS, OUTCOME_WIDTHS, tarnet
@@ -17,10 +23,14 @@ __all__ = [
     "CYCLE_DUAL_OUTCOME_WIDTHS",
     "CYCLE_DUAL_POSTERIOR_WIDTHS",
     "ENCODER_WIDTHS",
+    "FIXMATCH_STEPS",
     "OUTCOME_WIDTHS",
     "SSDML_ENCODER_WIDTHS",
+    "STRONG_MASK_RATE",
+    "WEAK_MASK_RATE",
     "cnflow",
     "cycle_dual",
+    "fixmatch",
     "mean_teacher",
     "ssdml",
     "tarnet",

@@ -14,10 +14,12 @@ its boundary is exactly the silent difference `FIDELITY.md` §2 lists under
 """
 
 import math
+from itertools import pairwise
 
 import pytest
 from xty2.core import (
     Constant,
+    CosineDecay,
     ExponentialDecay,
     Ramp,
     Schedule,
@@ -116,6 +118,66 @@ def test_a_sigmoid_ramp_needs_a_positive_integer_length(steps: object) -> None:
 
 
 # ---------------------------------------------------------------------------
+# FixMatch cosine decay
+# ---------------------------------------------------------------------------
+
+
+def test_cosine_decay_is_the_fixmatch_rate_formula() -> None:
+    # FixMatch §2.4: eta * cos(7 pi k / 16 K). Compared against that expression
+    # written out, rather than against the implementation's own rearrangement.
+    total = 3_000
+    schedule = CosineDecay(steps=total, phase=7 / 16)
+    for step in (0, 1, 750, 1_500, 2_999, 3_000):
+        assert schedule(step) == pytest.approx(
+            math.cos(7.0 * math.pi * step / (16.0 * total))
+        )
+
+
+def test_cosine_decay_holds_its_final_level_and_never_turns_back_up() -> None:
+    schedule = CosineDecay(steps=100, phase=7 / 16)
+    assert schedule(100) == pytest.approx(math.cos(7.0 * math.pi / 16.0))
+    assert schedule(10_000) == schedule(100)
+    values = [schedule(step) for step in range(101)]
+    assert all(later <= earlier for earlier, later in pairwise(values))
+
+
+def test_cosine_decay_reports_the_level_it_settles_at() -> None:
+    schedule = CosineDecay(steps=100, phase=0.5, initial=0.2)
+    assert schedule.nominal == pytest.approx(0.0, abs=1e-12)
+    assert CosineDecay(steps=100, phase=7 / 16).nominal == pytest.approx(
+        math.cos(7.0 * math.pi / 16.0)
+    )
+
+
+def test_cosine_decay_describes_its_formula_stably() -> None:
+    assert CosineDecay(steps=3_000, phase=7 / 16).describe() == (
+        "cosine 1.0 * cos(pi * 0.4375 * min(step/3000, 1))"
+    )
+
+
+@pytest.mark.parametrize("phase", [0.0, -0.1, 0.75, 1.0])
+def test_a_phase_that_would_go_negative_is_rejected(phase: float) -> None:
+    with pytest.raises(Xty2Error, match=r"phase must be in \(0, 0.5\]"):
+        CosineDecay(steps=100, phase=phase)
+
+
+@pytest.mark.parametrize("steps", [0, -1, 1.5, True])
+def test_cosine_decay_needs_a_positive_integer_length(steps: object) -> None:
+    with pytest.raises(Xty2Error, match="integer at least 1"):
+        CosineDecay(steps=steps, phase=7 / 16)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("initial", [0.0, -1.0])
+def test_a_non_positive_initial_would_make_the_phase_bound_decorative(
+    initial: float,
+) -> None:
+    # `phase` is bounded so the multiplier never goes negative; a negative
+    # `initial` flips the whole schedule and defeats that bound.
+    with pytest.raises(Xty2Error, match="must be positive"):
+        CosineDecay(steps=100, phase=7 / 16, initial=initial)
+
+
+# ---------------------------------------------------------------------------
 # Step
 # ---------------------------------------------------------------------------
 
@@ -179,6 +241,7 @@ def _schedules() -> list[Schedule]:
         Constant(1.0),
         Ramp(0.0, 0.5, steps=100),
         SigmoidRamp(end=2.0, steps=40),
+        CosineDecay(steps=100, phase=7 / 16),
         Step((0.0, 1.0), (50,)),
         ExponentialDecay(gamma=0.97, every=100),
     ]

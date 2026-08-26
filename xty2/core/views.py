@@ -160,6 +160,21 @@ class ViewSpec:
     transforms: tuple[ViewTransform, ...]
     preserves: frozenset[PreservedField]
     recompute_rules: tuple[RecomputeRule, ...] = ()
+    draws: int = 1
+    """How many independent samples of this view a recipe may realise (§2.1).
+
+    A view is a distribution over batches, not a batch, so "two draws of the
+    same augmentation" is a thing a method can ask for — FixMatch's labelled
+    rows enter eq. (3) and eq. (4)'s target under independently sampled weak
+    augmentations. Each draw is a separate forward pass with its own RNG
+    stream, and `Realisation.draw` names which one.
+
+    It is declared here rather than inferred from whatever a recipe happens to
+    ask for, so that `draw=2` on a two-draw view is a compile error naming the
+    view instead of a quietly planned third pass on a stream nobody chose.
+    The default of `1` is what every recipe written before the axis existed
+    means, and draw 0 keeps that recipe's exact seed.
+    """
 
     def __post_init__(self) -> None:
         name = require_str("view name", self.name, error=ViewError)
@@ -199,6 +214,11 @@ class ViewSpec:
         if duplicates:
             raise ViewError(
                 f"view {name!r} has more than one recompute rule for {duplicates!r}"
+            )
+        if type(self.draws) is not int or self.draws < 1:
+            raise ViewError(
+                f"view {name!r} declares draws={self.draws!r}; it must be an "
+                "int of at least 1 (one sample is the ordinary case)"
             )
         object.__setattr__(self, "transforms", transforms)
         object.__setattr__(self, "preserves", preserves)
@@ -284,15 +304,22 @@ class ViewSpec:
         affected.update(rule.feature for rule in self.recompute_rules)
         return frozenset(affected)
 
-    def apply(self, batch: XTYBatch, schema: Schema, *, rng_key: int) -> XTYBatch:
-        """Compute the view once, deterministically, without mutating ``batch``."""
+    def apply(
+        self, batch: XTYBatch, schema: Schema, *, rng_key: int, draw: int = 0
+    ) -> XTYBatch:
+        """Compute one draw of the view, deterministically and functionally."""
         if type(rng_key) is not int:
             raise ViewError(f"rng_key must be an int, got {type(rng_key)}")
+        if type(draw) is not int or not 0 <= draw < self.draws:
+            raise ViewError(
+                f"view {self.name!r} offers draws 0..{self.draws - 1}, asked "
+                f"for {draw!r}"
+            )
         schema.validate_batch(batch)
         declarations = self._validated_transform_columns(schema)
         original = batch.clone()
         generator = torch.Generator(device=batch.device)
-        generator.manual_seed(_view_seed(rng_key, self.name))
+        generator.manual_seed(_view_seed(rng_key, self.name, draw))
 
         # A transform receives a private copy. The post-call equality check
         # still rejects an in-place implementation, while the user's source
@@ -351,9 +378,15 @@ class ViewSpec:
         return tuple(rule.describe() for rule in self.recompute_rules)
 
 
-def _view_seed(rng_key: int, name: str) -> int:
-    """Fold a view name into a run/step key without Python's salted hash."""
-    digest = hashlib.blake2b(f"{rng_key}:{name}".encode(), digest_size=8).digest()
+def _view_seed(rng_key: int, name: str, draw: int = 0) -> int:
+    """Fold a view name and draw into a run/step key, without a salted hash.
+
+    Draw 0 hashes the name alone, exactly as this function did before draws
+    existed. That is what makes the axis free to add: every recipe that names
+    no draw keeps the stream — and therefore the numbers — it already had.
+    """
+    keyed = name if draw == 0 else f"{name}#{draw}"
+    digest = hashlib.blake2b(f"{rng_key}:{keyed}".encode(), digest_size=8).digest()
     return int.from_bytes(digest, "big") & ((1 << 63) - 1)
 
 

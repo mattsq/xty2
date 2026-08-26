@@ -7,10 +7,10 @@ It never weights itself, never calls `.backward()`, never mutates state and
 never touches parameters — weighting is the mixer's job (§6) and stepping is
 the executor's (§7).
 
-Four of the ten objectives in §4.2 exist so far: the three likelihood terms
-the first recipe needs (P3, P5), plus the view-keyed ``ConsistencyLoss`` (P6).
-The rest arrive with the recipes that consume them; migration is lazy by
-design (§11).
+Five objectives exist so far: the three likelihood terms the first recipe needs
+(P3, P5), the view-keyed ``ConsistencyLoss`` (P6), and the confidence-gated
+``PseudoLabelTreatmentNLL`` that FixMatch is assembled from. The rest arrive
+with the recipes that consume them; migration is lazy by design (§11).
 """
 
 from xty2.objectives.consistency import (
@@ -25,6 +25,11 @@ from xty2.objectives.marginal import (
     GradPath,
     MissingTreatmentMarginalNLL,
 )
+from xty2.objectives.pseudo_label import (
+    PseudoLabelStopGrad,
+    PseudoLabelTreatmentNLL,
+    Sharpening,
+)
 from xty2.objectives.supervised import ObservedOutcomeNLL, ObservedTreatmentNLL
 
 __all__ = [
@@ -37,5 +42,8 @@ __all__ = [
     "MissingTreatmentMarginalNLL",
     "ObservedOutcomeNLL",
     "ObservedTreatmentNLL",
+    "PseudoLabelStopGrad",
+    "PseudoLabelTreatmentNLL",
+    "Sharpening",
     "StopGrad",
 ]

@@ -189,6 +189,7 @@ def test_the_teacher_and_both_ramps_match_the_card() -> None:
         applies_to_buffers=False,
         train_mode=True,
         requires_grad=False,
+        role="consistency_target",
     )
     marginal = stage.objectives[2].weight
     consistency = stage.objectives[3].weight
@@ -357,6 +358,7 @@ def test_a_buffer_ema_mutation_fails_the_recipe_contract() -> None:
             applies_to_buffers=False,
             train_mode=True,
             requires_grad=False,
+            role="consistency_target",
         )
 
 
