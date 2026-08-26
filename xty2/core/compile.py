@@ -462,13 +462,20 @@ class CompiledRun:
         teacher objective self-consistency under one parameter set.
         """
         compiled = self.stage(stage) if isinstance(stage, str) else stage
+        # The requirement tracks the *passes*, not the declaration. A stage
+        # whose teacher is an evaluation EMA (`role="evaluation"`) plans no
+        # teacher pass, so demanding its parameter set here would force every
+        # caller to build a copy this call would never read.
+        needs_teacher = any(
+            forward.realisation.params == "teacher" for forward in compiled.passes
+        )
         if compiled.teacher is None:
             if teacher_graph is not None:
                 raise TrainingError(
                     f"stage {compiled.name!r} declares no teacher, but a teacher "
                     "parameter graph was supplied"
                 )
-        elif teacher_graph is None:
+        elif teacher_graph is None and needs_teacher:
             raise TrainingError(
                 f"stage {compiled.name!r} declares a teacher, but no teacher "
                 "parameter graph was supplied. Execute the stage through "
@@ -542,6 +549,7 @@ def compile(recipe: Recipe) -> CompiledRun:
         for stage in recipe.program
     )
     _check_static_leakage(recipe, stages)
+    _check_declared_draws(views, stages)
     plan = ExecutionPlan(
         recipe=recipe.name,
         purpose=recipe.purpose,
@@ -938,6 +946,45 @@ def _check_realisation(
         f"{[str(r) for r in sorted(realisable)]}. A view is declared by a "
         "ViewSpec (DESIGN.md §5) and a teacher parameter set by a stage (§7)."
     )
+
+
+def _check_declared_draws(
+    views: tuple[ViewSpec, ...], stages: tuple[CompiledStage, ...]
+) -> None:
+    """Reject a view that declares more draws than the program realises.
+
+    The mirror of `_check_teacher_use`, and for the same reason: `draws=3` on a
+    view two realisations read is a claim the plan prints — `weak_x (3
+    independent draws)` — with nothing behind it, and the third stream costs
+    nothing only because it never runs. A reviewer diffing the plan against a
+    card would be reading a number no forward pass supports.
+
+    Program-wide rather than per-stage, because a later stage may be the only
+    one that reads the second draw and that is a legal program.
+
+    Deliberately narrower than it could be: a `ViewSpec` no realisation reads
+    *at all* is still accepted, as it was before draws existed. That is the
+    same smell one level up, and closing it would change a compiler rule for
+    every recipe rather than for the axis this check came in with — a decision
+    for whoever wants it, not a side effect of this one.
+    """
+    realised: dict[str, int] = {}
+    for stage in stages:
+        for forward in stage.passes:
+            name = forward.realisation.view
+            realised[name] = max(realised.get(name, 0), forward.realisation.draw + 1)
+    for view in views:
+        if view.draws == 1:
+            continue
+        used = realised.get(view.name, 0)
+        if view.draws <= used:
+            continue
+        raise CompileError(
+            f"view {view.name!r} of recipe declares draws={view.draws}, but no "
+            f"objective or action realises more than {used} of them. An "
+            "unrealised draw is a silent no-op the plan advertises: reduce "
+            "`draws`, or name the draw that is missing (DESIGN.md §2.1)."
+        )
 
 
 def _check_draw(

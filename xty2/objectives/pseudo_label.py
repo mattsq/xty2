@@ -21,6 +21,11 @@ made visible to the compiler rather than left inside `compute`:
   would otherwise reveal which denominator ran. It is also why FixMatch needs no
   ramp on the unsupervised weight: the effective size of the term grows with the
   mask rate, so the gate is the curriculum.
+* **Row weights are not applied.** `batch.weight` scales `ObservedOutcomeNLL`
+  and nothing else in the framework today, so this term follows the other three
+  treatment-side objectives rather than inventing a second convention. A recipe
+  that needs weighted pseudo-labels is asking for a framework-wide decision
+  about which objectives weights reach, not for a field here.
 * **Coverage is logged, not inferred.** `DESIGN.md` §6.2 asks pseudo-labelling
   recipes for the fraction above the threshold; it is the paper's own mask rate
   (eq. 6) and it is the number that distinguishes a working gate from an inert

@@ -237,3 +237,35 @@ def test_the_plan_details_state_the_gate_and_its_denominator() -> None:
 def test_rejected_configurations(overrides: dict[str, object], message: str) -> None:
     with pytest.raises(LossError, match=message):
         _objective(**overrides)
+
+
+def test_a_row_exactly_at_the_threshold_is_retained() -> None:
+    """`>=`, not `>` — card §7's first row, pinned.
+
+    Eq. (4) and eq. (6) gate on `max(q) >= tau` while algorithm 1 writes `>`,
+    and the card records `>=` as the reading the reference implementation
+    settles. Neither boundary fixture pins it: at `tau=0` both comparisons
+    accept every row, and at `tau=1` no float32 softmax reaches exactly one.
+    So the threshold here is *read off* the fixture — the row's own confidence
+    — which makes equality exact and the two comparisons disagree by one row.
+    """
+    target, prediction = _inputs()
+    probs = target.softmax(dim=-1)
+    confidence = probs.max(dim=-1).values
+    row = int(confidence.argmin())
+    threshold = float(confidence[row])
+
+    term = _objective(threshold=threshold).compute(
+        _state(target, prediction),
+        make_batch(),
+        torch.arange(BATCH_SIZE),
+        _context(),
+    )
+    accepted = confidence >= threshold
+    strictly = confidence > threshold
+    assert int(accepted.sum()) == int(strictly.sum()) + 1, (
+        "fixture must isolate one row"
+    )
+    assert term.diagnostics["coverage"] == pytest.approx(float(accepted.float().mean()))
+    per_row, _ = _expected(target, prediction, threshold)
+    assert torch.allclose(term.value, per_row.mean())

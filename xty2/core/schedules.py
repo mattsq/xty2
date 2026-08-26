@@ -225,6 +225,13 @@ class CosineDecay(Schedule):
                 "is the fraction of pi the cosine travels: 0.5 decays to zero "
                 "and anything beyond it turns the multiplier negative."
             )
+        if self.initial <= 0.0:
+            raise Xty2Error(
+                f"CosineDecay.initial must be positive, got {self.initial!r}. "
+                "The phase bound above keeps the cosine non-negative so that a "
+                "decay never flips sign; a negative initial would flip it "
+                "anyway and make the bound decorative."
+            )
 
     def value(self, step: int) -> float:
         progress = min(step / self.steps, 1.0)

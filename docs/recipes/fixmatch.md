@@ -149,7 +149,7 @@ labels when constructing `U`."
 | `p_m(y \| x)` | model's class distribution | `T_GIVEN_X` | `CategoricalPropensity` over `MLPEncoder` |
 | `alpha(.)` | weak augmentation | — | `ViewSpec("weak_x")`, `FeatureMask(p=0.1)`, declaring two draws |
 | `A(.)` | strong augmentation | — | `ViewSpec("strong_x")`, `FeatureMask(p=0.1)` then `FeatureMask(p=0.5)` — the weak transform with more corruption layered on, as the reference does |
-| `x_b, p_b` | labelled example and its one-hot label | `T_GIVEN_X @ weak_x draw=1` | `ObservedTreatmentNLL(realisation=weak_x, draw=1)`, rows `t_observed` |
+| `x_b, p_b` | labelled example and its one-hot label | `T_GIVEN_X @ weak_x draw=1` | `ObservedTreatmentNLL(realisation=Realisation("weak_x", draw=1))`, rows `t_observed` |
 | eq. (3) `\ell_s` | supervised cross-entropy on weak views | `T_GIVEN_X @ weak_x draw=1` | as above, `reduction="mean"` — a *second* sample of `alpha`, per footnote 2 (§7) |
 | `q_b` | artificial label distribution | `T_GIVEN_X @ weak_x draw=0` | `PseudoLabelTreatmentNLL.target` |
 | `\hat q_b = arg max(q_b)` | hard pseudo-label | — | `sharpening="hard"` inside that objective |
@@ -202,7 +202,7 @@ gradients:
   stop_gradients:
     joint_fit.observed_outcome_nll: none
     joint_fit.observed_treatment_nll: none
-    joint_fit.pseudo_label_treatment_nll: target (T_GIVEN_X @ weak_x)
+    joint_fit.pseudo_label_treatment_nll: p(t|x) @ view=weak_x params=student
     joint_fit.missing_treatment_marginal_nll: none
   detached_targets: target                    # eq. (4): joint_fit.pseudo_label_treatment_nll detaches T_GIVEN_X @ weak_x; the label is arg max(q_b), a constant w.r.t. theta
   gradient_clipping: none                     # paper names none; retained P5 choice
@@ -237,7 +237,7 @@ losses:
     joint_fit.observed_outcome_nll: constant 1.0
     joint_fit.observed_treatment_nll: constant 1.0
     joint_fit.pseudo_label_treatment_nll: constant 1.0   # section 2.2 explicitly rejects a lambda_u ramp
-    joint_fit.missing_treatment_marginal_nll: linear ramp 0.0 -> 0.5 over 1000 optimiser steps
+    joint_fit.missing_treatment_marginal_nll: ramp 0.0 -> 0.5 over 1000 steps   # linear, in optimiser steps
   temperature: n/a                            # table 1: FixMatch post-processes by pseudo-labelling, not by sharpening
   sharpening: hard                            # eq. (4): arg max(q_b), a one-hot label
   confidence_threshold: 0.95                  # tau, table 4; ablated in appendix B.2 table 5
@@ -249,7 +249,7 @@ optimisation:
   weight_decay: 0.0005 (all trainable components; norm and bias exempt)  # table 4 CIFAR-10 value; ref impl sums l2_loss over `kernel` variables only
   batch_size: n/a                                # external BatchSource; section 6 fixes 256 for validation
   labelled_unlabelled_ratio: n/a                 # mu = 7 is a loader quota xty2 has no loader for (DESIGN.md section 11); see deviation 4
-  total_steps_or_epochs: 3000 optimiser steps    # K = 2^20 optimiser updates in the paper (train_kimg 2^16 << 10, global step incremented by B=64); see deviation 3. The cosine schedule uses this K.
+  total_steps_or_epochs: 3000                   # optimiser steps, never epochs. K = 2^20 optimiser updates in the paper (train_kimg 2^16 << 10, global step incremented by B=64); see deviation 3. The cosine schedule uses this K.
 
 architecture:
   widths_depths:
@@ -363,7 +363,10 @@ described in section 2, "Not claimed": with cluster-conditional propensities of
 0.02 and 0.98, a well-fitted `p(t | x)` can exceed `tau = 0.95` at all, so the
 gate has something to open on. `tests/smoke/test_fixmatch.py` runs the same
 recipe a second time on the overlapping version of this DGP (0.15/0.85) and
-asserts what happens there; section 6.2 records the measurement.
+asserts what happens there; section 6.2 records the measurement. That second
+run uses a shorter budget, and its cosine schedule is re-based to match — the
+same re-basing deviation 3 applies to `K`, rather than leaving a short run on
+the first fifth of a 3,000-step decay.
 
 ```yaml
 reproduction:
@@ -373,7 +376,7 @@ reproduction:
   metric: held-out p(t|x) NLL ratio on the EMA parameters, FixMatch over the lambda_u = 0 ablation; paper mask rate (eq. 6) and impurity (eq. 5), measured on the trained network, as guardrails
   published: none - no published number applies to this adaptation
   published_source: n/a
-  tolerance: ratio < 1.0 in mean; terminal mask rate above 0.2; impurity of retained labels < 0.15; held-out outcome NLL within 1.05x of the ablation
+  tolerance: ratio < 1.0 in mean on both the EMA and the trained parameters (see 6.2); terminal mask rate above 0.2; impurity of retained labels < 0.15; held-out outcome NLL within 1.05x of the ablation
   seeds: 10
   report: mean_and_stderr
 ```
@@ -422,20 +425,24 @@ this card:
 
 | | separable (0.02/0.98), 3,000 steps | overlapping (0.15/0.85), 600 steps |
 |---|---|---|
-| held-out `p(t\|x)` NLL, FixMatch (EMA) | 0.245 | 0.605 |
-| held-out `p(t\|x)` NLL, `lambda_u = 0` (EMA) | 0.278 | — |
+| held-out `p(t\|x)` NLL, FixMatch — EMA / trained | 0.245 / 0.263 | 0.604 / 0.926 |
+| held-out `p(t\|x)` NLL, `lambda_u = 0` — EMA / trained | 0.278 / 0.300 | — |
 | marginal-frequency baseline | 0.700 | 0.706 |
-| terminal mask rate (eq. 6), trained network | 0.826 | 0.520 |
-| impurity of retained labels (eq. 5) | 0.044 | 0.215 |
+| terminal mask rate (eq. 6), trained network | 0.829 | 0.540 |
+| impurity of retained labels (eq. 5) | 0.042 | 0.224 |
 | held-out outcome NLL, FixMatch / ablation | 1.182 / 1.182 | — |
 
 Which parameter set each row is read from is part of the measurement, not
-bookkeeping. The two NLL rows come from the EMA, because that is the model
-section 2.4 reports. The mask rate and impurity come from the **trained**
-network, because they describe the labels the run actually trained on — eq. (4)
-reads the current parameters, and the same mask rate measured off an EMA at
-decay 0.999 reads `0.000` on the overlapping fixture, which is true of a model
-that never gated anything and says nothing about the mechanism.
+bookkeeping. The NLL rows give both, because the two disagree in a way section
+6.3 has to survive. The mask rate and impurity come from the **trained**
+network only, because they describe the labels the run actually trained on —
+eq. (4) reads the current parameters, and the same mask rate measured off an
+EMA at decay 0.999 reads `0.000` on the overlapping fixture, which is true of a
+model that never gated anything and says nothing about the mechanism. Both are
+taken over every row, matching the `all` population §3.2 argues eq. (4) into
+and the `coverage` diagnostic the objective logs; a figure over the
+missing-treatment rows alone would be a different statistic under the same
+name.
 
 An earlier draft of this card asserted that under overlap the gate would stay
 shut and eq. (4) would be "inert". That is what a *calibrated* model would do,
@@ -446,14 +453,31 @@ manufactures the confidence it is gated on, and then trains on it. Section 2 was
 rewritten to say that, and the Tier 1 test asserts it.
 
 The overlapping column carries a second warning, which arrived with the EMA and
-was not visible before it. The reported NLL there is 0.605 against a 0.706
-baseline — the EMA looks *fine*, better than the baseline. The trained network
-it averages reads 0.870 on the same rows: materially worse than predicting the
-marginal frequency. Averaging over a 0.999 decay hides a training signal that is
-actively degrading, so an EMA-reported number is not on its own evidence that
-the mechanism is behaving. On this fixture it is the one number that would have
-missed the failure, which is why section 6 keeps the mask rate and impurity on
-the trained network.
+was not visible before it. The reported NLL there is 0.604 against a 0.706
+baseline — the EMA looks *fine*, better than the baseline — while the network it
+averages reads 0.926, materially worse than predicting the marginal frequency.
+
+The reason is worth stating precisely, because the obvious reading of it is
+wrong. It is tempting to say the EMA "averages away" a degrading trajectory.
+What it is actually doing at 600 steps with decay 0.999 is barely having moved:
+the weight on the initial parameters is `0.999^600 = 0.55`, so more than half of
+this EMA is still the random initialisation the run started from. It is not an
+average of the training run in any useful sense — it is a blend of that run with
+an untrained network, and it scores better than *either* endpoint (0.604 against
+0.693 untrained and 0.926 trained), because a blend of parameters is not a blend
+of losses. An EMA whose horizon is comparable to the run length is not an
+estimator of the run at all. Section 7 records that the horizon was not re-based
+when deviation 3 cut the budget from `2^20` steps to 3,000, and this is what
+that costs. On the separable column, at 3,000 steps (`0.999^3000 = 0.05`), the
+EMA has left the initialisation behind and the two readings agree to within
+0.02.
+
+Two consequences. The mechanism claim does not depend on the EMA at all — on the
+trained networks the separable pair is 0.263 against 0.300, the same direction
+and a similar margin — so section 6's tolerance is safe either way. And section
+6.3's Tier 2 module must report both parameter sets rather than the EMA alone,
+because on a short run the EMA-only number is the one that would have missed the
+failure.
 
 ### 6.3 Result ledger
 
@@ -467,6 +491,18 @@ piece of work, exactly as `mean_teacher.md` section 6 waited for P12. Until then
 this card's status may not go past `smoke-passing`, and the block above is a
 declared protocol rather than a result.
 
+Two things that module will have to handle, found while writing section 6.2 and
+recorded here so they are not rediscovered:
+
+1. **The EMA is not persisted.** A `Checkpoint` carries the trained components'
+   parameters; the evaluation teacher exists only on the in-memory
+   `StageResult`. A protocol that reports "on the EMA parameters" is therefore
+   satisfiable only while that object is alive, or after the artifact layer
+   learns to write a teacher. Which of those to do is that packet's decision.
+2. **Report both parameter sets.** For the reason section 6.2 gives: on a run
+   short relative to the EMA horizon, the EMA-reported number can look healthy
+   while the trained network is worse than the baseline.
+
 ## 7. Unknowns
 
 > Four rows below are marked **reference implementation**. Those are questions
@@ -478,14 +514,14 @@ declared protocol rather than a result.
 |---|---|---|
 | Eq. (4) and eq. (6) gate on `max(q_b) >= tau`; algorithm 1 line 6 writes `max(q_b) > tau`. | `>=`. | **Reference implementation:** the code compares the row maximum `>= confidence`. That agrees with eq. (4) and with the mask-rate definition in eq. (6), leaving algorithm 1's strict inequality as the odd one out. The difference is measure-zero on continuous logits; it is recorded because a card that silently picked one would be hiding a real inconsistency in the source. |
 | Whether the gate multiplier and the label are treated as constants of `theta`. | Both. The whole target realisation is detached before the arg max and the comparison. | **Reference implementation:** the weak-view softmax is wrapped in a stop-gradient before the arg max and the threshold are taken, so the detach covers the gate as well as the label. That is also what the arithmetic forces — `arg max` has no gradient and the indicator's derivative is zero almost everywhere — but `DESIGN.md` section 4 requires the stop-gradient to be *declared*, and now it is declared to match the code rather than to match an inference. |
-| Which network produces the artificial label — the trained one, or the EMA copy the paper evaluates with. | The trained one, under the same parameters every other term uses. | **Reference implementation:** the weak-view logits come from the ordinary classifier call in training mode; the EMA copy exists only for evaluation (and, separately, to score CTAugment's probes). This is the difference between FixMatch and Mean Teacher, and getting it backwards would have made this recipe a worse-specified `mean_teacher`. It is why the recipe declares no `TeacherSpec` at all. |
+| Which network produces the artificial label — the trained one, or the EMA copy the paper evaluates with. | The trained one, under the same parameters every other term uses. | **Reference implementation:** the weak-view logits come from the ordinary classifier call in training mode; the EMA copy exists only for evaluation (and, separately, to score CTAugment's probes). This is the difference between FixMatch and Mean Teacher, and getting it backwards would have made this recipe a worse-specified `mean_teacher`. The EMA is still declared, as `role="evaluation"`: it is what section 6 reports from, and nothing trains against it. |
 | Whether weight decay reaches biases. Appendix B.9 says "L2 penalty of all weights". | Matrices only; biases and any norm parameters exempt. | **Reference implementation:** the penalty is summed over variables whose name carries `kernel`. The same summary settles a second thing the card would otherwise have had to argue: the penalty is added to the loss with `l2_loss`'s built-in 1/2, so its gradient is `wd * W` — exactly what torch's SGD `weight_decay` adds, and unlike decoupled (AdamW-style) decay. |
 | No tabular augmentation is defined; section 2.3 is entirely image-specific. | `FeatureMask(p=0.1)` weak; the same mask followed by `FeatureMask(p=0.5)` strong. | `FeatureMask` is the reviewed schema-aware transform, already used at `p=0.1` by `mean_teacher`; reusing that value for the weak view makes the two recipes' weak augmentation identical, and the added 0.5 is a deliberate step in strength rather than a tuned value. Fixed before any result was observed. Cutout — the one strong operation the reference appends unconditionally — is a contiguous blanked region, and feature masking *is* its tabular form, so it is not modelled separately. |
 | Whether the layering matters once the transform is a constant-fill mask. | It does not, and the card says so rather than implying otherwise. | Two independent masks with the same fill compose to a single mask of rate `1 - (1-0.1)(1-0.5) = 0.55`, so `strong_x` is observationally one 55% mask. The two-transform spelling is kept because it states the *relation* the reference implements — strong is weak plus more — which a lone `p=0.55` would hide. In the image setting the layering is not degenerate, since CTAugment's operations do not commute with crop and flip. |
 | Whether a labelled row's weak view may be shared between eq. (3) and eq. (4)'s target. The paper's footnote 2 puts labelled rows into `U` "without their labels", which in the reference means a second, independently drawn batch and therefore an independently sampled `alpha`. | **Not shared.** `weak_x` declares `draws=2`: eq. (4)'s target reads draw 0 and eq. (3) reads draw 1, which reproduces the reference's two independent samples. | xty2 used to compute a view once per batch per name, so a second independent draw meant a second declaration — a `ViewSpec` whose only content was "not the other one". Section 5.1 records the axis that replaced that, and that it was taken with one consumer. The plan now prints `weak_x (2 independent draws)` and a fourth forward pass, and asking for a draw the view does not declare is a compile error naming the view. |
 | Whether a *tabular* strong view should also perturb continuous columns (`BoundedJitter`). | No: masking only. | `BoundedJitter` requires an explicit column list and a `perturbation_scale` on each `FeatureSpec`, which would make the recipe a function of the schema's contents — logic in a recipe (`CLAUDE.md` rule 3). A jitter-based strong view is a legitimate second card, not a silent addition to this one. |
 | `K = 2^20` steps and `mu = 7` cannot both be honoured with no loader and a 3,000-step budget. What `K` counts is also not stated in the paper. | Keep `tau`, `lambda_u`, `eta`, `beta`, Nesterov, weight decay and the cosine *shape*; re-base `K` on 3,000 steps; drop `mu`. | Deviations 3 and 4. **Reference implementation** for the unit: the global step counts labelled examples and advances by `B` per update, and the target is `train_kimg << 10` with `train_kimg = 2^16`, i.e. `2^26 / 64 = 2^20` optimiser updates. Both `k` and `K` in the rate schedule are that same counter, so the ratio is unit-free and re-basing it on 3,000 optimiser steps preserves the schedule's shape exactly. |
-| The paper reports final performance with an EMA of parameters (decay 0.999, stated for ImageNet in appendix B.9) but does not use it in training. | No EMA. | Deviation 5, and the row above on which network produces the label: with the training signal unaffected, the EMA is an evaluation device this card does not need. |
+| The paper gives no EMA decay for the CIFAR-scale runs; 0.999 appears in the reference implementation's defaults and in appendix B.9's ImageNet list. | 0.999, unchanged from the paper's value. | The alternative would be re-basing it the way deviation 3 re-bases the cosine's `K`, and inventing a number the paper never states is the worse of the two. The consequence is recorded rather than absorbed: at 0.999 the EMA's horizon is about 1,000 steps, which is a thousandth of the paper's `2^20`-step run and a *third* of ours. Section 6.2 measures what that does. |
 | Table 4's weight decay is 0.0005 for WRN-28-2 and 0.001 for WRN-28-8; neither network is ours. | 0.0005. | The CIFAR-10 / SVHN / STL-10 column, which is the paper's default; appendix B.6 warns that the value matters most in the low-label regime and that being an order of magnitude out is what costs accuracy, so the default is the defensible choice for an architecture the paper never studied. |
 | No published target applies to a tabular causal adaptation. | A seed-locked project-local mechanism target with a paired `lambda_u = 0` ablation, plus the paper's own mask rate and impurity as guardrails. | The same discipline as `mean_teacher.md` section 6: predeclare the DGP, the pairing and the tolerance before running anything, and make the mechanism — not a borrowed number — the thing that can fail. |
 

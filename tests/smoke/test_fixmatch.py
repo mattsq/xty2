@@ -21,6 +21,7 @@ from xty2.core import (
     CategoricalTreatment,
     CompiledRun,
     Constant,
+    CosineDecay,
     FeatureSpec,
     GaussianOutcome,
     OutcomeSpec,
@@ -152,8 +153,22 @@ def _batch_indices(rows: int, *, steps: int, seed: int) -> torch.Tensor:
 
 
 def _with_steps(recipe: Recipe, steps: int) -> Recipe:
+    """A shorter budget, with the rate schedule re-based to match it.
+
+    `CosineDecay.steps` is the `K` of section 2.4's `eta cos(7 pi k / 16 K)`,
+    so changing the step count without it would leave a short run on the first
+    fifth of a 3,000-step decay — a constant learning rate wearing the
+    recipe's schedule. Rebuilding from the declared schedule keeps the card's
+    `phase` rather than restating it here.
+    """
     stage = recipe.program[0]
-    return replace(recipe, program=Program((replace(stage, steps=steps),)))
+    schedule = stage.optimiser.lr_schedule
+    assert isinstance(schedule, CosineDecay)
+    optimiser = replace(stage.optimiser, lr_schedule=replace(schedule, steps=steps))
+    return replace(
+        recipe,
+        program=Program((replace(stage, steps=steps, optimiser=optimiser),)),
+    )
 
 
 def _zero_weight(recipe: Recipe) -> Recipe:
@@ -239,9 +254,13 @@ def _evaluate(
         train_propensity = train_values[Port.T_GIVEN_X]
         assert isinstance(train_propensity, CategoricalTreatment)
         confidence, labels = train_propensity.probs.max(dim=-1)
-        missing = ~train.t_observed
-        retained = (confidence >= THRESHOLD) & missing
-        mask_rate = float(retained.sum() / missing.sum())
+        # Over *every* row, matching the objective's `coverage` diagnostic and
+        # the card's §3.2 mapping of eq. (6): the term's population is `all`,
+        # because footnote 2 puts the labelled rows into U as well. Measuring
+        # the fixture's mask rate over the missing rows alone would report a
+        # different statistic under the same name.
+        retained = confidence >= THRESHOLD
+        mask_rate = float(retained.float().mean())
         impurity = (
             float((labels[retained] != train.t[retained]).float().mean())
             if int(retained.sum())
@@ -324,6 +343,17 @@ def test_the_evaluation_teacher_never_takes_a_gradient(
     assert teacher.spec.role == "evaluation"
     assert all(not parameter.requires_grad for parameter in teacher.parameters())
     assert all(parameter.grad is None for parameter in teacher.parameters())
+    # Gradient-free is guaranteed by construction, so on its own it is also
+    # true of a teacher that never updated. These two make the assertion about
+    # a *live* EMA: it moved away from the initialisation and has not become
+    # the student.
+    initial = scheduled.run.initial_parameters()
+    trained = dict(scheduled.run.graph.named_parameters())
+    moved = False
+    for name, parameter in teacher.graph.named_parameters():
+        assert not torch.equal(parameter, trained[name])
+        moved = moved or not torch.equal(parameter, initial[name])
+    assert moved
 
 
 def test_the_propensity_beats_the_frequency_baseline(

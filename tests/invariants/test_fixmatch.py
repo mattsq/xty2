@@ -13,6 +13,7 @@ import pytest
 import torch
 from xty2.core import (
     DEFAULT,
+    CategoricalTreatment,
     CompileError,
     CosineDecay,
     FeatureSpec,
@@ -260,15 +261,24 @@ def test_the_architecture_is_the_shared_p5_stack() -> None:
         assert torch.equal(value, tarnet_graph.state_dict()[name])
 
 
-def _answered_card_keys() -> set[str]:
+def _card_section_four() -> dict[str, str | dict[str, str]]:
+    """Card §4 as data: `{canonical_key: value}` or `{key: {scope: value}}`.
+
+    The nested level is parsed rather than skipped, because that is where the
+    per-objective `losses.*` and per-component `architecture.*` values live —
+    the half of §4 the recipe is most likely to drift from. A parser that
+    stopped at the parent key would let `mean` become `population` in the card
+    with nothing failing.
+    """
     text = CARD.read_text(encoding="utf-8")
     section = text.split("## 4. Mechanics checklist", 1)[1].split(
         "## 5. Deviations from the paper", 1
     )[0]
     match = re.search(r"```yaml\n(.*?)```", section, re.DOTALL)
     assert match is not None
-    keys: set[str] = set()
+    answered: dict[str, str | dict[str, str]] = {}
     current = ""
+    key = ""
     for line in match.group(1).splitlines():
         statement = line.split("#", 1)[0].rstrip()
         if not statement:
@@ -277,9 +287,23 @@ def _answered_card_keys() -> set[str]:
         name, _, value = statement.strip().partition(":")
         if indent == 0:
             current = name
-        elif indent == 2 and value.strip() != "n/a":
-            keys.add(f"{current}.{name}")
-    return keys
+        elif indent == 2:
+            key = f"{current}.{name}"
+            if value.strip() == "n/a":
+                key = ""
+                continue
+            answered[key] = value.strip()
+        elif indent == 4 and key:
+            nested = answered.get(key)
+            if not isinstance(nested, dict):
+                nested = {}
+                answered[key] = nested
+            nested[name] = value.strip()
+    return answered
+
+
+def _answered_card_keys() -> set[str]:
+    return set(_card_section_four())
 
 
 def test_every_answered_card_key_and_view_reaches_the_plan() -> None:
@@ -423,3 +447,103 @@ def test_nothing_in_the_graph_couples_rows_within_a_forward_pass() -> None:
         "tarnet_head": "none",
         "categorical_propensity": "none",
     }
+
+
+def test_the_two_weak_draws_reach_the_objectives_as_different_tensors() -> None:
+    """The draw axis, asserted where it actually has to hold.
+
+    `ViewSpec.apply` returning different samples is not the property that
+    matters — `CompiledRun.state` handing the two realisations different
+    tensors is. Collapsing the state cache's key to the view name alone leaves
+    the plan reading `weak_x (2 independent draws)` and `forward passes (4)`,
+    recomputes an identical sample for the second pass, and silently restores
+    the shared-augmentation behaviour card §7 rejects. Nothing else in the
+    suite fails on that mutation.
+    """
+    run = compile(fixmatch(_schema()))
+    state = run.state("joint_fit", _batch(64), rng_key=17)
+    target = state[WEAK_X][Port.T_GIVEN_X]
+    labelled = state[WEAK_X_LABELLED][Port.T_GIVEN_X]
+    strong = state[STRONG_X][Port.T_GIVEN_X]
+    assert isinstance(target, CategoricalTreatment)
+    assert isinstance(labelled, CategoricalTreatment)
+    assert isinstance(strong, CategoricalTreatment)
+    assert not torch.equal(target.probs, labelled.probs)
+    assert not torch.equal(target.probs, strong.probs)
+    # And the same draw twice is one sample, not two: the cache still keys on
+    # the view *and* the draw, so a repeated realisation is free.
+    repeated = run.state("joint_fit", _batch(64), rng_key=17)
+    for realisation, expected in ((WEAK_X, target), (WEAK_X_LABELLED, labelled)):
+        again = repeated[realisation][Port.T_GIVEN_X]
+        assert isinstance(again, CategoricalTreatment)
+        assert torch.equal(again.probs, expected.probs)
+
+
+def test_an_unrealised_declared_draw_is_a_named_compile_failure() -> None:
+    # The mirror of the teacher check: a draw count the plan prints and no
+    # forward pass supports is a claim with nothing behind it.
+    recipe = fixmatch(_schema())
+    over_declared = replace(
+        recipe,
+        views=(replace(recipe.views[0], draws=5), recipe.views[1]),
+    )
+    with pytest.raises(CompileError, match="realises more than 2"):
+        compile(over_declared)
+
+
+def test_every_card_value_the_plan_also_carries_agrees_with_it() -> None:
+    """Key presence is not the cross-check; the values are.
+
+    §4's per-objective rows are where a card drifts — a `mean` quietly turned
+    `population`, a weight edited in prose and not in the recipe. Every scalar
+    and every nested scope the card states is compared against the compiled
+    plan here, and anything the plan renders differently is a failure naming
+    the key. Values the plan holds as objects rather than strings (schedules,
+    row tuples) are compared through the same rendering the plan prints.
+    """
+    hyperparameters = compile(fixmatch(_schema())).plan.hyperparameters
+    mismatched: list[str] = []
+    # `architecture.widths_depths` is the one key the card writes
+    # schema-generically — the recipe is a function of the schema, and the card
+    # describes it for any schema — while the plan resolves it against the one
+    # being compiled. Substituted rather than skipped, so the resolution is
+    # itself checked, and scoped to that key: `output_parameterisation` holds
+    # the literal string a component carries, where `K` stays a `K` in both.
+    symbolic = {"architecture.widths_depths": {"K": "3", "X_REPR": "200"}}
+    checked = 0
+    for key, stated in _card_section_four().items():
+        planned = hyperparameters.get(key)
+        if planned is None:
+            mismatched.append(f"{key}: absent from the plan")
+            continue
+        if isinstance(stated, str):
+            if not isinstance(planned, dict) and _rendered(planned) != stated:
+                mismatched.append(f"{key}: card {stated!r} vs plan {planned!r}")
+            checked += 1
+            continue
+        assert isinstance(planned, dict), f"{key} is scoped in the card only"
+        for scope, value in stated.items():
+            if scope not in planned:
+                mismatched.append(f"{key}[{scope}]: absent from the plan")
+                continue
+            resolved = value
+            for symbol, concrete in symbolic.get(key, {}).items():
+                resolved = resolved.replace(symbol, concrete)
+            if _rendered(planned[scope]) != resolved:
+                mismatched.append(
+                    f"{key}[{scope}]: card {resolved!r} vs plan {planned[scope]!r}"
+                )
+            checked += 1
+    assert not mismatched, "card and plan disagree: " + "; ".join(mismatched)
+    # A floor, so that a parser that silently stopped finding rows would fail
+    # here rather than pass by checking nothing.
+    assert checked >= 25
+
+
+def _rendered(value: object) -> str:
+    """The plan's value as §4 writes it."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, tuple):
+        return "[" + ", ".join(str(item) for item in value) + "]"
+    return str(value)

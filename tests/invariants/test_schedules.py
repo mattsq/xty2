@@ -167,6 +167,16 @@ def test_cosine_decay_needs_a_positive_integer_length(steps: object) -> None:
         CosineDecay(steps=steps, phase=7 / 16)  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize("initial", [0.0, -1.0])
+def test_a_non_positive_initial_would_make_the_phase_bound_decorative(
+    initial: float,
+) -> None:
+    # `phase` is bounded so the multiplier never goes negative; a negative
+    # `initial` flips the whole schedule and defeats that bound.
+    with pytest.raises(Xty2Error, match="must be positive"):
+        CosineDecay(steps=100, phase=7 / 16, initial=initial)
+
+
 # ---------------------------------------------------------------------------
 # Step
 # ---------------------------------------------------------------------------
