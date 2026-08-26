@@ -17,6 +17,7 @@ from xty2.core import (
     RecomputeRule,
     Schema,
     Stage,
+    TeacherSpec,
     ViewSpec,
     WeightDecay,
     Weighted,
@@ -31,10 +32,20 @@ from xty2.recipes.tarnet import ENCODER_WIDTHS, OUTCOME_WIDTHS
 from xty2.views import FeatureMask
 
 WEAK_X = Realisation(view="weak_x")
-"""`alpha(.)`: the view the artificial label and the supervised term read."""
+"""`alpha(u_b)`: the draw of the weak view eq. (4)'s artificial label reads."""
+
+WEAK_X_LABELLED = Realisation(view="weak_x", draw=1)
+"""`alpha(x_b)`: a *second, independent* draw of the same weak view.
+
+The reference draws a labelled batch and an unlabelled batch separately, and
+footnote 2 puts every labelled row into the unlabelled one as well — so a
+labelled row is weakly augmented twice, once for eq. (3) and once as its own
+eq. (4) target, under independently sampled `alpha`. One batch and one view
+here, two draws of it, which is the same thing.
+"""
 
 STRONG_X = Realisation(view="strong_x")
-"""`A(.)`: the view the pseudo-label is charged against."""
+"""`A(u_b)`: the view the pseudo-label is charged against."""
 
 WEAK_MASK_RATE = 0.1
 """Card §7: the weak view reuses Mean Teacher's reviewed masking strength."""
@@ -102,11 +113,12 @@ def fixmatch(
                 name="joint_fit",
                 objectives=(
                     Weighted(ObservedOutcomeNLL(), weight=1.0, reduction="population"),
-                    # Eq. (3): the labelled cross-entropy is taken on the weak
-                    # view, and divides by the labelled batch — `mean` over the
-                    # term's own rows (card §3.2).
+                    # Eq. (3): the labelled cross-entropy is taken on its own
+                    # draw of the weak view — footnote 2 means a labelled row
+                    # is weakly augmented twice — and divides by the labelled
+                    # batch, which is `mean` over the term's rows (card §3.2).
                     Weighted(
-                        ObservedTreatmentNLL(realisation=WEAK_X),
+                        ObservedTreatmentNLL(realisation=WEAK_X_LABELLED),
                         weight=1.0,
                         reduction="mean",
                     ),
@@ -138,6 +150,18 @@ def fixmatch(
                     "categorical_propensity",
                 ),
                 rows="all",
+                # Section 2.4 reports final performance from an EMA of the
+                # parameters. Nothing reads it during training — eq. (4)'s
+                # label comes from the current network — so it is declared for
+                # what it is, and the compiler checks that no objective takes
+                # it as a target.
+                teacher=TeacherSpec(
+                    decay=0.999,
+                    applies_to_buffers=False,
+                    train_mode=False,
+                    requires_grad=False,
+                    role="evaluation",
+                ),
                 optimiser=OptimiserSpec(
                     name="sgd",
                     lr=0.03,
@@ -167,6 +191,7 @@ def fixmatch(
                 transforms=(FeatureMask(p=WEAK_MASK_RATE, columns=None, value=0.0),),
                 preserves=PRESERVED_FIELDS,
                 recompute_rules=recompute_rules,
+                draws=2,
             ),
             ViewSpec(
                 name="strong_x",
@@ -187,5 +212,6 @@ __all__ = [
     "STRONG_X",
     "WEAK_MASK_RATE",
     "WEAK_X",
+    "WEAK_X_LABELLED",
     "fixmatch",
 ]

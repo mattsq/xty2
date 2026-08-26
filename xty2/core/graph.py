@@ -71,6 +71,21 @@ class Realisation:
 
     view: str = IDENTITY_VIEW
     params: Params = "student"
+    draw: int = 0
+    """Which independent sample of `view` this is (`DESIGN.md` §2.1).
+
+    A view is a *distribution* over batches, and a method may need two samples
+    from the same one — FixMatch's labelled rows enter its supervised term and
+    its pseudo-label target under independently drawn weak augmentations. The
+    number of draws a view offers is declared on the `ViewSpec`; this says
+    which of them a realisation wants, and the compiler plans one forward pass
+    per draw as it does for any other realisation.
+
+    Draw `0` is the view's own stream. That is not a convention with nothing
+    behind it: the seed for draw 0 is byte-identical to the seed a view had
+    before this axis existed, so adding it changed no existing recipe's
+    numbers, and `str` omits it so no existing plan or digest moved either.
+    """
 
     def __post_init__(self) -> None:
         if not require_str("Realisation.view", self.view, error=GraphError):
@@ -83,9 +98,22 @@ class Realisation:
                 f"{self.params!r}. A third parameter set is a new realisation "
                 "axis and needs a second consumer first (DESIGN.md §11)."
             )
+        if type(self.draw) is not int or self.draw < 0:
+            raise GraphError(
+                f"Realisation.draw must be a non-negative int, got {self.draw!r}"
+            )
+        if self.draw and self.view == IDENTITY_VIEW:
+            raise GraphError(
+                f"Realisation names draw {self.draw} of the identity view. The "
+                "identity view is the batch itself — there is nothing to draw "
+                "a second sample of (DESIGN.md §2.1)."
+            )
 
     def __str__(self) -> str:
-        return f"view={self.view} params={self.params}"
+        # Draw 0 is omitted so that every plan written before this axis existed
+        # renders and hashes exactly as it did.
+        draw = f" draw={self.draw}" if self.draw else ""
+        return f"view={self.view}{draw} params={self.params}"
 
 
 DEFAULT: Final = Realisation()

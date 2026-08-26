@@ -26,8 +26,10 @@ from xty2.core import (
     XTYBatch,
     compile,
 )
-from xty2.objectives import PseudoLabelTreatmentNLL
+from xty2.core.errors import ViewError
+from xty2.objectives import ObservedTreatmentNLL, PseudoLabelTreatmentNLL
 from xty2.recipes import ENCODER_WIDTHS, OUTCOME_WIDTHS, fixmatch, mean_teacher, tarnet
+from xty2.recipes.fixmatch import WEAK_X_LABELLED
 from xty2.views import FeatureMask
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -78,7 +80,7 @@ def _pseudo_label(recipe: Recipe) -> PseudoLabelTreatmentNLL:
     return objective
 
 
-def test_the_recipe_plans_exactly_the_three_reviewed_realisations() -> None:
+def test_the_recipe_plans_exactly_the_four_reviewed_realisations() -> None:
     run = compile(fixmatch(_schema()))
     assert run.graph.names == ("mlp_encoder", "tarnet_head", "categorical_propensity")
     assert len(run.stages) == 1
@@ -86,10 +88,13 @@ def test_the_recipe_plans_exactly_the_three_reviewed_realisations() -> None:
     assert stage.steps == 3_000
     assert stage.stage.rows == "all"
     assert stage.trainable == run.graph.names
-    assert stage.teacher is None
     assert sorted(str(forward.realisation) for forward in stage.passes) == sorted(
-        str(realisation) for realisation in (DEFAULT, WEAK_X, STRONG_X)
+        str(realisation) for realisation in (DEFAULT, WEAK_X, WEAK_X_LABELLED, STRONG_X)
     )
+    # The EMA is a reporting device: it is declared, and no pass reads it.
+    assert stage.teacher is not None
+    assert stage.teacher.role == "evaluation"
+    assert not any(forward.realisation.params == "teacher" for forward in stage.passes)
     for forward in stage.passes:
         expected = (
             run.graph.names
@@ -134,8 +139,11 @@ def test_the_stage_has_exactly_the_four_reviewed_objectives() -> None:
         1.0,
         0.5,
     ]
+    # Eq. (3) reads the *second* draw of the weak view: a labelled row is
+    # weakly augmented once for the supervised term and again as its own
+    # eq. (4) target, independently (card §7).
     assert stage.objectives[1].objective.requires == frozenset(
-        {(Port.T_GIVEN_X, WEAK_X)}
+        {(Port.T_GIVEN_X, WEAK_X_LABELLED)}
     )
     assert stage.objectives[2].objective.requires == frozenset(
         {(Port.T_GIVEN_X, WEAK_X), (Port.T_GIVEN_X, STRONG_X)}
@@ -177,6 +185,7 @@ def test_the_strong_view_is_the_weak_one_with_more_corruption_layered_on() -> No
         FeatureMask(p=0.1, columns=None, value=0.0),
         FeatureMask(p=0.5, columns=None, value=0.0),
     )
+    assert [view.draws for view in recipe.views] == [2, 1]
     for view in recipe.views:
         assert view.preserves == PRESERVED
         assert "x" not in view.preserves
@@ -295,14 +304,62 @@ def test_every_answered_card_key_and_view_reaches_the_plan() -> None:
             "FeatureMask(p=0.5, columns=all, value=0.0)",
         ),
     ]
-    assert "forward passes (3)" in plan.render()
+    assert "forward passes (4)" in plan.render()
+    assert "weak_x (2 independent draws)" in plan.render()
 
 
-def test_the_card_answers_no_teacher_key_and_the_recipe_declares_none() -> None:
-    # Deviation 5: the paper's EMA is an evaluation device, and a TeacherSpec
-    # no objective reads is a compile error rather than a silent no-op.
-    assert not {key for key in _answered_card_keys() if key.startswith("teacher.")}
-    assert compile(fixmatch(_schema())).stage("joint_fit").teacher is None
+def test_the_evaluation_teacher_is_the_papers_own_and_reaches_the_plan() -> None:
+    """Section 2.4's EMA, declared as the reporting device it is.
+
+    The role is what makes this expressible: an EMA no objective reads used to
+    be a compile error, on the reasoning that it would be a silent no-op. For
+    FixMatch it is the model the paper reports, so the stage says so and the
+    compiler checks that nothing trains against it instead.
+    """
+    hyperparameters = compile(fixmatch(_schema())).plan.hyperparameters
+    assert hyperparameters["teacher.ema_decay"] == 0.999
+    assert hyperparameters["teacher.ema_applies_to_buffers"] is False
+    assert hyperparameters["teacher.teacher_in_train_mode"] is False
+    assert hyperparameters["teacher.teacher_requires_grad"] is False
+    assert {key for key in _answered_card_keys() if key.startswith("teacher.")} == {
+        "teacher.ema_decay",
+        "teacher.ema_applies_to_buffers",
+        "teacher.teacher_in_train_mode",
+        "teacher.teacher_requires_grad",
+    }
+
+
+def test_the_weak_view_offers_exactly_two_independent_reproducible_draws() -> None:
+    recipe = fixmatch(_schema())
+    weak = recipe.view("weak_x")
+    assert weak.draws == 2
+    assert recipe.view("strong_x").draws == 1
+
+    batch = _batch()
+    first = weak.apply(batch, recipe.schema, rng_key=91, draw=0)
+    second = weak.apply(batch, recipe.schema, rng_key=91, draw=1)
+    assert not torch.equal(first.x, second.x)
+    assert second.equal_to(weak.apply(batch, recipe.schema, rng_key=91, draw=1))
+    with pytest.raises(ViewError, match=r"offers draws 0\.\.1"):
+        weak.apply(batch, recipe.schema, rng_key=91, draw=2)
+
+    # Draw 0 is the stream the view had before the axis existed, which is what
+    # kept every recipe that names no draw at its recorded numbers.
+    single = replace(weak, draws=1)
+    assert first.equal_to(single.apply(batch, recipe.schema, rng_key=91))
+
+
+def test_a_draw_the_view_does_not_offer_is_a_named_compile_failure() -> None:
+    recipe = fixmatch(_schema())
+    stage = recipe.program[0]
+    absent = replace(
+        stage.objectives[1],
+        objective=ObservedTreatmentNLL(realisation=Realisation(view="weak_x", draw=2)),
+    )
+    objectives = (stage.objectives[0], absent, *stage.objectives[2:])
+    mutant = replace(recipe, program=Program((replace(stage, objectives=objectives),)))
+    with pytest.raises(CompileError, match="declares draws=2"):
+        compile(mutant)
 
 
 def test_the_gate_arithmetic_is_in_the_plan_digest() -> None:

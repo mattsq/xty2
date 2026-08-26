@@ -229,9 +229,23 @@ evaluated more than once, under different conditions.
 class Realisation:
     view: str = "identity"                        # a ViewSpec name
     params: Literal["student", "teacher"] = "student"
+    draw: int = 0                                 # which sample of that view
 
 DEFAULT = Realisation()
 ```
+
+`draw` is the third axis, and it exists because a view is a *distribution* over
+batches rather than a batch: FixMatch's labelled rows enter its supervised term
+and its pseudo-label target under independently sampled weak augmentations, so
+"the same view, sampled twice" is a thing a method asks for. How many samples a
+view offers is declared by `ViewSpec.draws`, so a draw nobody declared is a
+compile error rather than a quietly planned extra pass.
+
+Draw `0` is the view's own stream: its seed is byte-identical to the seed the
+view had before this axis existed, `str` omits it, and a plan omits a draw count
+of one. Adding the axis therefore moved no existing plan, digest or recorded
+result — which is the bar any new realisation axis has to clear, since the
+alternative is silently re-running every reviewed recipe under new noise.
 
 State is therefore keyed by realisation. It is a small wrapper, not a bare
 dict, because the default-realisation lookup is used constantly:
@@ -1048,9 +1062,20 @@ change the decision:
 | Distributed training | a single recipe stops fitting in one process |
 | A loader / sampler, and with it the `optimisation.batch_size` and `labelled_unlabelled_ratio` bindings | a recipe needs a fixed labelled/unlabelled quota per batch rather than whatever the data gives. The gradient executor takes an iterable of batches; a stage field for either key would be a card key nothing could check, which §7.1 rejects for provenance and §9.1 for hyperparameters |
 | LR schedules beyond `Constant`, `Ramp`, `SigmoidRamp`, `CosineDecay`, `Step` and `ExponentialDecay` (one-cycle, warm restarts) | a card names one. The rate is a schedule multiplier, so a new type serves both loss weights and the LR; `ExponentialDecay` entered with TARNet, `SigmoidRamp` with Mean Teacher and `CosineDecay` with FixMatch, the first real cards that name them |
-| A `draw` axis on `Realisation` — N independent samples of one `ViewSpec` | a recipe needs more than two of them. This is the one entry whose two-consumer rule is *already satisfied* and that is still not built: `mean_teacher` declares `student_x` and `teacher_x` with byte-identical transforms to get two independent draws, and `fixmatch` wants a third of its `weak_x` for the labelled rows of eq. (4). At two, a named view per draw is the better spelling — each realisation carries a role the plan and the card can name. It stops scaling at MixMatch's `K` averaged augmentations or ReMixMatch's `M` strong ones, and that is the trigger |
-| An EMA parameter set maintained for evaluation only, which no objective reads | a second card names one. `fixmatch` is the first (its card §5, deviation 5); `mean_teacher` is not a second, because its EMA is read by an objective and so is already expressible. UDA — EMA-reported, and otherwise a reuse of `fixmatch`'s machinery — would be |
 | The other ~35 XTYLearner families | one is actually needed for a result |
+
+**Two entries were taken off this ledger with one consumer**, deliberately and
+at the maintainer's direction, while `fixmatch` was implemented: `Realisation.
+draw` / `ViewSpec.draws` (§2.1), and `TeacherSpec.role`, which allows an EMA
+that no objective reads. Both are recorded in `docs/recipes/fixmatch.md` §5.1
+with what would have justified them under the rule — UDA for the second, and
+either `mean_teacher`'s conversion or MixMatch's `K` draws for the first. The
+exception is worth naming rather than smoothing over: the rule exists because
+an abstraction built for one caller is usually shaped wrong for the second, and
+neither of these has met its second caller yet. What made the trade acceptable
+was that both replaced a *deviation from the paper* rather than adding
+capability nobody had asked for, and that neither could change an existing
+recipe's numbers by construction (§2.1).
 
 **Migration is lazy by design.** No model is ported until it is next used. A
 model family that nobody has run in a year is not a requirement, it is a

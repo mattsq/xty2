@@ -30,6 +30,7 @@ from typing import (
     ClassVar,
     Literal,
     Protocol,
+    get_args,
     overload,
     runtime_checkable,
 )
@@ -294,20 +295,41 @@ def _no_default(field: str, objective: object, key: str) -> str:
     )
 
 
+TeacherRole = Literal["consistency_target", "evaluation"]
+"""What a stage's EMA copy is *for* (`DESIGN.md` §2.1, §11).
+
+Two methods keep an EMA and mean opposite things by it. Mean Teacher's is a
+target: an objective reads `params="teacher"` and the EMA is part of the
+training signal. FixMatch's is a reporting device — its pseudo-label comes from
+the current network, and the EMA exists only to be evaluated with, so no
+objective reads it at all.
+
+The compiler cannot tell those apart from the graph, and the difference decides
+whether "no objective requires a teacher realisation" is a silent no-op or the
+whole point. So the stage says which, and the compiler checks the declaration
+against the passes it planned rather than guessing from them.
+"""
+
+
 @dataclass(frozen=True)
 class TeacherSpec:
     """The card-driven EMA parameter set a stage maintains (`PLAN.md` P8).
 
-    All four fields are required because all four appear in the mechanics
-    checklist. In particular, buffer handling and module mode are independent:
-    a teacher in training mode may update its own BatchNorm statistics even
-    when student buffers are not included in the EMA.
+    Four of the five fields are required because all four appear in the
+    mechanics checklist. In particular, buffer handling and module mode are
+    independent: a teacher in training mode may update its own BatchNorm
+    statistics even when student buffers are not included in the EMA.
+
+    `role` is the fifth and is required for a different reason — it binds no
+    card key, because it is not a number a paper states but a fact about this
+    program that only the recipe knows.
     """
 
     decay: float = REQUIRED
     applies_to_buffers: bool = REQUIRED
     train_mode: bool = REQUIRED
     requires_grad: Literal[False] = REQUIRED
+    role: TeacherRole = REQUIRED
 
     CARD_KEYS: ClassVar[Mapping[str, str]] = {
         "decay": "teacher.ema_decay",
@@ -346,6 +368,19 @@ class TeacherSpec:
                 "gradient would violate the teacher-isolation invariant "
                 "(FIDELITY.md Tier 0)."
             )
+        if is_required(self.role):
+            raise CompileError(
+                "TeacherSpec was constructed without a role. An EMA copy is "
+                "either a 'consistency_target' an objective reads or an "
+                "'evaluation' set nothing trains against, and the compiler "
+                "checks the declaration against the passes it planned rather "
+                "than inferring one from the other (DESIGN.md §2.1)."
+            )
+        if self.role not in get_args(TeacherRole):
+            raise CompileError(
+                f"TeacherSpec.role must be one of {list(get_args(TeacherRole))!r}, "
+                f"got {self.role!r}"
+            )
 
     def describe(self) -> str:
         """One stable plan line."""
@@ -353,7 +388,7 @@ class TeacherSpec:
         mode = "train" if self.train_mode else "eval"
         return (
             f"ema(decay={self.decay!r}, buffers={buffers}, mode={mode}, "
-            "requires_grad=False)"
+            f"requires_grad=False, role={self.role})"
         )
 
 

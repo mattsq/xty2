@@ -11,6 +11,7 @@ import torch
 from xty2.core import (
     CompileError,
     FeatureSpec,
+    GraphError,
     Port,
     Realisation,
     Recipe,
@@ -66,12 +67,14 @@ def _view(
     name: str,
     *transforms: object,
     recompute_rules: tuple[RecomputeRule, ...] = (),
+    draws: int = 1,
 ) -> ViewSpec:
     return ViewSpec(
         name=name,
         transforms=transforms,  # type: ignore[arg-type]
         preserves=frozenset({"t", "y", "t_observed", "y_observed", "row_id"}),
         recompute_rules=recompute_rules,
+        draws=draws,
     )
 
 
@@ -343,3 +346,63 @@ def test_an_undeclared_view_is_still_an_unsatisfied_realisation() -> None:
     )
     with pytest.raises(CompileError, match="cannot produce"):
         compile(replaced)
+
+
+# ---------------------------------------------------------------------------
+# Draws: N independent samples of one view (`DESIGN.md` §2.1)
+# ---------------------------------------------------------------------------
+
+
+def test_draws_are_independent_of_each_other_and_reproducible() -> None:
+    schema = _schema()
+    view = _view("weak_x", BoundedJitter(("mass", "speed")), draws=3)
+    first = view.apply(_batch(), schema, rng_key=17, draw=0)
+    second = view.apply(_batch(), schema, rng_key=17, draw=1)
+    third = view.apply(_batch(), schema, rng_key=17, draw=2)
+    assert not torch.equal(first.x, second.x)
+    assert not torch.equal(second.x, third.x)
+    for draw, expected in enumerate((first, second, third)):
+        repeated = view.apply(_batch(), schema, rng_key=17, draw=draw)
+        assert torch.equal(repeated.x, expected.x)
+
+
+def test_draw_zero_is_the_stream_the_view_had_before_draws_existed() -> None:
+    """The property that made the axis free to add.
+
+    Every recipe written before draws keeps its exact noise, so no reviewed
+    result was silently re-measured. Asserted by comparing a multi-draw view's
+    draw 0 against a single-draw view of the same name and transforms.
+    """
+    schema = _schema()
+    transform = BoundedJitter(("mass", "speed"))
+    single = _view("weak_x", transform)
+    multiple = _view("weak_x", transform, draws=4)
+    assert single.draws == 1
+    assert torch.equal(
+        single.apply(_batch(), schema, rng_key=17).x,
+        multiple.apply(_batch(), schema, rng_key=17, draw=0).x,
+    )
+
+
+def test_a_draw_outside_the_declared_count_is_rejected_by_the_view() -> None:
+    schema = _schema()
+    view = _view("weak_x", BoundedJitter(("mass",)), draws=2)
+    with pytest.raises(ViewError, match=r"offers draws 0\.\.1"):
+        view.apply(_batch(), schema, rng_key=17, draw=2)
+    with pytest.raises(ViewError, match="draws=0"):
+        _view("weak_x", BoundedJitter(("mass",)), draws=0)
+
+
+def test_the_identity_view_has_nothing_to_draw_twice() -> None:
+    with pytest.raises(GraphError, match="identity view"):
+        Realisation(draw=1)
+
+
+def test_a_realisation_omits_draw_zero_from_its_stable_name() -> None:
+    # Plans and digests written before the axis existed must not move.
+    assert str(Realisation(view="weak_x")) == "view=weak_x params=student"
+    assert (
+        str(Realisation(view="weak_x", draw=1)) == "view=weak_x draw=1 params=student"
+    )
+    with pytest.raises(GraphError, match="non-negative int"):
+        Realisation(view="weak_x", draw=-1)

@@ -147,19 +147,20 @@ labels when constructing `U`."
 | Paper symbol | Meaning | xty2 Port | xty2 Objective / Component |
 |---|---|---|---|
 | `p_m(y \| x)` | model's class distribution | `T_GIVEN_X` | `CategoricalPropensity` over `MLPEncoder` |
-| `alpha(.)` | weak augmentation | — | `ViewSpec("weak_x")`, `FeatureMask(p=0.1)` |
+| `alpha(.)` | weak augmentation | — | `ViewSpec("weak_x")`, `FeatureMask(p=0.1)`, declaring two draws |
 | `A(.)` | strong augmentation | — | `ViewSpec("strong_x")`, `FeatureMask(p=0.1)` then `FeatureMask(p=0.5)` — the weak transform with more corruption layered on, as the reference does |
-| `x_b, p_b` | labelled example and its one-hot label | `T_GIVEN_X @ weak_x` | `ObservedTreatmentNLL(realisation=weak_x)`, rows `t_observed` |
-| eq. (3) `\ell_s` | supervised cross-entropy on weak views | `T_GIVEN_X @ weak_x` | as above, `reduction="mean"` |
-| `q_b` | artificial label distribution | `T_GIVEN_X @ weak_x` | `PseudoLabelTreatmentNLL.target` |
+| `x_b, p_b` | labelled example and its one-hot label | `T_GIVEN_X @ weak_x draw=1` | `ObservedTreatmentNLL(realisation=weak_x, draw=1)`, rows `t_observed` |
+| eq. (3) `\ell_s` | supervised cross-entropy on weak views | `T_GIVEN_X @ weak_x draw=1` | as above, `reduction="mean"` — a *second* sample of `alpha`, per footnote 2 (§7) |
+| `q_b` | artificial label distribution | `T_GIVEN_X @ weak_x draw=0` | `PseudoLabelTreatmentNLL.target` |
 | `\hat q_b = arg max(q_b)` | hard pseudo-label | — | `sharpening="hard"` inside that objective |
 | `1(max(q_b) >= tau)` | confidence gate | — | `threshold=0.95` inside that objective |
 | `p_m(y \| A(u_b))` | strong-view prediction | `T_GIVEN_X @ strong_x` | `PseudoLabelTreatmentNLL.prediction` |
 | eq. (4) `\ell_u` | gated pseudo-label cross-entropy | `T_GIVEN_X` at both views | `PseudoLabelTreatmentNLL`, rows `all`, `reduction="mean"` |
 | `\lambda_u` | unlabelled loss weight | — | `Weighted(..., weight=1.0)`, `Constant` |
-| eq. (6) mask rate | fraction retained | — | `coverage` diagnostic of that objective |
+| eq. (6) mask rate | fraction retained | — | `coverage` diagnostic of that objective, and §6.2's terminal figure off the trained network |
 | eq. (5) impurity | error rate of retained labels | — | not an objective; measured against ground truth in the section 6 fixture, where the true `t` exists |
 | `eta cos(7 pi k / 16 K)` | rate schedule (section 2.4) | — | `CosineDecay(steps=3000, phase=7/16)` on `OptimiserSpec.lr_schedule` |
+| EMA of parameters (section 2.4) | the model the paper reports from | — | `TeacherSpec(decay=0.999, role="evaluation")`; no objective reads it |
 | — (project-local) | outcome likelihood | `Y_GIVEN_XT` | `ObservedOutcomeNLL`, rows `t_observed` |
 | — (project-local) | exact marginalisation over missing `t` | `T_GIVEN_X`, `Y_GIVEN_XT` | `MissingTreatmentMarginalNLL(grad_path="both")`, rows `t_missing` |
 
@@ -208,10 +209,13 @@ gradients:
   marginal_nll_grad_path: both                # reviewed P5 choice; project-local addition
 
 teacher:
-  ema_decay: n/a                              # see deviation 5: the paper's EMA is an evaluation device, and xty2 rejects a teacher no objective reads
-  ema_applies_to_buffers: n/a
-  teacher_in_train_mode: n/a
-  teacher_requires_grad: n/a
+  ema_decay: 0.999                            # reference implementation's ema flag; appendix B.9 states 0.999 where the paper gives a number at all
+  ema_applies_to_buffers: false               # ref impl EMAs the trainable variables, so BatchNorm moving statistics are not shadowed
+  teacher_in_train_mode: false                # the EMA copy is an evaluation classifier; no-op for this architecture, declared anyway
+  teacher_requires_grad: false                # never an optimiser target
+  # role = evaluation. Nothing reads this EMA during training: eq. (4)'s label
+  # comes from the current network (section 7). It exists to be reported with,
+  # and the compiler rejects an objective that takes it as a target.
 
 losses:
   reduction:
@@ -308,13 +312,42 @@ waiting for a profile that says the extra pass matters.
 | 2 | Replace flip-and-shift (weak) and RandAugment/CTAugment + Cutout (strong) with schema-aware feature masking: 10% weak, and 10% followed by 50% strong. | There is no image structure in a tabular XTY batch. `FeatureMask` is the already-validated tabular perturbation, and masking at two strengths preserves the paper's weak/strong *relation*, which section 5 of the paper shows is what matters. The layering mirrors the reference, where the strong branch is an independently sampled ordinary augmentation with CTAugment and Cutout added on top rather than substituted in. | Directly defines the invariance being learned. A strong view that destroys the treatment-predictive columns would make eq. (4) train the model toward its own errors; the paired ablation and the impurity guardrail are what would show it. |
 | 3 | Train for 3,000 optimiser steps rather than `K = 2^20`. | The reviewed project-local budget, shared with every other xty2 recipe so that a difference is attributable to the recipe. The cosine schedule's `K` is set to the same 3,000, so the *shape* of section 2.4's decay is exact even though its length is not. | The paper's mask rate reaches 98% only after a very long run (table 5). At 3,000 steps we should expect a lower terminal mask rate; the section 6 target is stated in those terms and not in the paper's. |
 | 4 | No labelled/unlabelled batch quota: `mu = 7` is not enforced. | xty2 has no loader, and the YAGNI ledger (`DESIGN.md` section 11) makes `optimisation.labelled_unlabelled_ratio` a key nothing could check until one exists. Per-term `mean` reduction removes the need: each term averages over its own population, so `lambda_u` is the relative weight the paper states. | The gradient contribution of eq. (4) relative to eq. (3) is `lambda_u`, as published. What differs is variance: with few labelled rows in a batch, eq. (3) is noisier than in a run that fixes `B = 64` labelled examples per step. |
-| 5 | No EMA of model parameters (the reference keeps one at decay 0.999). | Section 2.4 uses the EMA only to *report* final performance; the reference implementation confirms it — the pseudo-label is read off the **current** network in training mode, not off the EMA copy, so omitting the EMA changes nothing about the training signal. xty2 also rejects a `TeacherSpec` that no objective or action reads (`compile()`, "configures a TeacherSpec but no active objective requires a teacher realisation"), so an evaluation-only EMA would have to become a framework concept with one consumer. `mean_teacher` cannot be the second: its EMA *is* read by an objective, which is a different thing from one kept only to report with. The natural second consumer is UDA, which reuses this recipe's weak/strong machinery and also reports EMA weights; if that card is written, "a teacher no objective reads" has two and can be built (`DESIGN.md` §11). | Reported metrics are those of the raw student, and the paper's headline numbers are EMA-evaluated (its README takes the median of the last 20 checkpoints). Ours is student-to-student across the paired ablation, which keeps the comparison internally consistent but not comparable to a published error rate — which section 2 already rules out for other reasons. |
+| 5 | ~~No EMA of model parameters.~~ **Withdrawn.** The stage now maintains the paper's EMA at decay 0.999 and section 6 evaluates it. | The original entry was a framework limitation, not a judgement: `compile()` rejected a `TeacherSpec` no objective reads, on the reasoning that an unused EMA copy is a silent no-op. For FixMatch it is the model the paper reports. `TeacherSpec.role` now distinguishes the two, and the recipe declares `role="evaluation"` — see section 5.1, which records that this was built with one consumer and why. | Section 6 now evaluates the EMA, which is what the paper reports; the paired ablation is EMA-to-EMA, so the comparison stays internally consistent. The training signal is unchanged either way: eq. (4)'s label comes from the current network, which is the difference between this method and Mean Teacher. |
 | 6 | Retain the P5 TARNet architecture (encoder, outcome head, propensity) rather than a Wide ResNet. | Holding the causal stack fixed is what makes the FixMatch addition attributable, and is the same decision `mean_teacher.md` deviation 10 records. | The project-local result validates wiring and mechanism, not image-scale accuracy. |
 | 7 | Retain P5's `Ramp(0.0, 0.5, 1000)` on the marginal-likelihood term while the FixMatch weight stays constant. | The ramp belongs to the reviewed P5 term, not to FixMatch; section 2.2 rejects a ramp for `lambda_u` and this recipe honours that for the term the sentence is about. | Early steps are dominated by the two supervised terms, which is also when the gate is closed. The two mechanisms therefore switch on in the order the paper describes. |
 | 8 | ~~Weight decay reaches biases as well as matrices.~~ **Withdrawn.** The recipe now exempts biases and norm parameters, which is what the reference does. | An earlier version of this card read appendix B.9's "L2 penalty of all weights" literally and decayed everything. The implementation sums `l2_loss` over the variables whose name carries `kernel` only, so matrices are decayed and biases are not. The paper's prose is the looser source and the code settles it; this is no longer a deviation. | Section 6.2's numbers were re-measured after the change and moved in the third decimal place — the declared architecture has no parameterised normalisation, so only biases were affected. |
 | 9 | Adopt the paper's optimiser (SGD, `eta = 0.03`, `beta = 0.9`, Nesterov, cosine decay) rather than P5's Adam stack, which `mean_teacher.md` deviation 10 retained. | Section 2.4 and appendix B.3 make the optimiser part of FixMatch's published finding — table 7 reports Adam at a materially worse error rate — so retaining Adam would deviate from an explicit result of the paper in order to match a project convention. The cost is that the outcome head now trains under FixMatch's optimiser too. | This is the one place where the causal stack is not held fixed against P5. Section 6's paired ablation shares the optimiser, so the FixMatch *mechanism* remains attributable; comparisons to `tarnet`'s or `mean_teacher`'s recorded numbers do not. |
 | 10 | No adaptive augmentation: the strong view's strength is fixed, where the reference runs CTAugment. | CTAugment learns per-operation magnitude ratings online from labelled *probe* images, scored by the EMA classifier's probability on the true class — a second learning system with its own state, and one whose operations (posterise, solarise, shear, rotate) have no tabular meaning. The paper's own RandAugment variant, FixMatch (RA), performs within noise of the CTAugment one on CIFAR-10 (table 2), so a fixed-strength strong view is the honest tabular analogue of the simpler published variant. | Removes whatever adaptivity buys. It also removes a confound: the strong view's strength is a declared constant this card can be held to, rather than a trajectory. A second consumer is not what this one is short of: ReMixMatch — where CTAugment was introduced — is an obvious one, and the pair still could not be built, because learning magnitudes presupposes a set of tabular operations with magnitudes worth learning over. `FeatureMask` has one scalar and `BoundedJitter` one more. The prerequisite is a tabular augmentation vocabulary (SCARF's corruption, SubTab's feature subsets, VIME's masking are the backlog's candidates), and only after that does the adaptive controller have anything to control. |
-| 11 | Three separate forward passes (identity, weak, strong) rather than one concatenated and interleaved pass. | The reference fuses the three streams into a single call and interleaves them first, so that each device's BatchNorm population sees a mixture rather than one stream. That is a BatchNorm/multi-GPU device trick, not part of the objective. xty2 plans one pass per realisation, which is arithmetically identical **only while no component holds batch-coupled state**. | None for the declared architecture: `row_l2` normalises each row on its own and the graph carries no buffers at all, which `tests/invariants/test_fixmatch.py` asserts rather than assumes. A component that later grows a running statistic would silently make the two schemes differ, and that test is what would fail first. |
+| 11 | Four separate forward passes (identity, two draws of weak, strong) rather than one concatenated and interleaved pass. | The reference fuses the three streams into a single call and interleaves them first, so that each device's BatchNorm population sees a mixture rather than one stream. That is a BatchNorm/multi-GPU device trick, not part of the objective. xty2 plans one pass per realisation, which is arithmetically identical **only while no component holds batch-coupled state**. | None for the declared architecture: `row_l2` normalises each row on its own and the graph carries no buffers at all, which `tests/invariants/test_fixmatch.py` asserts rather than assumes. A component that later grows a running statistic would silently make the two schemes differ, and that test is what would fail first. |
+
+### 5.1 Framework additions made for this card, against the two-consumer rule
+
+Two framework concepts were added while implementing this recipe, and both were
+added with **one consumer — this one**. `DESIGN.md` §11 says an abstraction
+waits for a second real recipe, and this is a deliberate, sanctioned exception
+rather than an oversight: the maintainer's call was that both are certain to be
+needed by cards already in the backlog and that carrying them as deviations was
+the worse trade. Recording it here is the price of taking it.
+
+| Added | Consumers today | Why it was taken now | What would have justified it under the rule |
+|---|---|---|---|
+| `TeacherSpec.role`, and with it an EMA that no objective reads | This card | Without it the recipe could not keep the parameter set the paper *reports its numbers from*, so deviation 5 existed to describe a framework limitation rather than a modelling choice. The check it replaces is not weakened: an evaluation EMA that an objective does read is now its own compile error, so the declaration is still checked against the planned passes rather than trusted. | UDA, which reports EMA weights and otherwise reuses this recipe's machinery. |
+| `Realisation.draw` and `ViewSpec.draws` — N independent samples of one view | This card, in effect two: `mean_teacher` declares `student_x` and `teacher_x` with byte-identical transforms for exactly this reason, and would collapse to one view with two draws | Footnote 2 means a labelled row is weakly augmented twice, independently. Spelling that as a third `ViewSpec` named `weak_x_again` would have been a declaration whose only content was "not the other one". | `mean_teacher` converted to it, or MixMatch's `K` averaged augmentations / ReMixMatch's `M` strong ones, where a named view per draw stops scaling. `mean_teacher` is deliberately **not** converted here: its card is reviewed and its Tier 2 ledger row was measured against the recipe as written. |
+
+Neither addition changes what an existing recipe *computes*, and for the draw
+axis that is a property rather than a hope: draw 0 hashes to the seed a view had
+before the axis existed, `str(Realisation)` omits `draw=0`, and a plan omits a
+draw count of one, so every earlier plan, digest and recorded result stands
+byte-identical — `tests/invariants/test_views.py` asserts the seed half of that
+directly.
+
+`TeacherSpec.role` is one line short of the same claim, and the difference is
+stated rather than rounded off: `mean_teacher` now declares
+`role="consistency_target"`, so its plan's teacher line and therefore its plan
+*digest* moved. No arithmetic did, and its section 6 numbers stand as measured;
+its card records the same thing. A digest is a provenance identity, so a run
+directory written before the change will not accept a checkpoint written after
+it — which is the mechanism working, not a casualty of it.
 
 ## 6. Reproduction target
 
@@ -337,7 +370,7 @@ reproduction:
   dataset: project-local seed-locked two-cluster XTY DGP (6 features, K=2), specified in 6.1
   variant: paired fit against an otherwise identical lambda_u = 0 ablation, same seeds and same batches
   split: 1024 train rows with 40 observed treatments, 2048 held-out rows with every treatment observed
-  metric: held-out p(t|x) NLL ratio, FixMatch over the lambda_u = 0 ablation; paper mask rate (eq. 6) and impurity (eq. 5) as guardrails
+  metric: held-out p(t|x) NLL ratio on the EMA parameters, FixMatch over the lambda_u = 0 ablation; paper mask rate (eq. 6) and impurity (eq. 5), measured on the trained network, as guardrails
   published: none - no published number applies to this adaptation
   published_source: n/a
   tolerance: ratio < 1.0 in mean; terminal mask rate above 0.2; impurity of retained labels < 0.15; held-out outcome NLL within 1.05x of the ablation
@@ -389,20 +422,38 @@ this card:
 
 | | separable (0.02/0.98), 3,000 steps | overlapping (0.15/0.85), 600 steps |
 |---|---|---|
-| held-out `p(t\|x)` NLL, FixMatch | 0.267 | 0.794 |
-| held-out `p(t\|x)` NLL, `lambda_u = 0` | 0.323 | — |
+| held-out `p(t\|x)` NLL, FixMatch (EMA) | 0.245 | 0.605 |
+| held-out `p(t\|x)` NLL, `lambda_u = 0` (EMA) | 0.278 | — |
 | marginal-frequency baseline | 0.700 | 0.706 |
-| terminal mask rate (eq. 6) | 0.829 | 0.504 |
-| impurity of retained labels (eq. 5) | 0.047 | 0.198 |
-| held-out outcome NLL, FixMatch / ablation | 1.179 / 1.179 | — |
+| terminal mask rate (eq. 6), trained network | 0.826 | 0.520 |
+| impurity of retained labels (eq. 5) | 0.044 | 0.215 |
+| held-out outcome NLL, FixMatch / ablation | 1.182 / 1.182 | — |
+
+Which parameter set each row is read from is part of the measurement, not
+bookkeeping. The two NLL rows come from the EMA, because that is the model
+section 2.4 reports. The mask rate and impurity come from the **trained**
+network, because they describe the labels the run actually trained on — eq. (4)
+reads the current parameters, and the same mask rate measured off an EMA at
+decay 0.999 reads `0.000` on the overlapping fixture, which is true of a model
+that never gated anything and says nothing about the mechanism.
 
 An earlier draft of this card asserted that under overlap the gate would stay
 shut and eq. (4) would be "inert". That is what a *calibrated* model would do,
 and it is wrong: the fit becomes confident beyond what a 0.15/0.85 assignment
-supports, half the rows clear the 0.95 gate, and one retained label in five is
-wrong. The mechanism does not degrade quietly in the overlap regime — it
+supports, half the rows clear the 0.95 gate, and more than one retained label in
+five is wrong. The mechanism does not degrade quietly in the overlap regime — it
 manufactures the confidence it is gated on, and then trains on it. Section 2 was
 rewritten to say that, and the Tier 1 test asserts it.
+
+The overlapping column carries a second warning, which arrived with the EMA and
+was not visible before it. The reported NLL there is 0.605 against a 0.706
+baseline — the EMA looks *fine*, better than the baseline. The trained network
+it averages reads 0.870 on the same rows: materially worse than predicting the
+marginal frequency. Averaging over a 0.999 decay hides a training signal that is
+actively degrading, so an EMA-reported number is not on its own evidence that
+the mechanism is behaving. On this fixture it is the one number that would have
+missed the failure, which is why section 6 keeps the mask rate and impurity on
+the trained network.
 
 ### 6.3 Result ledger
 
@@ -431,7 +482,7 @@ declared protocol rather than a result.
 | Whether weight decay reaches biases. Appendix B.9 says "L2 penalty of all weights". | Matrices only; biases and any norm parameters exempt. | **Reference implementation:** the penalty is summed over variables whose name carries `kernel`. The same summary settles a second thing the card would otherwise have had to argue: the penalty is added to the loss with `l2_loss`'s built-in 1/2, so its gradient is `wd * W` — exactly what torch's SGD `weight_decay` adds, and unlike decoupled (AdamW-style) decay. |
 | No tabular augmentation is defined; section 2.3 is entirely image-specific. | `FeatureMask(p=0.1)` weak; the same mask followed by `FeatureMask(p=0.5)` strong. | `FeatureMask` is the reviewed schema-aware transform, already used at `p=0.1` by `mean_teacher`; reusing that value for the weak view makes the two recipes' weak augmentation identical, and the added 0.5 is a deliberate step in strength rather than a tuned value. Fixed before any result was observed. Cutout — the one strong operation the reference appends unconditionally — is a contiguous blanked region, and feature masking *is* its tabular form, so it is not modelled separately. |
 | Whether the layering matters once the transform is a constant-fill mask. | It does not, and the card says so rather than implying otherwise. | Two independent masks with the same fill compose to a single mask of rate `1 - (1-0.1)(1-0.5) = 0.55`, so `strong_x` is observationally one 55% mask. The two-transform spelling is kept because it states the *relation* the reference implements — strong is weak plus more — which a lone `p=0.55` would hide. In the image setting the layering is not degenerate, since CTAugment's operations do not commute with crop and flip. |
-| Whether a labelled row's weak view may be shared between eq. (3) and eq. (4)'s target. The paper's footnote 2 puts labelled rows into `U` "without their labels", which in the reference means a second, independently drawn batch and therefore an independently sampled `alpha`. | Shared: one `weak_x` realisation per batch serves both. | xty2 computes a view once per batch per name and caches it for the step (`DESIGN.md` section 5), so a second independent draw means a second declaration. That concept — N independent samples of one `ViewSpec` — already has two consumers: `mean_teacher` declares `student_x` and `teacher_x` with byte-identical transforms for exactly this reason, and this card wants a third draw of the same 10% mask. The two-consumer rule is therefore satisfied and the axis is still not built, because at two draws the duplicate-view spelling is *better*: each realisation carries a role name the plan and the card can refer to. `DESIGN.md` section 11 records the trigger that changes the answer — a recipe needing more than two, which is MixMatch's `K` averaged augmentations or ReMixMatch's `M` strong ones. The cost meanwhile is that on a labelled row the supervised gradient and the pseudo-label target see the same perturbation instead of two; the unlabelled rows — the ones the mechanism is about — are unaffected, since their weak and strong views are already independent draws. |
+| Whether a labelled row's weak view may be shared between eq. (3) and eq. (4)'s target. The paper's footnote 2 puts labelled rows into `U` "without their labels", which in the reference means a second, independently drawn batch and therefore an independently sampled `alpha`. | **Not shared.** `weak_x` declares `draws=2`: eq. (4)'s target reads draw 0 and eq. (3) reads draw 1, which reproduces the reference's two independent samples. | xty2 used to compute a view once per batch per name, so a second independent draw meant a second declaration — a `ViewSpec` whose only content was "not the other one". Section 5.1 records the axis that replaced that, and that it was taken with one consumer. The plan now prints `weak_x (2 independent draws)` and a fourth forward pass, and asking for a draw the view does not declare is a compile error naming the view. |
 | Whether a *tabular* strong view should also perturb continuous columns (`BoundedJitter`). | No: masking only. | `BoundedJitter` requires an explicit column list and a `perturbation_scale` on each `FeatureSpec`, which would make the recipe a function of the schema's contents — logic in a recipe (`CLAUDE.md` rule 3). A jitter-based strong view is a legitimate second card, not a silent addition to this one. |
 | `K = 2^20` steps and `mu = 7` cannot both be honoured with no loader and a 3,000-step budget. What `K` counts is also not stated in the paper. | Keep `tau`, `lambda_u`, `eta`, `beta`, Nesterov, weight decay and the cosine *shape*; re-base `K` on 3,000 steps; drop `mu`. | Deviations 3 and 4. **Reference implementation** for the unit: the global step counts labelled examples and advances by `B` per update, and the target is `train_kimg << 10` with `train_kimg = 2^16`, i.e. `2^26 / 64 = 2^20` optimiser updates. Both `k` and `K` in the rate schedule are that same counter, so the ratio is unit-free and re-basing it on 3,000 optimiser steps preserves the schedule's shape exactly. |
 | The paper reports final performance with an EMA of parameters (decay 0.999, stated for ImageNet in appendix B.9) but does not use it in training. | No EMA. | Deviation 5, and the row above on which network produces the label: with the training signal unaffected, the EMA is an evaluation device this card does not need. |

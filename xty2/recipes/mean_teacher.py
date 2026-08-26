@@ -119,6 +119,10 @@ def mean_teacher(
                     applies_to_buffers=False,
                     train_mode=True,
                     requires_grad=False,
+                    # The consistency term reads this EMA, which is what makes
+                    # it Mean Teacher rather than a reporting device (fixmatch
+                    # declares the other role over the same machinery).
+                    role="consistency_target",
                 ),
                 optimiser=OptimiserSpec(
                     name="adam",

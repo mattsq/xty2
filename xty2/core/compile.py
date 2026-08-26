@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, cast, runtime_checkable
 
 import torch
@@ -211,6 +211,7 @@ class PlannedView:
     preserves: tuple[str, ...]
     recomputes: tuple[str, ...]
     affected_columns: tuple[str, ...]
+    draws: int = 1
 
 
 @dataclass(frozen=True)
@@ -279,7 +280,10 @@ class ExecutionPlan:
     def _view_lines(self) -> list[str]:
         lines = ["views"]
         for view in self.views:
-            lines.append(f"  {view.name}")
+            # Silent at one draw, so every plan written before the axis
+            # existed renders and hashes exactly as it did.
+            draws = f" ({view.draws} independent draws)" if view.draws > 1 else ""
+            lines.append(f"  {view.name}{draws}")
             lines.append("    preserves  " + (", ".join(view.preserves) or "nothing"))
             lines.append(
                 "    affects    "
@@ -479,18 +483,22 @@ class CompiledRun:
             )
 
         values = {}
-        batches_by_view: dict[str, XTYBatch] = {IDENTITY_VIEW: batch}
+        # Keyed by (view, draw): two draws of one view are two samples of the
+        # same distribution and must not share a cache entry, while a student
+        # and a teacher pass over the same draw still must.
+        batches_by_view: dict[tuple[str, int], XTYBatch] = {(IDENTITY_VIEW, 0): batch}
         for forward in compiled.passes:
             graph = self.graph
             if forward.realisation.params == "teacher":
                 graph = cast(ComponentGraph, teacher_graph)
             view_name = forward.realisation.view
-            viewed = batches_by_view.get(view_name)
+            draw = forward.realisation.draw
+            viewed = batches_by_view.get((view_name, draw))
             if viewed is None:
                 viewed = self.recipe.view(view_name).apply(
-                    batch, self.recipe.schema, rng_key=rng_key
+                    batch, self.recipe.schema, rng_key=rng_key, draw=draw
                 )
-                batches_by_view[view_name] = viewed
+                batches_by_view[view_name, draw] = viewed
             if forward.realisation.params == "teacher":
                 with torch.no_grad():
                     values[forward.realisation] = graph.evaluate(
@@ -530,7 +538,7 @@ def compile(recipe: Recipe) -> CompiledRun:
     graph = recipe.system
     views = _validated_views(recipe)
     stages = tuple(
-        _compile_stage(recipe, stage, _realisable(views, stage))
+        _compile_stage(recipe, stage, _realisable(views, stage), views)
         for stage in recipe.program
     )
     _check_static_leakage(recipe, stages)
@@ -580,6 +588,11 @@ def _realisable(views: tuple[ViewSpec, ...], stage: Stage) -> frozenset[Realisat
     Every declared view is available under student parameters. The same views
     are available under teacher parameters exactly when this stage declares a
     teacher; teacher availability does not leak from an earlier stage.
+
+    Draws are deliberately not enumerated here. The set would grow with every
+    view's declared count for no gain — a realisation is legal on this axis iff
+    its draw is one the named view offers, which `_check_draw` decides against
+    the `ViewSpec` and reports with the view named.
     """
     view_names = (IDENTITY_VIEW, *(view.name for view in views))
     realised = {Realisation(view=view) for view in view_names}
@@ -589,7 +602,10 @@ def _realisable(views: tuple[ViewSpec, ...], stage: Stage) -> frozenset[Realisat
 
 
 def _compile_stage(
-    recipe: Recipe, stage: Stage, realisable: frozenset[Realisation]
+    recipe: Recipe,
+    stage: Stage,
+    realisable: frozenset[Realisation],
+    views: tuple[ViewSpec, ...],
 ) -> CompiledStage:
     graph = recipe.system
     where = f"stage {stage.name!r} of recipe {recipe.name!r}"
@@ -612,6 +628,7 @@ def _compile_stage(
         for port, realisation in _sorted_requirements(objective):
             _check_port(graph, port, objective, where)
             _check_realisation(realisation, realisable, objective, where)
+            _check_draw(realisation, views, f"objective {objective.name!r}", where)
             demanded.setdefault(realisation, set()).add(port)
         trained |= {port for port, _ in _check_detaches(objective, where)}
         objectives.append(
@@ -634,6 +651,7 @@ def _compile_stage(
         )
         _check_action_port(graph, action.port, where)
         _check_action_realisation(action.realisation, realisable, where)
+        _check_draw(action.realisation, views, "pseudo-label action", where)
         demanded.setdefault(action.realisation, set()).add(action.port)
         action_uses_y = graph.port_depends_on_raw_outcome(action.port)
     elif stage.action is not None:
@@ -861,16 +879,35 @@ def _check_detaches(
 def _check_teacher_use(
     stage: Stage, passes: tuple[ForwardPass, ...], where: str
 ) -> None:
-    """Reject a configured teacher that no objective or action evaluates."""
+    """Check the teacher's declared role against the passes actually planned.
+
+    Both directions are errors, and they are different errors. A
+    `consistency_target` nothing reads is the silent no-op this check has
+    always caught. An `evaluation` teacher that *is* read is the opposite
+    mistake: the stage says the EMA is a reporting device while an objective
+    trains against it, so the plan and the card would describe different
+    methods (`DESIGN.md` §2.1).
+    """
     if stage.teacher is None:
         return
-    if any(forward.realisation.params == "teacher" for forward in passes):
+    read = any(forward.realisation.params == "teacher" for forward in passes)
+    if stage.teacher.role == "evaluation":
+        if not read:
+            return
+        raise CompileError(
+            f"{where} declares its teacher role='evaluation', but an objective "
+            "or action requires a teacher realisation. An evaluation EMA is "
+            "not part of the training signal — declare "
+            "role='consistency_target' if the method reads it."
+        )
+    if read:
         return
     raise CompileError(
         f"{where} configures a TeacherSpec but no active objective or action requires "
         "a teacher realisation. Maintaining an unused EMA copy would be a "
-        "silent no-op; remove the teacher or require params='teacher' "
-        "explicitly."
+        "silent no-op; remove the teacher, require params='teacher' "
+        "explicitly, or declare role='evaluation' if it exists only to be "
+        "reported with."
     )
 
 
@@ -893,13 +930,37 @@ def _check_realisation(
     objective: Objective,
     where: str,
 ) -> None:
-    if realisation in realisable:
+    if replace(realisation, draw=0) in realisable:
         return
     raise CompileError(
         f"objective {objective.name!r} in {where} requires a port under "
         f"{realisation}, which this recipe cannot produce; it realises "
         f"{[str(r) for r in sorted(realisable)]}. A view is declared by a "
         "ViewSpec (DESIGN.md §5) and a teacher parameter set by a stage (§7)."
+    )
+
+
+def _check_draw(
+    realisation: Realisation, views: tuple[ViewSpec, ...], subject: str, where: str
+) -> None:
+    """Reject a draw the named view does not offer (`DESIGN.md` §2.1).
+
+    The draw axis is unbounded in the type and bounded by the `ViewSpec`, so
+    this is where `draw=2` on a two-draw view stops. Without it the compiler
+    would plan a third forward pass on an RNG stream no card named, which is
+    the silent-extra-pass failure the realisation machinery exists to prevent.
+    """
+    if realisation.draw == 0:
+        return
+    declared = {view.name: view.draws for view in views}
+    draws = declared.get(realisation.view, 1)
+    if realisation.draw < draws:
+        return
+    raise CompileError(
+        f"{subject} in {where} requires {realisation}, but view "
+        f"{realisation.view!r} declares draws={draws}, so its draws are "
+        f"0..{draws - 1}. A view offering more than one independent sample "
+        "says so on its ViewSpec (DESIGN.md §2.1, §5)."
     )
 
 
@@ -918,7 +979,7 @@ def _check_action_realisation(
     realisable: frozenset[Realisation],
     where: str,
 ) -> None:
-    if realisation in realisable:
+    if replace(realisation, draw=0) in realisable:
         return
     raise CompileError(
         f"pseudo-label action in {where} requires {realisation}, which this "
@@ -1013,6 +1074,7 @@ def _plan_view(view: ViewSpec, recipe: Recipe) -> PlannedView:
         preserves=tuple(sorted(view.preserves)),
         recomputes=view.recompute_descriptions(),
         affected_columns=tuple(sorted(view.affected_columns(recipe.schema))),
+        draws=view.draws,
     )
 
 

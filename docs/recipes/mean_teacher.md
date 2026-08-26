@@ -263,6 +263,13 @@ as an implicit approximation.
 to both views; the empty tuple is valid only when masking cannot stale a derived
 column.
 
+The stage also declares `TeacherSpec(role="consistency_target")`. That field
+arrived with `fixmatch`, whose EMA is a reporting device no objective reads;
+this recipe's is a target the consistency term reads, and the compiler now
+checks each declaration against the passes it planned. It binds no card key and
+changes no arithmetic — only the plan's teacher line and therefore its digest,
+so the section 6 numbers below stand as measured.
+
 The batching and preprocessing `n/a` entries are executable boundaries, not
 missing research. P9 does not add a sampler merely to copy the image
 reference's labelled/unlabelled minibatch ratio. The fixed smoke and validation

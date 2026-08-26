@@ -206,9 +206,21 @@ class _Metrics:
 def _evaluate(
     run: CompiledRun, result: StageResult, test: _Population, train: XTYBatch
 ) -> _Metrics:
+    """Two parameter sets, and the split between them is not cosmetic.
+
+    Predictive metrics come from the EMA copy, because that is the model
+    section 2.4 reports. The paper's mask rate (eq. 6) and impurity (eq. 5)
+    come from the **trained** network, because they describe the labels the run
+    actually trained on — eq. (4) reads the current parameters, so an EMA mask
+    rate would be a statistic of a model that never gated anything. Measured
+    off the EMA at decay 0.999 it reads 0.0 on the overlapping fixture, which
+    is exactly the kind of true-but-unrelated number this split avoids.
+    """
     schema = run.recipe.schema
+    assert result.teacher is not None
+    graph = result.teacher.graph
     with torch.no_grad():
-        values = run.graph.evaluate(test.batch, schema=schema, only=run.graph.names)
+        values = graph.evaluate(test.batch, schema=schema, only=run.graph.names)
         propensity = values[Port.T_GIVEN_X]
         outcome = values[Port.Y_GIVEN_XT]
         assert isinstance(propensity, CategoricalTreatment)
@@ -302,6 +314,18 @@ def overlapping_fit() -> _Metrics:
     return _run(fixmatch(_schema()), train, test, SHORT_STEPS)
 
 
+def test_the_evaluation_teacher_never_takes_a_gradient(
+    paired_fit: tuple[_Metrics, _Metrics],
+) -> None:
+    """It is reported from, and nothing else."""
+    scheduled, _ = paired_fit
+    teacher = scheduled.result.teacher
+    assert teacher is not None
+    assert teacher.spec.role == "evaluation"
+    assert all(not parameter.requires_grad for parameter in teacher.parameters())
+    assert all(parameter.grad is None for parameter in teacher.parameters())
+
+
 def test_the_propensity_beats_the_frequency_baseline(
     paired_fit: tuple[_Metrics, _Metrics],
 ) -> None:
@@ -381,8 +405,12 @@ def test_overlap_opens_the_gate_on_labels_it_should_not_trust(
     is a measure of the model's own confidence in it.
     """
     scheduled, _ = paired_fit
+    early = _mean_coverage(overlapping_fit.result, range(100))
     assert _coverage(overlapping_fit.result, 0) == 0.0
-    assert _mean_coverage(overlapping_fit.result, range(100)) < 0.05
+    # Stated as a ratio rather than an absolute: the claim is that the gate
+    # starts near-shut and opens as the fit overreaches, and a threshold tuned
+    # to one trajectory would be re-tuned every time the recipe changed.
+    assert early < 0.2 * overlapping_fit.mask_rate
     assert overlapping_fit.mask_rate > 0.2
     assert overlapping_fit.impurity > 3.0 * scheduled.impurity
     assert overlapping_fit.impurity > 0.10

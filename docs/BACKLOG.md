@@ -202,14 +202,20 @@ weak-view prediction -> confidence threshold -> hard pseudo-label -> strong-view
 cross-entropy. Its descendants then modify or add mechanisms around that core:
 
 > **Implemented.** `docs/recipes/fixmatch.md` and `xty2/recipes/fixmatch.py`.
-> It cost one objective (`PseudoLabelTreatmentNLL`) and one schedule type
-> (`CosineDecay`, on the ledger condition in `DESIGN.md` §11) — no new port,
-> executor, realisation axis or row population. The gate is a per-row mask
-> inside the objective rather than a new `Rows` value, which is what kept
-> `t_missing & confident` from becoming framework vocabulary. The finding worth
-> carrying into FlexMatch/FreeMatch/SoftMatch is in that card's §2 and §6.2:
-> the confidence gate does not fail safe under overlap — it manufactures the
-> confidence it is gated on.
+> It cost one objective (`PseudoLabelTreatmentNLL`), one schedule type
+> (`CosineDecay`, on the ledger condition in `DESIGN.md` §11), and two
+> framework concepts taken with **one consumer** against the two-consumer rule
+> — a `draw` axis on `Realisation` and `TeacherSpec.role`, both recorded in
+> that card's §5.1. No new port, executor or row population: the gate is a
+> per-row mask inside the objective rather than a new `Rows` value, which is
+> what kept `t_missing & confident` from becoming framework vocabulary.
+>
+> Two findings worth carrying forward. Into FlexMatch/FreeMatch/SoftMatch: the
+> confidence gate does not fail safe under overlap — it manufactures the
+> confidence it is gated on (card §2, §6.2). Into anything that reports from an
+> EMA: on the overlapping fixture the EMA-reported NLL beats the baseline while
+> the network it averages is worse than the baseline, so an EMA number is not
+> evidence the mechanism is behaving.
 
 - **FlexMatch** — class-specific curriculum thresholds based on learning
   progress.
