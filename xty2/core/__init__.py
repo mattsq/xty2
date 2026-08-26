@@ -128,6 +128,7 @@ from xty2.core.rows import (
 )
 from xty2.core.schedules import (
     Constant,
+    CosineDecay,
     ExponentialDecay,
     Ramp,
     Schedule,
@@ -174,6 +175,7 @@ __all__ = [
     "ComponentGraph",
     "Constant",
     "ContractError",
+    "CosineDecay",
     "ExecutionPlan",
     "Executor",
     "ExponentialDecay",

@@ -7,7 +7,10 @@ implementation uses staircase exponential learning-rate decay; spelling the
 formula as one declaration keeps the plan readable and the executed schedule
 exact. `SigmoidRamp` arrives with Mean Teacher for the same reason: its
 Gaussian-shaped warm-up is part of the method and is not a linear `Ramp` with
-different constants.
+different constants. `CosineDecay` arrives with FixMatch, whose section 2.4
+states `eta cos(7 pi k / 16 K)` and whose appendix B.4 ablates it against a
+linear decay and against none — the ledger entry in `DESIGN.md` §11 asks for
+exactly that, a card naming the schedule.
 
 They live in `core/` rather than beside the mixer for the reason `DESIGN.md`
 §10 gives for `Stage` and `Recipe`: they are the compiler's *input*. A recipe
@@ -186,6 +189,60 @@ class SigmoidRamp(Schedule):
 
 
 @dataclass(frozen=True)
+class CosineDecay(Schedule):
+    """FixMatch's cosine decay, `initial * cos(pi * phase * min(step/steps, 1))`.
+
+    FixMatch section 2.4 sets the learning rate to `eta cos(7 pi k / 16 K)`,
+    with `k` the current step and `K` the total. `phase` is that `7/16`: the
+    cosine is walked only part of the way to its zero, so the rate ends at
+    `cos(7 pi / 16) ~ 0.195` of the initial one rather than at nothing. Writing
+    the fraction as a field rather than baking in `7/16` keeps the *shape* the
+    card names visible in the plan, and keeps the schedule usable for the
+    decay-to-zero case a later card may state.
+
+    `phase` is capped at `0.5` — the quarter turn where the cosine reaches zero.
+    Beyond it the multiplier goes negative, which is ascent wearing a decay's
+    name, and no card means that.
+
+    Like every schedule here `steps` is measured in optimiser steps, and the
+    value is flat at its final level afterwards rather than turning back up.
+    """
+
+    steps: int
+    phase: float
+    initial: float = 1.0
+
+    def __post_init__(self) -> None:
+        _require_finite("CosineDecay.phase", self.phase)
+        _require_finite("CosineDecay.initial", self.initial)
+        if type(self.steps) is not int or self.steps < 1:
+            raise Xty2Error(
+                f"CosineDecay.steps must be an integer at least 1, got {self.steps!r}"
+            )
+        if not 0.0 < self.phase <= 0.5:
+            raise Xty2Error(
+                f"CosineDecay.phase must be in (0, 0.5], got {self.phase!r}. It "
+                "is the fraction of pi the cosine travels: 0.5 decays to zero "
+                "and anything beyond it turns the multiplier negative."
+            )
+
+    def value(self, step: int) -> float:
+        progress = min(step / self.steps, 1.0)
+        return float(self.initial) * math.cos(math.pi * float(self.phase) * progress)
+
+    @property
+    def nominal(self) -> float:
+        """The level the decay settles at, `initial * cos(pi * phase)`."""
+        return float(self.initial) * math.cos(math.pi * float(self.phase))
+
+    def describe(self) -> str:
+        return (
+            f"cosine {float(self.initial)!r} * cos(pi * {float(self.phase)!r} * "
+            f"min(step/{self.steps}, 1))"
+        )
+
+
+@dataclass(frozen=True)
 class Step(Schedule):
     """A piecewise-constant weight that jumps at `boundaries`.
 
@@ -294,7 +351,7 @@ def as_schedule(weight: float | Schedule) -> Schedule:
     if isinstance(weight, bool) or not isinstance(weight, int | float):
         raise Xty2Error(
             f"a weight is a number or a Schedule, got {type(weight)}. The v1 "
-            "schedules are Constant, Ramp, SigmoidRamp, Step and "
+            "schedules are Constant, Ramp, SigmoidRamp, CosineDecay, Step and "
             "ExponentialDecay "
             "(DESIGN.md §6)."
         )
@@ -310,6 +367,7 @@ def _require_finite(label: str, value: object) -> None:
 
 __all__ = [
     "Constant",
+    "CosineDecay",
     "ExponentialDecay",
     "Ramp",
     "Schedule",

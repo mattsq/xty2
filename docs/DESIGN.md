@@ -441,6 +441,15 @@ teacher-student), `EntropyMinimisation`, `SoftTreatmentNLL`,
 `CycleConsistency`, `OrdinalTreatmentLoss` and the open-set / diffusion families
 are deferred to their first real consumer.
 
+Past Gate 2 the same rule applies to this list itself: an objective enters when
+a reviewed card needs it and not before. `PseudoLabelTreatmentNLL` — a
+confidence-gated hard pseudo-label across two realisations — is the first such
+addition, and arrived with `docs/recipes/fixmatch.md`. It is a *loss*, not a
+stage transition: FixMatch's artificial label is a per-batch detached target,
+where §7's `PseudoLabelAction` emits an immutable side table between stages.
+Both exist because those are two different mechanisms, not two spellings of
+one.
+
 ---
 
 ## 5. Views: augmentation separated from loss
@@ -493,7 +502,9 @@ LossMixer([
 
 Schedules in v1: `Constant`, `Ramp` (linear), `SigmoidRamp` (Mean Teacher's
 Gaussian-shaped ramp-up), `Step`, and the staircase `ExponentialDecay` required
-by TARNet's pinned reference implementation. Schedules are pure functions of
+by TARNet's pinned reference implementation. `CosineDecay` joined them with the
+`fixmatch` card, whose §2.4 states `eta cos(7 pi k / 16 K)` — the ledger
+condition in §11 for a new schedule type. Schedules are pure functions of
 `ctx.global_step` and are logged. The same types serve objective weights and
 learning-rate multipliers.
 
@@ -1036,7 +1047,7 @@ change the decision:
 | Plugin / entry-point system | a consumer outside this repo exists |
 | Distributed training | a single recipe stops fitting in one process |
 | A loader / sampler, and with it the `optimisation.batch_size` and `labelled_unlabelled_ratio` bindings | a recipe needs a fixed labelled/unlabelled quota per batch rather than whatever the data gives. The gradient executor takes an iterable of batches; a stage field for either key would be a card key nothing could check, which §7.1 rejects for provenance and §9.1 for hyperparameters |
-| LR schedules beyond `Constant`, `Ramp`, `SigmoidRamp`, `Step` and `ExponentialDecay` (cosine, one-cycle) | a card names one. The rate is a schedule multiplier, so a new type serves both loss weights and the LR; `ExponentialDecay` entered with TARNet and `SigmoidRamp` with Mean Teacher, the first real cards that name them |
+| LR schedules beyond `Constant`, `Ramp`, `SigmoidRamp`, `CosineDecay`, `Step` and `ExponentialDecay` (one-cycle, warm restarts) | a card names one. The rate is a schedule multiplier, so a new type serves both loss weights and the LR; `ExponentialDecay` entered with TARNet, `SigmoidRamp` with Mean Teacher and `CosineDecay` with FixMatch, the first real cards that name them |
 | The other ~35 XTYLearner families | one is actually needed for a result |
 
 **Migration is lazy by design.** No model is ported until it is next used. A
