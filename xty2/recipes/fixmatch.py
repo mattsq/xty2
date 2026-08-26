@@ -40,7 +40,15 @@ WEAK_MASK_RATE = 0.1
 """Card §7: the weak view reuses Mean Teacher's reviewed masking strength."""
 
 STRONG_MASK_RATE = 0.5
-"""Card §7: a deliberate step in strength, not a tuned value."""
+"""Card §7: the extra corruption the strong view adds *on top of* the weak one.
+
+The reference implementation does not replace the weak transform on the strong
+branch — it samples the ordinary augmentation independently a second time and
+then layers CTAugment and Cutout onto that. `strong_x` says the same thing by
+listing both transforms, so the recipe reads the way the method works. For a
+constant-fill mask the two collapse to one of rate `1 - 0.9 * 0.5 = 0.55`
+(card §7); the layering is legible rather than load-bearing.
+"""
 
 FIXMATCH_STEPS = 3_000
 """Card §4. Also the `K` of the cosine rate schedule (card §5, deviation 3)."""
@@ -137,7 +145,12 @@ def fixmatch(
                     nesterov=True,
                     weight_decay=WeightDecay(
                         value=5e-4,
-                        on_norm_and_bias=True,
+                        # The reference implementation sums `l2_loss` over the
+                        # variables whose name carries `kernel`, so biases and
+                        # any norm parameters are exempt. `tf.nn.l2_loss`
+                        # carries the 1/2, which makes this coupled L2 exactly
+                        # torch's SGD `weight_decay` (card §7).
+                        on_norm_and_bias=False,
                         components=None,
                     ),
                     lr_schedule=CosineDecay(steps=FIXMATCH_STEPS, phase=7 / 16),
@@ -157,7 +170,10 @@ def fixmatch(
             ),
             ViewSpec(
                 name="strong_x",
-                transforms=(FeatureMask(p=STRONG_MASK_RATE, columns=None, value=0.0),),
+                transforms=(
+                    FeatureMask(p=WEAK_MASK_RATE, columns=None, value=0.0),
+                    FeatureMask(p=STRONG_MASK_RATE, columns=None, value=0.0),
+                ),
                 preserves=PRESERVED_FIELDS,
                 recompute_rules=recompute_rules,
             ),

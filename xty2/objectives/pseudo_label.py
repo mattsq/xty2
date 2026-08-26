@@ -18,7 +18,9 @@ made visible to the compiler rather than left inside `compute`:
   nothing is confident contributes zero rather than an average over an empty
   set. That is a per-row mask followed by a mean over *every* eligible row, and
   it is emitted through `plan_details` since no port, row population or card key
-  would otherwise reveal which denominator ran.
+  would otherwise reveal which denominator ran. It is also why FixMatch needs no
+  ramp on the unsupervised weight: the effective size of the term grows with the
+  mask rate, so the gate is the curriculum.
 * **Coverage is logged, not inferred.** `DESIGN.md` §6.2 asks pseudo-labelling
   recipes for the fraction above the threshold; it is the paper's own mask rate
   (eq. 6) and it is the number that distinguishes a working gate from an inert

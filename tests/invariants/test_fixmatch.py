@@ -162,11 +162,21 @@ def test_the_unlabelled_weight_is_constant_because_the_paper_rejects_a_ramp() ->
     assert stage.objectives[3].weight.describe() == "ramp 0.0 -> 0.5 over 1000 steps"
 
 
-def test_the_two_views_are_a_weak_and_a_strong_feature_mask() -> None:
+def test_the_strong_view_is_the_weak_one_with_more_corruption_layered_on() -> None:
+    """The reference does not swap the weak transform out on the strong branch.
+
+    It samples the ordinary augmentation a second time, independently, and then
+    layers CTAugment and Cutout onto *that*. The strong view therefore lists
+    both transforms rather than one stronger one, which is what stops the two
+    branches reading as alternatives.
+    """
     recipe = fixmatch(_schema())
     assert [view.name for view in recipe.views] == ["weak_x", "strong_x"]
     assert recipe.views[0].transforms == (FeatureMask(p=0.1, columns=None, value=0.0),)
-    assert recipe.views[1].transforms == (FeatureMask(p=0.5, columns=None, value=0.0),)
+    assert recipe.views[1].transforms == (
+        FeatureMask(p=0.1, columns=None, value=0.0),
+        FeatureMask(p=0.5, columns=None, value=0.0),
+    )
     for view in recipe.views:
         assert view.preserves == PRESERVED
         assert "x" not in view.preserves
@@ -210,8 +220,11 @@ def test_the_optimiser_is_the_papers_own_and_not_the_p5_stack() -> None:
         hyperparameters["optimisation.optimiser"] == "sgd(momentum=0.9, nesterov=True)"
     )
     assert hyperparameters["optimisation.lr"] == 0.03
+    # The reference decays the variables whose name carries `kernel`, so the
+    # exemption is not a framework default sneaking in — it is the line of the
+    # implementation that the paper's "L2 penalty of all weights" glosses over.
     assert hyperparameters["optimisation.weight_decay"] == (
-        "0.0005 (all trainable components; all parameters)"
+        "0.0005 (all trainable components; norm and bias exempt)"
     )
     schedule = run.stage("joint_fit").stage.optimiser.lr_schedule
     assert isinstance(schedule, CosineDecay)
@@ -277,7 +290,10 @@ def test_every_answered_card_key_and_view_reaches_the_plan() -> None:
     assert [view.name for view in plan.views] == ["weak_x", "strong_x"]
     assert [view.transforms for view in plan.views] == [
         ("FeatureMask(p=0.1, columns=all, value=0.0)",),
-        ("FeatureMask(p=0.5, columns=all, value=0.0)",),
+        (
+            "FeatureMask(p=0.1, columns=all, value=0.0)",
+            "FeatureMask(p=0.5, columns=all, value=0.0)",
+        ),
     ]
     assert "forward passes (3)" in plan.render()
 
@@ -328,3 +344,25 @@ def test_the_recipe_shares_the_mean_teacher_weak_view_strength() -> None:
     # than two independently chosen numbers.
     weak = fixmatch(_schema()).views[0].transforms
     assert weak == mean_teacher(_schema()).views[0].transforms
+
+
+def test_nothing_in_the_graph_couples_rows_within_a_forward_pass() -> None:
+    """Why three separate forward passes are equivalent to one fused pass.
+
+    The reference concatenates labelled, weak and strong examples into a single
+    call and interleaves them first, so that every device's BatchNorm
+    population sees a mixture of the three streams rather than one of them.
+    xty2 plans one pass per realisation instead, which is arithmetically the
+    same thing only while no component holds batch-coupled state: `row_l2`
+    normalises each row independently and nothing here carries a running
+    statistic. Assert that, so a component that later grows one fails here
+    rather than silently computing three sets of statistics.
+    """
+    graph = fixmatch(_schema()).system
+    assert list(graph.buffers()) == []
+    hyperparameters = compile(fixmatch(_schema())).plan.hyperparameters
+    assert hyperparameters["architecture.normalisation"] == {
+        "mlp_encoder": "row_l2",
+        "tarnet_head": "none",
+        "categorical_propensity": "none",
+    }
