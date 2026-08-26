@@ -361,6 +361,68 @@ def test_no_row_has_more_corrupted_cells_than_q() -> None:
     assert float(changed.float().mean()) > 1.5
 
 
+def _corrupted_columns(before: XTYBatch, after: XTYBatch) -> list[frozenset[int]]:
+    """Which columns actually moved, per row."""
+    moved = before.x != after.x
+    return [frozenset(torch.nonzero(row).flatten().tolist()) for row in moved]
+
+
+def _donor_rows(after: XTYBatch, columns: int = 4) -> list[frozenset[int]]:
+    """Which rows each corrupted cell was drawn from, per row.
+
+    Only decodable because `_batch` lays `x` out as `arange`, so a cell's value
+    names the row it came from: `value = 4 * donor + column`.
+    """
+    donors: list[frozenset[int]] = []
+    for index, row in enumerate(after.x):
+        sources = {
+            int((value - column) // columns)
+            for column, value in enumerate(row.tolist())
+        }
+        donors.append(frozenset(sources - {index}))
+    return donors
+
+
+def test_the_corrupted_columns_are_drawn_per_row_and_not_per_batch() -> None:
+    """Card §7: "independently per row [...] would be invisible in a diff".
+
+    It is invisible in a diff, so it is asserted here instead. A per-batch mask
+    — one column choice reused for every row, the cheaper implementation —
+    satisfies every other test in this file, including the `q` bound: it
+    corrupts exactly `q` columns per row and stays inside the column's support.
+    What it cannot do is corrupt *different* columns in different rows.
+    """
+    schema = _schema(immutable=False)
+    batch = _batch(rows=64)
+    result = _corrupt(batch, schema, rate=0.3)
+    per_row = _corrupted_columns(batch, result)
+    assert all(len(columns) <= 1 for columns in per_row)  # q = floor(0.3*4) = 1
+    # Every column is chosen by some row, which one shared mask cannot manage,
+    # and the rows do not all agree, which is the same fact stated twice
+    # because each half fails a different wrong sampler.
+    assert len({column for columns in per_row for column in columns}) == 4
+    assert len(set(per_row)) > 1
+
+
+def test_each_corrupted_cell_draws_its_own_donor_row() -> None:
+    """Card §7: one donor row per row "would preserve that row's cross-feature
+    dependence, which is exactly what the corruption is meant to destroy".
+
+    The cheaper implementation draws one donor per row and broadcasts it. It
+    passes every other test here — the values are still real values of their
+    columns, still exactly `q` of them — and it copies a *slice of another row*
+    rather than a draw per feature, which is a different augmentation.
+    """
+    schema = _schema(immutable=False)
+    batch = _batch(rows=64)
+    result = _corrupt(batch, schema, rate=1.0, key=3)
+    multi_donor = [row for row in _donor_rows(result) if len(row) > 1]
+    # With four columns corrupted per row and 64 candidate donors, a per-row
+    # donor gives every row exactly one source; independent draws give almost
+    # every row four.
+    assert len(multi_donor) > 32
+
+
 def test_every_corrupted_value_is_one_the_column_actually_took() -> None:
     """The property that makes this transform safe on physical data.
 
@@ -676,6 +738,69 @@ def test_the_plan_shows_the_arithmetic_no_other_field_reveals() -> None:
     assert "similarity = cosine(anchor row, contrast row)" in details
     assert any("negatives = the other eligible rows" in line for line in details)
     assert any("(1/n)" in line for line in details)
+    assert f"anchor rows (s_ij row index) = {DEFAULT}" in details
+    assert f"contrast columns (s_ij column index) = {CORRUPTED_X}" in details
+
+
+def test_swapping_the_anchor_and_the_contrast_changes_the_plan() -> None:
+    """`s_ij` is not symmetric, so its two sides are not interchangeable.
+
+    `requires` is a set and the plan renders it in a canonical order, so before
+    the two role lines existed, a recipe anchored on the *corrupted* row — a
+    different loss, worth about 4% on the Tier 0 fixture — printed a
+    byte-identical plan and hashed to the same digest. That is the provenance
+    collision `DESIGN.md` §4 makes `plan_details` responsible for, and this is
+    the test that would notice it coming back.
+    """
+    recipe = scarf(_schema())
+    stage = recipe.program[0]
+    objective = stage.objectives[0].objective
+    assert isinstance(objective, InfoNCEContrastive)
+    swapped = Weighted(
+        replace(objective, anchor=CORRUPTED_X, contrast=DEFAULT),
+        weight=1.0,
+        reduction="mean",
+    )
+    other = replace(
+        recipe,
+        program=Program((replace(stage, objectives=(swapped,)), recipe.program[1])),
+    )
+    assert compile(other).plan.render() != compile(recipe).plan.render()
+    assert compile(other).plan.digest != compile(recipe).plan.digest
+
+    # And the two really are different arithmetic, which is what makes the
+    # digest difference worth having.
+    torch.manual_seed(4)
+    anchor = torch.randn(ROWS, WIDTH)
+    contrast = torch.randn(ROWS, WIDTH)
+    context = TrainContext(global_step=0, schema=_schema())
+    forward = _objective().compute(
+        _state(anchor, contrast), _batch(), torch.arange(ROWS), context
+    )
+    backward = _objective(anchor=CORRUPTED_X, contrast=DEFAULT).compute(
+        _state(anchor, contrast), _batch(), torch.arange(ROWS), context
+    )
+    assert float(forward.value) != pytest.approx(float(backward.value), abs=1e-4)
+
+
+def test_a_single_eligible_row_reports_no_uniformity() -> None:
+    """There is no off-diagonal to average, so the key is omitted.
+
+    Filling it with the diagonal would log `alignment == uniformity`, which is
+    the signature the smoke test reads as collapse, on a batch that has said
+    nothing at all.
+    """
+    term = _objective().compute(
+        _state(torch.randn(ROWS, WIDTH), torch.randn(ROWS, WIDTH)),
+        _batch(),
+        torch.zeros(1, dtype=torch.long),
+        TrainContext(global_step=0, schema=_schema()),
+    )
+    assert term.n == 1
+    assert set(term.diagnostics) == {"alignment"}
+    # One row against itself: the positive is the whole normaliser, so the
+    # paper's expression is exactly 0 and no NaN reaches the mixer.
+    assert float(term.value) == pytest.approx(0.0, abs=1e-6)
 
 
 def test_two_temperatures_do_not_share_a_provenance_identity() -> None:

@@ -13,9 +13,19 @@
 > The code is at what `FIDELITY.md` §1.1 calls `smoke-passing`. Read section 6.2
 > before reading section 6: the mechanism is assembled and works as a
 > representation learner, and the **downstream target section 6 declares is not
-> met** — measured over five seeds and four fine-tuning budgets, and recorded
-> rather than tuned away. Sections 2 and 6.2 were rewritten around that
-> measurement; the target itself is left exactly as it was declared.
+> met** — measured over five seeds at each of four fine-tuning budgets, with the
+> frozen-encoder probe measured over eight, and recorded rather than tuned away. The target itself is left exactly as it was declared.
+>
+> What the implementation changed in this card after the card commit, named
+> rather than left to a diff, because `CLAUDE.md` rule 1 asks for a review
+> between the two and there was none: section 2's claim was rewritten around
+> section 6.2's measurement (the pre-registered version claimed the end-to-end
+> gain); two section 4 keys — `marginal_nll_grad_path` and `temperature` — were
+> re-scoped from scalar to stage-scoped form to match what `compile()` actually
+> emits for a two-stage program; section 7 gained the terminal-activation row,
+> which was discovered by implementing the head the other way; and a later
+> adversarial review corrected section 6.2's frozen-probe count, restated
+> deviation 4 as a judgement, and added the open question in section 5.1.
 
 ---
 
@@ -51,7 +61,9 @@
      collapsing;
   2. that representation carries structure the *treatment* head can use: with
      the encoder held fixed, `p(t | x)` fitted on it beats the same fit on an
-     untrained encoder (section 6.2, mean ratio 0.87 over five seeds).
+     untrained encoder on seven of eight seed families, mean ratio 0.88
+     (section 6.2). Seven of eight, not eight: the eighth is 0.3% the wrong
+     way, and the claim is stated at the strength the measurement supports.
 
   It does **not** claim the thing section 6 declares a target for — that
   pretraining improves the end-to-end scarce-label fit the paper's own protocol
@@ -328,9 +340,9 @@ impossible row.
 | # | Kind | Blocked on | What we do differently | Why | Expected effect on the section 6 metric |
 |---|---|---|---|---|---|
 | 1 | `judgement` | — | Fine-tune into the reviewed xty2 causal stack (outcome NLL, treatment NLL, exact marginalisation over missing `t`) rather than the paper's classification head `h`. | The paper's downstream task is supervised classification. The project-local question is whether SCARF's representation helps the *treatment*-scarce XTY problem, which is the closest analogue of the semi-supervised regime section 4 of the paper reports its largest gains in. The `p(t \| x)` head is a classifier, so the analogue is exact for the metric section 6 leads with. | No published number applies. The comparison is internal: the same stage, same seeds and same batches, with and without the pretrained initialisation. |
-| 2 | `framework-limitation` | `view-population-statistics` | The empirical marginal `X̂_j` is taken over the **batch** the view is transforming, not over the training dataset. | A `ViewSpec` transform is a pure function of `(batch, rng_key)` (`DESIGN.md` §5) and there is no training-population object anywhere in xty2 for it to read: the gradient executor takes an iterable of batches. Sampling column `j` from the batch is a draw from the *batch's* empirical marginal, which is itself a uniform subsample of the training one when batches are drawn uniformly — so the corrupted value is still a real observed value of that feature, and the two distributions agree in expectation over batches. What is lost is the tail: a value held by fewer than one row in `B` cannot be drawn into the batch it is not in. | Small and in the direction of *less* corruption diversity at small batch sizes, which the paper's batch-size ablation suggests matters little above 128 — the size section 6 fixes. It would matter more on a heavy-tailed column, which the section 6 DGP does not have. |
+| 2 | `framework-limitation` | `view-population-statistics` | The empirical marginal `X̂_j` is taken over the **batch** the view is transforming, not over the training dataset. **This row is the one open question a reviewer of this card has to settle** — see §5.1. | A `ViewSpec` transform is a pure function of `(batch, rng_key)` (`DESIGN.md` §5) and there is no training-population object anywhere in xty2 for it to read: the gradient executor takes an iterable of batches. Sampling column `j` from the batch is a draw from the *batch's* empirical marginal, which is itself a uniform subsample of the training one when batches are drawn uniformly — so the corrupted value is still a real observed value of that feature, and the two distributions agree in expectation over batches. What is lost is the tail: a value held by fewer than one row in `B` cannot be drawn into the batch it is not in. | Small and in the direction of *less* corruption diversity at small batch sizes, which the paper's batch-size ablation suggests matters little above 128 — the size section 6 fixes. It would matter more on a heavy-tailed column, which the section 6 DGP does not have. |
 | 3 | `judgement` | — | Retain the reviewed P5 encoder — 3 layers of 200 with ELU and row-`l2` normalisation — rather than the paper's 4 layers of 256 with ReLU. Take the pre-train head `g` from the paper (2 layers of 256, ReLU, `l2`-normalised). | Holding the causal stack fixed across cards is what makes an addition attributable, and is the same decision `mean_teacher.md` deviation 10 and `fixmatch.md` deviation 6 record. `g` is not part of that stack — it exists only because SCARF does — so it is taken as published. | Both arms of section 6's pair share the encoder, so the comparison is unaffected. An absolute comparison against the paper's numbers was never available. |
-| 4 | `framework-limitation` | `early-stopping` | Fixed budgets of 1,000 pretraining and 3,000 fine-tuning optimiser steps, rather than "a max number of pre-train epochs of 1000" with "early stopping with patience 3 on the validation loss" and a max of 200 fine-tuning epochs early-stopped on validation classification error. | A `Stage` runs `steps` optimiser steps (`DESIGN.md` §7) and there is nowhere for a validation split or a monitored metric to live, so the paper's stopping rule cannot be stated. The budgets are the project-local ones every other card uses. | Pretraining length is chosen by us rather than by the data. Under-training weakens the effect section 6 measures and over-training risks the representation drifting from what the downstream fit needs; the paired design means both arms share the fine-tuning budget, so only the pretraining half of this is a confound. |
+| 4 | `judgement` | — | Fixed budgets of 1,000 pretraining and 3,000 fine-tuning optimiser steps, rather than "a max number of pre-train epochs of 1000" with "early stopping with patience 3 on the validation loss" and a max of 200 fine-tuning epochs early-stopped on validation classification error. | This row was typed `framework-limitation` in the card's first draft, on the true observation that a `Stage` runs `steps` optimiser steps (`DESIGN.md` §7) and has nowhere to put a validation split. That is the wrong test. `FIDELITY.md` §5's is "would we choose the same again given an infinite framework", and we would: every card in this repository fixes a project-local step budget so that a difference between recipes is attributable to the recipe (`fixmatch.md` §5.3 is the same call), and section 6's target is a *paired* comparison in which both arms get the same budget either way. Section 6.2 also measured the fine-tuning half directly — four budgets from 150 to 3,000 steps — and the result does not turn on it. Typing a decision we would make again as a debt would have put a creditor on the ledger who is owed nothing, which is its own kind of dishonesty. | Pretraining length is chosen by us rather than by the data. Section 6.2's budget sweep covers the fine-tuning half; the pretraining half is not swept, and the `L_cont` trace bottoming near step 300 says a validation-stopped run would have stopped earlier than 1,000. |
 | 5 | `judgement` | — | Corruption is restricted to columns the schema marks `mutable`, and `M` counts those columns only. | `FeatureSpec.mutable=False` is absolute in xty2 (`DESIGN.md` §5) and a view that overrode it would be able to produce rows the schema declares impossible. On the section 6 schema every column is mutable, so `M` is the paper's `M` there. | None on the section 6 fixture. On a schema with immutable columns, fewer features are corrupted than `floor(0.6 * M_all)` — recorded so that a later card on such a schema does not read the rate as if it applied to every column. |
 | 6 | `framework-limitation` | `loader` | Nothing enforces a batch size, and SCARF's loss depends on it: the number of negatives is `N - 1`. | xty2 has no loader, so `optimisation.batch_size` is a key nothing can check and the field does not exist on `Stage`. Section 6 fixes 128 in the fixture, which is where the paper's ablation finds the curve flat. | The recipe as declared is correct at any batch size and *means* something slightly different at each. A caller feeding 16-row batches would be running a much easier contrastive task than the card describes. |
 | 7 | `judgement` | — | No label-noise and no OpenML-CC18 protocol; one fixed project-local DGP, in section 6. | The paper's evidence is 69 datasets under three label regimes. Reproducing that shape is a Tier 2 question about data plumbing, not about whether the mechanism is assembled correctly, and no dataset in it carries a treatment. | Section 6 is a mechanism target and says so. It is not evidence for the paper's claim, only against this port being miswired. |
@@ -352,10 +364,34 @@ stated. Nothing else here is vocabulary a future recipe must be written
 against — a transform, a component and an objective are each additions to a
 registry that existing recipes never read.
 
-Two ledger rows in `DESIGN.md` §11.4 are new with this card:
-`view-population-statistics` (deviation 2) and `early-stopping` (deviation 4).
-Both are written with the evidence that would change the decision, as
-`FIDELITY.md` §5.1 requires of a `framework-limitation` with no row to cite.
+Two ledger rows in `DESIGN.md` §11.4 are new with this card, and only one of
+them has a creditor. `view-population-statistics` is deviation 2's;
+`early-stopping` was written for deviation 4 and is now paid for by nobody,
+because deviation 4 is a `judgement` (see its row for why the first draft got
+that wrong). Both are written with the evidence that would change the decision,
+as `FIDELITY.md` §5.1 requires.
+
+**The open question, stated rather than settled.** `view-population-statistics`
+is a `framework-limitation` — we would have implemented the paper's
+training-set marginal if xty2 could express it — and the ledger row calls it
+load-bearing vocabulary. §11.2's decision table has no cell that lets that pair
+wait: *fidelity-bearing × load-bearing* reads "build it now, one consumer, and
+design the shape against a named second consumer". This card does not build it,
+and the reason is specific rather than a shrug: the thing that would have to be
+built is not a field on a transform but a **training population** for a view to
+read, and a training population is the object the `loader` row (§11.4) is about.
+Building it here would fix the shape of that concept on the evidence of one
+transform, and would put a tensor of training rows inside a `Recipe`, which is a
+declaration of a method rather than a container for data. Two smaller facts
+argue the same way: no §4 card key names the marginal's source, so §11.2's Q1
+test — "some key in some card's §4 checklist cannot be honoured" — does not
+actually fire here even though `FIDELITY.md` §5's test does; and the deviation's
+measured cost is small, since a uniformly drawn batch's column is a uniform
+subsample of the training column.
+
+None of that is a reviewer's decision to skip. It is written here in the form
+§11.2 asks for so that the reviewer is asked the question — build it now, or
+record why the pair of tests disagree — instead of being handed a conclusion.
 
 ## 6. Reproduction target
 
@@ -438,7 +474,11 @@ to nothing:
 | uniformity (a row vs the other rows) | 0.325 | 0.002 |
 
 The gap is 0.477 against §6's declared 0.2, and it is not the gap the network
-was born with. This is also the measurement that distinguishes learning from
+was born with. Across two independently constructed sweeps of eight seed
+families each, the terminal gap ran 0.469 to 0.590, terminal alignment 0.479 to
+0.594 and terminal uniformity -0.005 to 0.055; the Tier 1 bounds are set from
+that spread rather than from this seed, after two tighter ones written from
+this seed alone were found to fail on 2 of the 16. This is also the measurement that distinguishes learning from
 collapse: a collapsed encoder drives `L_cont` to exactly 0 — *higher* than the
 untrained network's -0.234 — with alignment and uniformity equal, which is what
 an earlier version of the projection head actually did (§7, terminal
@@ -470,13 +510,21 @@ number would be the tuning this project refuses):
 
 | | pretrained | untrained | |
 |---|---|---|---|
-| held-out `p(t\|x)` NLL, 5 seeds | 0.245, 0.315, 0.257, 0.283, 0.238 | 0.292, 0.338, 0.356, 0.282, 0.285 | mean ratio **0.867** |
-| held-out outcome NLL, 5 seeds | 1.169, 1.181, 1.193, 1.160, 1.183 | 1.128, 1.148, 1.116, 1.112, 1.154 | pretrained worse on all five |
+| held-out `p(t\|x)` NLL, 8 seeds | 0.245, 0.315, 0.257, 0.283, 0.238, 0.271, 0.264, 0.254 | 0.292, 0.338, 0.356, 0.282, 0.285, 0.284, 0.280, 0.304 | mean ratio **0.883** |
+| held-out outcome NLL, 8 seeds | 1.169, 1.181, 1.193, 1.160, 1.183, 1.190, 1.204, 1.192 | 1.128, 1.148, 1.116, 1.112, 1.154, 1.145, 1.139, 1.166 | pretrained worse on all eight |
 
-Four wins and one tie on the treatment side. So the contrastive encoder does
-carry treatment-predictive structure — and 1,000 or 3,000 steps of gradient from
-40 labels takes both arms far enough from their initialisations that where they
-started stops mattering. The outcome row is the other half of the same fact and
+Seven wins and one loss on the treatment side — seed 4 is 0.283 against 0.282,
+which is the pretrained arm 0.3% *worse*. An earlier version of this paragraph
+called that a tie, and it is not one: rounding a loss into a tie is the kind of
+small dishonesty this section exists to make expensive, so the number is stated
+and the count is seven, not eight. A second, independently constructed set of
+eight seed families run adversarially against this card put the per-seed ratio
+between 0.535 and 1.057, so one seed in eight landing the wrong side of 1.0 is
+the shape of this effect rather than an outlier.
+
+So the contrastive encoder does carry treatment-predictive structure — and 1,000
+or 3,000 steps of gradient from 40 labels takes both arms far enough from their
+initialisations that where they started stops mattering. The outcome row is the other half of the same fact and
 is not a happy one: a representation shaped by the covariance of `x` alone is
 not shaped for `p(y | x, t)`, and a frozen encoder gives the outcome head no way
 to reshape it. Both halves are asserted in Tier 1 so that they stay visible.

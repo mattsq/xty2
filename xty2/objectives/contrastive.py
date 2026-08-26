@@ -24,6 +24,12 @@ than details.
   dead-trainable rule therefore reaches everything upstream of both
   realisations, which is what a stage training the encoder through this term
   needs.
+* **The cosine is taken here, not assumed of the port.** `s_ij` is defined as a
+  normalised inner product, so both sides are normalised inside `compute`. A
+  producer that already emits unit vectors — `ProjectionHead` with
+  `normalisation="row_l2"`, which is what SCARF's `g` does — is therefore
+  idempotent under this term rather than required by it, and the loss is the
+  same number either way.
 """
 
 from __future__ import annotations
@@ -135,8 +141,20 @@ class InfoNCEContrastive:
         return frozenset()
 
     def plan_details(self) -> tuple[str, ...]:
-        """Arithmetic the ports, rows and card keys do not already say."""
+        """Arithmetic the ports, rows and card keys do not already say.
+
+        The first two lines name the two realisations *by role*, and that is
+        load-bearing rather than decorative. `requires` is a set, so the plan
+        renders the pair in a canonical order and cannot show which side is
+        `s_ij`'s row; the loss is not symmetrised, so swapping them computes a
+        different number. Without these lines an anchored-on-the-corrupted-row
+        recipe printed a byte-identical plan and hashed to the same digest,
+        which is exactly the provenance collision `DESIGN.md` §4 requires an
+        objective to emit through `plan_details`.
+        """
         return (
+            f"anchor rows (s_ij row index) = {self.anchor}",
+            f"contrast columns (s_ij column index) = {self.contrast}",
             "similarity = cosine(anchor row, contrast row)",
             "positive = the same row under the contrast realisation",
             "negatives = the other eligible rows, and only those",
@@ -199,14 +217,22 @@ def _alignment(similarity: Tensor, temperature: float) -> dict[str, float]:
     realisation and `uniformity` the mean to every other eligible row, both
     with the temperature divided back out so they are cosines and comparable
     across recipes. A collapsed representation — every embedding the same
-    direction — shows up here as the two converging while the loss sits at its
-    `log n` floor, which no single loss number distinguishes.
+    direction — shows up here as the two converging on each other, which no
+    single loss number distinguishes: the collapsed loss is exactly `0` (every
+    `s_ij` equal cancels against the `1/n`), and `0` is neither a floor nor a
+    failure value. A discriminating representation scores *below* it, and an
+    untrained network usually does too.
+
+    With fewer than two eligible rows there is no off-diagonal to average, so
+    `uniformity` is **omitted** rather than filled in. Reporting the diagonal
+    under that name would emit `alignment == uniformity`, which is the signature
+    this pair uses for collapse, on a batch that has told us nothing.
     """
     eligible = similarity.shape[0]
     scaled = similarity.detach() * temperature
     positive = float(scaled.diagonal().mean())
     if eligible < 2:
-        return {"alignment": positive, "uniformity": positive}
+        return {"alignment": positive}
     off_diagonal = (float(scaled.sum()) - float(scaled.diagonal().sum())) / (
         eligible * (eligible - 1)
     )

@@ -308,10 +308,18 @@ def test_the_representation_separates_rather_than_collapses(
     # so the starting gap is well above zero and the claim has to be about
     # movement: the card's §6 tolerance is the terminal gap, and this adds that
     # it is not the gap the network was born with.
+    #
+    # The bounds come from two independently constructed sweeps of eight seed
+    # families each (card §6.2): terminal gap 0.469-0.590 against the 0.2 the
+    # card declares, terminal alignment 0.479-0.594, terminal uniformity
+    # -0.005 to 0.055. Two earlier bounds here — `gap > 1.5 * start` and
+    # `uniformity < 0.05` — were written from this seed alone, sat inside that
+    # spread, and failed on 2 of the 16: the seed lottery this module's
+    # docstring says Tier 1 must not buy.
     assert gap > 0.2
-    assert gap > 1.5 * start
+    assert gap > start
     assert _diagnostic(pretrained.result, final, "alignment") > 0.4
-    assert _diagnostic(pretrained.result, final, "uniformity") < 0.05
+    assert _diagnostic(pretrained.result, final, "uniformity") < 0.1
 
 
 def test_the_fitting_stage_starts_from_the_pretrained_encoder(
@@ -367,7 +375,13 @@ def test_the_pretrained_initialisation_reaches_the_fit(
 def test_the_outcome_stack_is_not_damaged(
     paired_fit: tuple[_Metrics, _Metrics],
 ) -> None:
-    """A representation tuned to `x` alone could cost the outcome head."""
+    """A representation tuned to `x` alone could cost the outcome head.
+
+    1.05 is the card's declared §6 tolerance rather than a bound chosen here,
+    and the fixture seed uses little of it (0.996). It is not roomy on every
+    seed: §6.2's five measured ratios reach 1.042. A failure here is a real
+    signal about the recipe, not a wide net catching noise.
+    """
     pretrained, ablated = paired_fit
     assert pretrained.outcome_nll < 1.05 * ablated.outcome_nll
 
@@ -395,54 +409,77 @@ def _frozen(recipe: Recipe) -> Recipe:
     return replace(recipe, program=Program(stages))
 
 
-@pytest.fixture(scope="module")
-def frozen_probe() -> tuple[_Metrics, _Metrics]:
-    """The same pair with the encoder frozen: a probe of the representation."""
+def _probe_pair(offset: int) -> tuple[_Metrics, _Metrics]:
+    """One frozen-encoder pair, on the seed family `offset` names."""
     schema = _schema()
-    train, test = _standardised(seed=90_001)
+    train, test = _standardised(seed=90_001 + offset * 1_000)
 
-    torch.manual_seed(90_006)
+    torch.manual_seed(90_006 + offset)
     pretrained = _frozen(scarf(schema))
-    torch.manual_seed(90_006)
+    torch.manual_seed(90_006 + offset)
     ablated = _frozen(_unpretrained(scarf(schema)))
 
     fitting = _BatchStream(
-        train, _batch_indices(TRAIN_ROWS, steps=PROBE_STEPS, seed=90_005)
+        train, _batch_indices(TRAIN_ROWS, steps=PROBE_STEPS, seed=90_005 + offset)
     )
     contrastive = _BatchStream(
-        train, _batch_indices(TRAIN_ROWS, steps=PRETRAIN_STEPS, seed=90_004)
+        train, _batch_indices(TRAIN_ROWS, steps=PRETRAIN_STEPS, seed=90_004 + offset)
     )
     with_pretraining = compile(pretrained)
     without = compile(ablated)
     full = run_program(
         with_pretraining,
         {"pretrain": contrastive, "joint_fit": fitting},
-        seed=90_010,
+        seed=90_010 + offset,
     )
-    bare = run_program(without, {"joint_fit": fitting}, seed=90_010 + STREAM_STRIDE)
+    bare = run_program(
+        without, {"joint_fit": fitting}, seed=90_010 + offset + STREAM_STRIDE
+    )
     return (
         _evaluate(with_pretraining, full, test, train),
         _evaluate(without, bare, test, train),
     )
 
 
+@pytest.fixture(scope="module")
+def frozen_probe() -> tuple[tuple[_Metrics, _Metrics], ...]:
+    """The pair with the encoder frozen, on **two** seed families.
+
+    Two rather than one, and the extra ~25 seconds is the point. Across the two
+    sweeps behind card §6.2 the per-seed ratio runs 0.535-1.057, landing the
+    wrong side of 1.0 once in each, so a single-seed `pretrained < ablated` is a
+    coin the fixture happens to win. A mean over two is the coarsest form of the claim
+    that still *is* the claim — and it still fails if the pretraining stops
+    reaching the fit, which a one-sided band like "within 1.1x" would not.
+    """
+    return (_probe_pair(0), _probe_pair(1))
+
+
 def test_the_pretrained_representation_predicts_the_treatment(
-    frozen_probe: tuple[_Metrics, _Metrics],
+    frozen_probe: tuple[tuple[_Metrics, _Metrics], ...],
 ) -> None:
     """What SCARF's pretraining bought, measured where it is not overwritten.
 
-    Card §6.2: over five seeds this margin is 0.87 in the mean, with four wins
-    and one tie, so it is a real effect on this fixture and not a large one.
-    The fixture seed is the comfortable end of that spread; a failure here
-    should be read against those numbers rather than as a broken mechanism.
+    Card §6.2: 0.88 in the mean over eight seed families, seven wins and one
+    seed 0.3% the wrong way. Real, and not large. A failure here should be
+    read against that spread rather than as a broken mechanism — but a mean at
+    or above 1.0 would mean the frozen probe had stopped seeing any difference
+    at all, which is a different thing entirely.
     """
-    pretrained, ablated = frozen_probe
-    assert pretrained.treatment_nll < ablated.treatment_nll
-    assert pretrained.treatment_nll < pretrained.frequency_nll
+    ratios = [
+        pretrained.treatment_nll / ablated.treatment_nll
+        for pretrained, ablated in frozen_probe
+    ]
+    assert sum(ratios) / len(ratios) < 1.0
+    assert all(ratio < 1.1 for ratio in ratios)
+    assert all(
+        pretrained.treatment_nll < pretrained.frequency_nll
+        for pretrained, _ in frozen_probe
+    )
 
 
 def test_the_frozen_pretrained_representation_costs_the_outcome_head(
-    frozen_probe: tuple[_Metrics, _Metrics],
+    frozen_probe: tuple[tuple[_Metrics, _Metrics], ...],
 ) -> None:
     """The other half of the same measurement, and it is not a happy one.
 
@@ -450,7 +487,10 @@ def test_the_frozen_pretrained_representation_costs_the_outcome_head(
     `p(y | x, t)`, and with the encoder frozen the outcome head cannot reshape
     it. Card §2 says SCARF is not a causal method; this is what that costs when
     the representation is imposed rather than fine-tuned, and it is asserted so
-    that it stays visible.
+    that it stays visible. Unlike the treatment side, this direction held on
+    all sixteen seed families measured.
     """
-    pretrained, ablated = frozen_probe
-    assert pretrained.outcome_nll > ablated.outcome_nll
+    assert all(
+        pretrained.outcome_nll > ablated.outcome_nll
+        for pretrained, ablated in frozen_probe
+    )

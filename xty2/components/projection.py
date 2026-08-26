@@ -33,9 +33,20 @@ class ProjectionHead(Component):
     """An MLP from `X_REPR` to `X_PROJ` — SCARF's `g`, SimCLR's projection.
 
     `normalisation="row_l2"` is what SCARF means by "the pre-train head network
-    l2-normalizes the outputs so that they lie on the unit hypersphere". It is
-    not cosmetic: the objective's similarity is a cosine, so an unnormalised
-    head would put the embedding's norm in the temperature's job.
+    l2-normalizes the outputs so that they lie on the unit hypersphere".
+
+    What it does **not** do is change `InfoNCEContrastive`'s value: that term
+    takes the cosine itself, so the loss and both its diagnostics are identical
+    whichever way this flag is set (measured: they agree to 1.5e-8, float32
+    rounding). Two things it does do. It fixes what the *port* carries — a
+    consumer reading `X_PROJ` gets unit vectors, which is what the paper says
+    the embedding space is and what a future similarity graph over it would
+    otherwise have to re-establish — and it scales the gradient reaching this
+    head, since the unnormalised outputs here have norm around 0.02 and
+    normalising divides it back out. An earlier version of this docstring
+    claimed the loss depended on it. It does not, and the claim is corrected
+    rather than deleted because "the objective normalises anyway" is the reason
+    someone would remove the flag.
 
     **The last layer is affine, with no activation after it**, which is what a
     projection head of `n` layers means and is why this does not reuse

@@ -70,7 +70,17 @@ class TrainContext:
     error (`DESIGN.md` §3.1).
 
     Attributes:
-        global_step: Steps completed across the whole program, not the stage.
+        global_step: Optimiser steps completed **in the executing stage**. The
+            name is a legacy of the single-stage era and this line used to say
+            the opposite — "across the whole program, not the stage" — which
+            the executor has never done (`executors.py` counts
+            `range(compiled.steps)` per stage). Per-stage is also the only
+            reading that matches how a schedule is declared: `losses.schedules`
+            is keyed by `<stage>.<objective>` (§9.1), so a ramp "over 1,000
+            steps" in a program's second stage means its own first thousand,
+            not a window a previous stage already consumed. Corrected when
+            `scarf` — the first recipe with both a schedule and a preceding
+            stage — made the distinction load-bearing.
         schema: The resolved schema. `K`, `D` and `Dy` come from here.
         stage: The stage being executed; it labels the log, nothing else.
     """
