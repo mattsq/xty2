@@ -52,7 +52,9 @@ One value so far, and it is the paper's own taxonomy rather than an accident:
 FixMatch's table 1 lists its post-processing as *pseudo-labelling* — the arg max
 — where UDA and MixMatch are listed as *sharpening*, a temperature applied to a
 soft target. A recipe that needs the second names a second value and brings
-`losses.temperature` with it (`DESIGN.md` §11).
+`losses.temperature` with it (`DESIGN.md` §11). UDA is the near one: it gates on
+confidence exactly as this does and then sharpens instead of taking the arg max,
+so it would generalise this field rather than need an objective of its own.
 """
 
 PseudoLabelStopGrad = Literal["target"]
