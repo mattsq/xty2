@@ -62,7 +62,12 @@ Each card carries a status, and it is the recipe's real state:
 
 **A recipe is not done at `implemented`.** It is done at `reproduced` or at
 `deviating` with a written explanation. A recipe that has never had Tier 2 run
-against it is explicitly unvalidated, and the registry says so at import time.
+against it is explicitly unvalidated, and its card's status line is where that
+is recorded. It is *not* announced at import time: `DESIGN.md` §9's recipe
+registry is not built — recipes are plain functions — so this sentence used to
+describe a warning that does not exist. Tier 0 is what enforces status claims
+in the meantime (`tests/invariants/test_deviation_debt.py` for the one about
+open framework limitations).
 
 ### 1.2 Cards that bite instead of rot
 
@@ -345,11 +350,22 @@ authoritative:
 | 4 | `framework-limitation` | `loader` | `mu = 7` is not enforced | … | … |
 | 6 | `judgement` | — | Retain the P5 architecture rather than a Wide ResNet | … | … |
 
+`Kind` is one of three: `judgement`, `framework-limitation`, or `withdrawn` —
+a row that was one of the first two and has since been implemented, kept with
+its history rather than deleted, as `fixmatch.md` §5 deviations 5 and 8 are.
+
 `Blocked on` cites a key from the `DESIGN.md` §11.4 ledger, and is empty for a
-`judgement`. If a `framework-limitation` has no ledger row to cite, the ledger
-is missing a row — write it, with the evidence that would change the decision,
-in the same pass. A deviation blocked on nothing is either a judgement in
-disguise or a capability nobody has costed.
+`judgement` or a `withdrawn`. If a `framework-limitation` has no ledger row to
+cite, the ledger is missing a row — write it, with the evidence that would
+change the decision, in the same pass. A deviation blocked on nothing is either
+a judgement in disguise or a capability nobody has costed.
+
+**A framework limitation is never a §7 basis.** §7 is for what the paper does
+not specify. If the reason we chose X is that xty2 could not do Y, that is a
+deviation, and writing it as the *basis* for an unknown is the most comfortable
+place in the card to hide one — it reads as a decision with a rationale rather
+than as something missing. Both debts this rule turned up in the existing cards
+(`tarnet` §5.5, `ssdml` §5.6) were living in §7 exactly like that.
 
 Cards also carry a **§5.1** listing framework additions made *for that card*
 under `DESIGN.md` §11.2 — what was added, its consumers today, and for the
@@ -358,13 +374,22 @@ load-bearing quadrant the named second consumer the shape was designed against.
 
 ### 5.2 What the Tier 0 reconciliation asserts
 
-1. Every `framework-limitation` row cites a key that exists in §11.4.
-2. Every `judgement` row cites nothing.
-3. Every §11.4 row's **Who is paying** column lists exactly the cards that cite
-   its key — neither direction may drift.
-4. A card citing a key is `deviating`-eligible on that ground alone: a
-   `reproduced` status on a card with an open `framework-limitation` is a claim
-   that the omitted mechanic did not matter, and §6 must say so in words.
+1. Every row declares one of the three kinds.
+2. Every `framework-limitation` row cites a key that exists in `DESIGN.md`
+   §11.4; every `judgement` and `withdrawn` row cites nothing.
+3. Every §11.4 row's **Who is paying** lists exactly the card rows that cite its
+   key, in the checkable form `` `<card>` §5.<n> `` and separated by `;` —
+   neither direction may drift.
+4. A `reproduced` card carrying an open `framework-limitation` names that row
+   in its §6. `reproduced` there is a claim that the omitted mechanic did not
+   matter for the published number; it may well be true, but it is a claim, and
+   it belongs in writing beside the result rather than in the gap between two
+   sections.
+
+What none of them checks is whether a row typed `judgement` deserves it. A
+framework limitation someone found it easier to call a choice passes every
+assertion above. That is card review's job — §5's kinds exist to make it a
+question a reviewer can ask, not to answer it.
 
 (1) is the one that does the work. Discharging a ledger entry means deleting
 its row, and deleting the row breaks every card still citing it. The PR that

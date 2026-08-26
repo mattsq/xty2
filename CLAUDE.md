@@ -75,8 +75,8 @@ uv run mypy --strict
   first question is convenience, and convenience still waits for a second real
   recipe. Deliberate omissions go in the ledger (`docs/DESIGN.md` §11.4).
 - **A framework limitation is a debt, not a decision.** Card §5 rows are typed
-  `judgement` or `framework-limitation`, and the second kind cites the ledger
-  key blocking it. If your change discharges a ledger entry, Tier 0 names the
+  `judgement`, `framework-limitation` or `withdrawn`, and only the second cites
+  the ledger key blocking it. A framework limit is never a §7 basis. If your change discharges a ledger entry, Tier 0 names the
   cards that were paying for it and you revisit each in the same PR — withdraw
   the deviation or restate it as a `judgement` with the reason it survives
   (`docs/FIDELITY.md` §5). Not follow-up work; part of the packet.

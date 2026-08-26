@@ -107,9 +107,11 @@ data:
 > an unanswered section, not as an assertion of fidelity.
 >
 > **Kind** is `judgement` (we would choose this again given an infinite
-> framework) or `framework-limitation` (we would have implemented the paper;
-> xty2 could not express it). See `FIDELITY.md` §5 — the two are not
-> interchangeable, and a `framework-limitation` is a debt, not a decision.
+> framework), `framework-limitation` (we would have implemented the paper; xty2
+> could not express it), or `withdrawn` (it was one of those and has since been
+> implemented — keep the row and its history, struck through). See
+> `FIDELITY.md` §5: the first two are not interchangeable, and a
+> `framework-limitation` is a debt, not a decision.
 >
 > **Blocked on** is empty for a `judgement`, and for a `framework-limitation`
 > cites a ledger key from `DESIGN.md` §11.4. If no ledger row fits, add one in

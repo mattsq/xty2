@@ -1350,7 +1350,7 @@ def _step(
     if teacher is not None:
         # Standard Mean Teacher order: predict with the previous teacher,
         # update the student, then move the teacher towards the new student.
-        teacher.update(run.graph)
+        teacher.update(run.graph, step)
     return _Stepped(loss=mixed, grad_norm=grad_norm)
 
 
