@@ -9,9 +9,13 @@ P0–P12 are complete. It is deliberately broader than `PLAN.md`.
 It is **not** permission to keep expanding the framework. The default assumption
 at Gate 2 remains that xty2 is done: new work should arrive as a reviewed spec
 card plus a declarative recipe assembled from existing components, objectives,
-views and executors. A new framework abstraction is justified only when a second
-real recipe needs it. If a method cannot be expressed cleanly, that is evidence
-to discuss the framework boundary, not a reason to widen it opportunistically.
+views and executors. A new framework abstraction for *convenience* is justified
+only when a second real recipe needs it. One that is load-bearing for fidelity —
+without it the card's §4 checklist cannot be honoured as the paper states it —
+is justified by the first card, and `DESIGN.md` §11.2 says how far the design
+obligation goes. If a method cannot be expressed cleanly, that is evidence to
+discuss the framework boundary, not a reason to widen it opportunistically —
+and equally not a reason to ship the method with the mechanic missing.
 
 The intended post-P12 workflow is therefore:
 
@@ -19,8 +23,13 @@ The intended post-P12 workflow is therefore:
 2. Write `docs/recipes/<name>.md` first and stop for review.
 3. Try to express it with the existing xty2 vocabulary.
 4. Add the smallest missing component/objective/view if necessary.
-5. Add a new framework concept only after the two-consumer rule is satisfied.
-6. Require Tier 0, Tier 1 and an explicit Tier 2 target as usual.
+5. Add a new framework concept under `DESIGN.md` §11.2 — one consumer where it
+   is load-bearing for fidelity, a second where it is convenience — and record
+   it in card §5.1.
+6. Anything you cannot express and do not build becomes a typed
+   `framework-limitation` row in card §5 citing a `DESIGN.md` §11.4 ledger key,
+   never an untyped line that reads like a design choice.
+7. Require Tier 0, Tier 1 and an explicit Tier 2 target as usual.
 
 The point of this backlog is increasingly **combinatorial** experimentation. It
 should not turn into a project to port the other ~35 XTYLearner model classes.
@@ -39,8 +48,11 @@ A useful way to read the SSL literature is as three generations:
 The third category is the most interesting post-P12 stress test. xty2 should
 first try to express these methods using ordinary components, objectives, views,
 schedules, artifacts and stages. Do **not** invent a generic `Policy` abstraction
-in advance. If the same missing concept appears independently in two real
-recipes, then the two-consumer rule has supplied the evidence for one.
+in advance: a mediator with one caller is the top of `DESIGN.md` §11.1's
+over-building column, and none of these recipes is blocked on *generality* — each
+is blocked on its own specific mechanism, which is the convenience quadrant. If
+the same missing concept appears independently in two real recipes, that is the
+evidence for one.
 
 ---
 
@@ -145,7 +157,10 @@ should be composed rather than treated as mutually exclusive model families.
 
 **xty2 boundary:** MixUp synthesises rows and often targets, which is not
 obviously a `ViewSpec`. Do not pretend otherwise. If a second real recipe also
-needs row synthesis, consider a first-class mechanism at that point.
+needs row synthesis, consider a first-class mechanism at that point. Note which
+quadrant that is: row synthesis is load-bearing vocabulary (it changes what a
+`ViewSpec` means), so the first card that genuinely cannot state its §4 without
+it may still build it — against a named second consumer, per `DESIGN.md` §11.2.
 
 Reference: Berthelot et al., *MixMatch* (NeurIPS 2019),
 https://arxiv.org/abs/1905.02249
@@ -170,7 +185,9 @@ identifiable in the execution plan and diagnostics.
 **Stress test:** if ReMixMatch requires procedural branching inside the recipe,
 record exactly which interaction cannot be represented. Do not immediately
 patch around it. Compare that missing concept against CoMatch, SimMatch and MPL
-before deciding whether a framework extension has two consumers.
+before deciding whether a framework extension has two consumers. If it turns
+out ReMixMatch's §4 checklist cannot be honoured without it, `DESIGN.md` §11.2
+Q1 settles it on one — the comparison is then about *shape*, not permission.
 
 Reference: Berthelot et al., *ReMixMatch* (ICLR 2020),
 https://arxiv.org/abs/1911.09785
@@ -203,10 +220,12 @@ cross-entropy. Its descendants then modify or add mechanisms around that core:
 
 > **Implemented.** `docs/recipes/fixmatch.md` and `xty2/recipes/fixmatch.py`.
 > It cost one objective (`PseudoLabelTreatmentNLL`), one schedule type
-> (`CosineDecay`, on the ledger condition in `DESIGN.md` §11), and two
-> framework concepts taken with **one consumer** against the two-consumer rule
-> — a `draw` axis on `Realisation` and `TeacherSpec.role`, both recorded in
-> that card's §5.1. No new port, executor or row population: the gate is a
+> (`CosineDecay`, on the ledger condition in `DESIGN.md` §11.4), and two
+> framework concepts taken with **one consumer** — a `draw` axis on
+> `Realisation` and `TeacherSpec.role`, both recorded in that card's §5.1.
+> Under the old two-consumer rule those needed a maintainer's ad-hoc
+> dispensation; under `DESIGN.md` §11.2 they are the fidelity-bearing,
+> reversible quadrant and are simply the rule. No new port, executor or row population: the gate is a
 > per-row mask inside the objective rather than a new `Rows` value, which is
 > what kept `t_missing & confident` from becoming framework vocabulary.
 >
@@ -1424,7 +1443,9 @@ Guardrails:
 - record the complete compiled program as the searchable object;
 - distinguish searching weights inside one card from discovering a genuinely new
   recipe whose mechanics need their own card;
-- do not make the search engine a privileged way to bypass the two-consumer rule.
+- do not make the search engine a privileged way to bypass `DESIGN.md` §11.2 —
+  a search that discovers it "needs" an abstraction is not a card, and §11.2 Q1
+  asks about a card.
 
 Long term, this is one of the clearest payoffs of decomposing XTYLearner: the
 search space becomes structured and inspectable instead of "choose one of forty

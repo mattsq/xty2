@@ -34,9 +34,11 @@ is prose. `docs/recipes/_TEMPLATE.md` is the authoritative form.
    Port / Objective / Component.
 4. **Mechanics checklist** (YAML) — §2 below. Every entry cites where in the
    paper it is stated.
-5. **Deviations** — a table of everything we do differently, and why. *"None"
-   is a valid answer but must be written explicitly.* An empty section is not
-   the same as a section asserting there are no deviations.
+5. **Deviations** — a table of everything we do differently, why, and which of
+   the two kinds it is: a `judgement` we would make again given an infinite
+   framework, or a `framework-limitation` we would not (§5). *"None" is a valid
+   answer but must be written explicitly.* An empty section is not the same as
+   a section asserting there are no deviations.
 6. **Reproduction target** (YAML) — dataset, split protocol, metric, published
    value, tolerance, seed count.
 7. **Unknowns** — things the paper does not specify, and the choice we made.
@@ -77,6 +79,14 @@ Documentation rots because nothing checks it. Two mechanisms stop that:
   `teacher.ema_decay`, never that 0.999 is the paper's number. Card review is
   the only thing that establishes the latter, and a green cross-check must not
   be read as fidelity.
+- **Debt reconciliation (CI, Tier 0).** Section 5 rows marked
+  `framework-limitation` name a ledger key in `DESIGN.md` §11.4, and each
+  ledger row names the cards citing it. The test reads both and asserts they
+  agree. Its purpose is what happens on *discharge*: deleting a ledger row
+  turns CI red on every card still naming it, so the capability's own PR is
+  what forces the earlier cards to be revisited. §5 has the details, and
+  `DESIGN.md` §11.3 has the argument for why this is a test rather than a
+  convention.
 - **Plan diff (review).** `compile(recipe)` prints an execution plan
   (`DESIGN.md` §8). A reviewer diffs that plan against the card's §3 mapping
   table and §4 checklist. Objectives present in one and not the other are
@@ -277,6 +287,10 @@ This is the procedure. It is short deliberately.
    can diff it against the card.
 6. **Record the Tier 2 result** in the card when the nightly run completes, and
    set the status. Do not set `reproduced` from a Tier 1 pass.
+7. **If your change discharges a `DESIGN.md` §11.4 ledger entry**, Tier 0 will
+   name the cards that were paying for it. Revisit each one in the same PR:
+   withdraw the deviation or restate it as a `judgement` (§5.2). This is part
+   of the packet, not follow-up work.
 
 ### 4.1 Standing rules
 
@@ -286,9 +300,94 @@ This is the procedure. It is short deliberately.
 - **No logic in recipes.** See `DESIGN.md` §9. A recipe that needs a conditional
   is telling you a component or objective is missing.
 - **Deviations are written down before they are implemented**, not discovered in
-  review.
+  review — and each one is typed `judgement` or `framework-limitation` (§5).
+  Typing it is not bookkeeping: writing `framework-limitation` is the moment
+  you notice you are shipping something the paper does not say, and it is the
+  moment to ask `DESIGN.md` §11.2's two questions instead.
+- **If a missing abstraction is what stands between the recipe and its paper,
+  the abstraction is in scope.** §11.2 Q1 exists so that "the framework cannot
+  express it" stops being a free answer. Amend the card, say what you are
+  adding and why, get the amendment reviewed — the same gate as any other card
+  change — and build it. Reaching for a §5 row instead, because the diff stays
+  smaller that way, is the failure this project is about.
 - **"It trains and the loss goes down" is not evidence of anything.** Tier 1
   exists precisely so that this statement stops being used as one.
 - **Do not port a model nobody has asked for.** Migration is lazy
   (`DESIGN.md` §11). Breadth is how the previous codebase acquired forty
   families and no trustworthy numbers.
+
+---
+
+## 5. Deviations, and the debt they create
+
+Section 5 of a card is the only place a reader learns that an implementation
+and its paper differ. It is therefore the place where a wrong implementation is
+most likely to look finished, and until now it rendered two very different
+statements in the same typeface:
+
+| Kind | Means | Is it permanent? |
+|---|---|---|
+| `judgement` | We chose differently on purpose, and would choose the same again if the framework could express either. Tabular adaptations of an image method, a held-fixed architecture, a project-local step budget | Yes. It is a modelling decision and it is finished |
+| `framework-limitation` | We would have implemented the paper. xty2 could not express it, so the recipe ships without it | **No.** It is provisional, and it is a debt |
+
+Collapsing the two is how fidelity debt becomes invisible: a
+`framework-limitation` written in the register of a design decision reads, to
+the next reviewer, as a decision that has already been made and reviewed. It
+has not been. Nobody chose it; the framework did.
+
+### 5.1 The form
+
+Card §5's table carries both fields, and `docs/recipes/_TEMPLATE.md` is
+authoritative:
+
+| # | Kind | Blocked on | What we do differently | Why | Expected effect on §6 |
+|---|---|---|---|---|---|
+| 4 | `framework-limitation` | `loader` | `mu = 7` is not enforced | … | … |
+| 6 | `judgement` | — | Retain the P5 architecture rather than a Wide ResNet | … | … |
+
+`Blocked on` cites a key from the `DESIGN.md` §11.4 ledger, and is empty for a
+`judgement`. If a `framework-limitation` has no ledger row to cite, the ledger
+is missing a row — write it, with the evidence that would change the decision,
+in the same pass. A deviation blocked on nothing is either a judgement in
+disguise or a capability nobody has costed.
+
+Cards also carry a **§5.1** listing framework additions made *for that card*
+under `DESIGN.md` §11.2 — what was added, its consumers today, and for the
+load-bearing quadrant the named second consumer the shape was designed against.
+`fixmatch.md` §5.1 is the worked example.
+
+### 5.2 What the Tier 0 reconciliation asserts
+
+1. Every `framework-limitation` row cites a key that exists in §11.4.
+2. Every `judgement` row cites nothing.
+3. Every §11.4 row's **Who is paying** column lists exactly the cards that cite
+   its key — neither direction may drift.
+4. A card citing a key is `deviating`-eligible on that ground alone: a
+   `reproduced` status on a card with an open `framework-limitation` is a claim
+   that the omitted mechanic did not matter, and §6 must say so in words.
+
+(1) is the one that does the work. Discharging a ledger entry means deleting
+its row, and deleting the row breaks every card still citing it. The PR that
+builds the loader cannot go green until each card that was paying for its
+absence has been revisited, and revisiting means exactly one of two edits:
+
+- **Withdraw** the deviation — implement the mechanic and strike the row
+  through, as `fixmatch.md` §5 deviation 5 does; or
+- **Restate** it as a `judgement`, with the reason it survives the capability
+  that was supposed to end it.
+
+"Leave it and open an issue" is not one of the two, and that is the entire
+design intent. The agent who builds the capability is the only one guaranteed
+to have the context for this, and is holding it at the cheapest possible
+moment. `DESIGN.md` §11.3 records what happened the one time we relied on a
+later agent instead.
+
+### 5.3 A note on scope
+
+Repaying the debt is not licence to widen the PR. Withdrawing a deviation on
+someone else's card is a card amendment: it changes a reviewed artifact, so it
+is reviewed, and if the recipe has a Tier 2 ledger row that row is now measured
+against a different recipe and must be re-run or explicitly invalidated. Where
+that cost is real, **restating as a `judgement` with the reason is the correct
+outcome**, not a cop-out. What is refused is silence — the card that still
+reads as though the capability had never been built.

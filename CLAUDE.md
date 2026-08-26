@@ -59,13 +59,27 @@ uv run mypy --strict
   key, the recipe sets it explicitly; the field carries a `REQUIRED` sentinel so
   it cannot fall through to a framework default (`docs/DESIGN.md` §9.1).
 - **Deviations are written into card §5 before they are implemented**, not
-  discovered in review. "None" is a valid answer, written explicitly.
+  discovered in review. "None" is a valid answer, written explicitly. Reaching
+  for a §5 row because it keeps the diff smaller than the missing abstraction
+  would is the failure mode this project exists to prevent.
 - **"It trains and the loss goes down" is not evidence.** Tier 1 exists so that
   sentence stops being used as one; only a Tier 2 result sets `reproduced`.
-- **Two-consumer rule.** No new abstraction — port, executor, schedule type,
-  realisation axis — until a second real recipe needs it. Deliberate omissions
-  are in the YAGNI ledger (`docs/DESIGN.md` §11); add to it rather than building
-  ahead.
+- **Build for one consumer, design against two** (`docs/DESIGN.md` §11.2). Ask
+  two questions of any new abstraction. *Does its absence force a deviation from
+  a paper-governed mechanic named in a card §4?* If yes, one consumer is enough
+  — build it. *If the shape is wrong, what does it cost?* Reversible (opt-in,
+  default-preserving, changes no existing plan, digest or number) means build it
+  now; load-bearing vocabulary — a port, an executor contract, a row population,
+  an artifact kind — means build it now but design the shape against a **named**
+  second consumer, written into card §5.1 first. An abstraction that fails the
+  first question is convenience, and convenience still waits for a second real
+  recipe. Deliberate omissions go in the ledger (`docs/DESIGN.md` §11.4).
+- **A framework limitation is a debt, not a decision.** Card §5 rows are typed
+  `judgement` or `framework-limitation`, and the second kind cites the ledger
+  key blocking it. If your change discharges a ledger entry, Tier 0 names the
+  cards that were paying for it and you revisit each in the same PR — withdraw
+  the deviation or restate it as a `judgement` with the reason it survives
+  (`docs/FIDELITY.md` §5). Not follow-up work; part of the packet.
 - **Do not port a model nobody has asked for.** Migration is lazy.
 - **Stay inside the packet.** `docs/PLAN.md` gives every packet an explicit
   out-of-scope list. Work that belongs to a later packet waits for it.

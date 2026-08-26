@@ -105,10 +105,40 @@ data:
 
 > "None." is a valid entry, but it must be written. An empty table is treated as
 > an unanswered section, not as an assertion of fidelity.
+>
+> **Kind** is `judgement` (we would choose this again given an infinite
+> framework) or `framework-limitation` (we would have implemented the paper;
+> xty2 could not express it). See `FIDELITY.md` §5 — the two are not
+> interchangeable, and a `framework-limitation` is a debt, not a decision.
+>
+> **Blocked on** is empty for a `judgement`, and for a `framework-limitation`
+> cites a ledger key from `DESIGN.md` §11.4. If no ledger row fits, add one in
+> the same pass with the evidence that would change the decision. Tier 0
+> reconciles the two directions, and deleting that ledger row later is what
+> forces this card to be revisited.
+>
+> Before writing a `framework-limitation` row, ask `DESIGN.md` §11.2 Q1 and Q2.
+> If the missing abstraction is fidelity-bearing and reversible, the answer is
+> to build it and record it in §5.1 below — not to write the row.
 
-| # | What we do differently | Why | Expected effect on the §6 metric |
-|---|---|---|---|
-| | | | |
+| # | Kind | Blocked on | What we do differently | Why | Expected effect on the §6 metric |
+|---|---|---|---|---|---|
+| | | | | | |
+
+### 5.1 Framework additions made for this card
+
+> `DESIGN.md` §11.2. Delete the table and write "None." if the recipe is
+> assembled entirely from existing components, objectives, views and executors —
+> which is the expected case.
+>
+> For anything in the load-bearing quadrant (a port, an executor contract, a row
+> population, an artifact kind), **Named second consumer** is required and is
+> not a gesture: name the `BACKLOG.md` card and the sentence of its paper that
+> needs the same thing, and say what about the shape you checked against it.
+
+| Added | Quadrant (§11.2) | Consumers today | Named second consumer | Why now |
+|---|---|---|---|---|
+| | | | | |
 
 ## 6. Reproduction target
 

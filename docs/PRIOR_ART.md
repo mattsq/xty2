@@ -11,8 +11,8 @@ future methods live in `BACKLOG.md`.
 The purpose here is narrower: preserve evidence about how other systems have
 solved similar decomposition problems, where those abstractions have worked, and
 where they have started to leak. A prior-art observation should not become an
-xty2 abstraction merely because another framework has one. The two-consumer rule
-in `DESIGN.md` still applies.
+xty2 abstraction merely because another framework has one. `DESIGN.md` §11.2
+still applies: prior art is never the card that justifies a build.
 
 ---
 
@@ -187,9 +187,12 @@ training-time state and determine what another objective sees.
 **xty2 implication:** do not add a generic `Policy`, `Mediator` or `Hook`
 abstraction in advance. But when FreeMatch, SoftMatch, ReMixMatch, CoMatch or
 similar recipes are implemented, watch specifically for repeated stateful
-prediction-mediation semantics. If two real recipes require the same lifecycle,
-state ownership and input/output contract, that is concrete evidence for a new
-abstraction under the two-consumer rule.
+prediction-mediation semantics. A *generic* mediator is convenience and waits
+for two real recipes sharing one lifecycle, state ownership and input/output
+contract (`DESIGN.md` §11.2, bottom-right). The specific mechanism one card
+needs to state its §4 checklist is a different question and is settled by that
+card alone — the mistake to avoid is answering the second question by building
+the first thing.
 
 ### 1.5 State ownership and checkpointing leak through in complex methods
 
@@ -429,7 +432,8 @@ post-P12 methods:
 5. Can ReMixMatch remain a declarative recipe once synthetic-row MixUp semantics
    are handled honestly?
 6. Does any reusable stateful mechanism need generic checkpoint/provenance
-   support, and does a second real recipe require the same thing?
+   support, and does a second real recipe require the same thing? (Generic
+   support is convenience; a specific mechanism's own state is not.)
 7. Are lifecycle hooks useful internally for infrastructure without becoming a
    public recipe abstraction?
 
@@ -591,8 +595,10 @@ beyond exact-vs-missing treatment labels into labeling functions, partial labels
 or other rich supervision.
 
 **xty2 lesson:** supervision itself may eventually deserve typed structure rather
-than being collapsed into a target tensor. Do not import that abstraction until
-concrete rich-supervision recipes satisfy the two-consumer rule.
+than being collapsed into a target tensor. That is load-bearing vocabulary — it
+changes what every recipe declares — so do not import it speculatively; a
+concrete rich-supervision card that cannot state its §4 without it is what opens
+the question (`DESIGN.md` §11.2).
 
 ### 3.8 Harmony and compositional SSL research
 
