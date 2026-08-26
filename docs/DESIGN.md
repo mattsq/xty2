@@ -145,9 +145,9 @@ class Port(str, Enum):
     RECONSTRUCTION  = "reconstruction"
 ```
 
-`XY_REPR` appears in `SEED.md` but has no consumer among the five v1 recipes, so
-by the two-consumer rule (§11) it is not declared. A port with no `PortSpec` is
-a port the compiler cannot check.
+`XY_REPR` appears in `SEED.md` but no v1 card's §4 checklist depends on it, so
+§11.2 answers Q1 "no" and it is not declared. A port with no `PortSpec` is a
+port the compiler cannot check.
 
 Each port has a `PortSpec` fixing its **type and shape contract**, checked at
 compile time and asserted in tests:
@@ -163,8 +163,11 @@ compile time and asserted in tests:
 | `JOINT_ENERGY` | `Tensor` | `[B, K]`, one energy per treatment value |
 | `RECONSTRUCTION` | `Tensor` | `[B, D]`, matching `X_RAW` |
 
-Ports are the framework's vocabulary. **Adding a port is a design decision, not
-an implementation detail** — it requires a second real consumer (§11).
+Ports are the framework's vocabulary — the load-bearing quadrant of §11.2.
+**Adding a port is a design decision, not an implementation detail.** One
+reviewed card that cannot state its §4 mechanics without it is enough to build
+it, but the shape is designed against a named second consumer, and that naming
+is written down before the code.
 
 ### 2.2 Raw inputs are ports too
 
@@ -193,8 +196,8 @@ members:
 the observed treatment: outcome heads receive candidate `t` through
 `log_prob(y, t)` (§3.1) rather than from the batch, the energy head emits one
 value per treatment, and propensity and posterior heads take representations and
-`Y_RAW`. A raw treatment port would therefore be a port with no consumer, which
-the two-consumer rule (§11) already forbids.
+`Y_RAW`. A raw treatment port would therefore be a port no card needs, which
+§11.2 refuses at Q1.
 
 It would also be the one port that cannot be typed honestly as a tensor. `t` is
 only valid where `t_observed` (§1.1), and a bare `Tensor` port carries no way to
@@ -1044,40 +1047,227 @@ condition, not a milestone on the way to porting forty models.
 
 ## 11. Overdesign guardrails
 
-**The two-consumer rule.** No abstraction enters the framework until a second
-real recipe needs it. New ports, new executors, new schedule types, new
-realisation axes all fall under this. `Realisation` is the one advance purchase
-(§2.1) and it is documented as such.
+The previous codebase acquired forty model families and no trustworthy numbers.
+This section exists so that this one does not. It used to say so in a single
+sentence — *no abstraction until a second real recipe needs it* — and that
+sentence was wrong in a specific and expensive way: it priced the cost of a
+wrong **abstraction** and never priced the cost of a wrong **implementation**.
+Those costs are not comparable. A speculative abstraction is visible in a diff,
+covered by a test, and deletable in an afternoon. A mechanic the paper
+specifies and we could not express becomes one row in a card's §5 deviation
+table, and the deviation table is where fidelity goes to be forgotten.
 
-**The YAGNI ledger.** Deliberately not built, with the evidence that would
-change the decision:
+### 11.1 The two failure modes, and why counting consumers only sees one
 
-| Not building | Would build when |
-|---|---|
-| General stage DAG | a recipe needs genuinely parallel branches, not just ordering |
-| Continuous / dose-response T | the flight data or a target paper requires it |
-| GradNorm / PCGrad | logged gradient cosines show sustained objective conflict |
-| Config-first surface | sweeps outgrow the Python API in practice |
-| Plugin / entry-point system | a consumer outside this repo exists |
-| Distributed training | a single recipe stops fitting in one process |
-| A loader / sampler, and with it the `optimisation.batch_size` and `labelled_unlabelled_ratio` bindings | a recipe needs a fixed labelled/unlabelled quota per batch rather than whatever the data gives. The gradient executor takes an iterable of batches; a stage field for either key would be a card key nothing could check, which §7.1 rejects for provenance and §9.1 for hyperparameters |
-| LR schedules beyond `Constant`, `Ramp`, `SigmoidRamp`, `CosineDecay`, `Step` and `ExponentialDecay` (one-cycle, warm restarts) | a card names one. The rate is a schedule multiplier, so a new type serves both loss weights and the LR; `ExponentialDecay` entered with TARNet, `SigmoidRamp` with Mean Teacher and `CosineDecay` with FixMatch, the first real cards that name them |
-| The other ~35 XTYLearner families | one is actually needed for a result |
+| Failure | What it looks like | What it costs |
+|---|---|---|
+| **Over-building** | a `Policy` protocol with one implementation; a port nothing produces; an executor written for a recipe that does not exist | vocabulary every future recipe reads past, and a shape fitted to a single caller that the second caller must bend around |
+| **Under-building** | card §5 acquires a row that says, in effect, "the framework cannot express this", and the recipe ships anyway | an implementation that looks finished and is not; a `reproduced` status on a number the paper's method would not have produced; and a debt with no scheduled repayment |
 
-**Two entries were taken off this ledger with one consumer**, deliberately and
-at the maintainer's direction, while `fixmatch` was implemented: `Realisation.
-draw` / `ViewSpec.draws` (§2.1), and `TeacherSpec.role`, which allows an EMA
-that no objective reads. Both are recorded in `docs/recipes/fixmatch.md` §5.1
-with what would have justified them under the rule — UDA for the second, and
-either `mean_teacher`'s conversion or MixMatch's `K` draws for the first. The
-exception is worth naming rather than smoothing over: the rule exists because
-an abstraction built for one caller is usually shaped wrong for the second, and
-neither of these has met its second caller yet. What made the trade acceptable
-was that both replaced a *deviation from the paper* rather than adding
-capability nobody had asked for, and that neither could change an existing
-recipe's numbers by construction (§2.1).
+`FIDELITY.md` opens by naming the second failure as the reason this project
+exists: in `looptab`, reimplementations silently omitted key mechanics and a
+wrong implementation looked plausible for a long time. A guardrail that can
+only count consumers cannot see that failure at all. Worse, it *converts* one
+failure into the other: every abstraction it refuses that a card actually
+needed is paid for by a deviation somewhere, and the conversion is into a
+currency the rule does not measure.
 
-**Migration is lazy by design.** No model is ported until it is next used. A
-model family that nobody has run in a year is not a requirement, it is a
-liability, and reproducing it faithfully costs more than it is worth until
-someone needs the number.
+So the guardrail stays, and the exchange rate changes.
+
+### 11.2 The rule: build for one, design against two
+
+Two questions about any proposed abstraction, asked in order.
+
+**Q1 — is it load-bearing for fidelity?** Not "would this be tidier". *Does its
+absence force a deviation?* The test is concrete and it is settled before the
+argument starts: without this abstraction, some key in some card's §4 mechanics
+checklist cannot be honoured as the paper states it, so §5 acquires a
+`framework-limitation` row (`FIDELITY.md` §5). If no card §4 key moves, the
+answer is no, however strong the aesthetic case.
+
+**Q2 — what does being wrong about it cost?** *Reversible* means all of: the
+surface is opt-in, its default preserves current behaviour, no existing
+recipe's plan, digest or recorded result changes — and, decisively, it is not
+vocabulary a future recipe must be written **against**. *Load-bearing* means
+the opposite: ports (§2), the executor contract (§7), row populations (§1.3),
+artifact kinds (§7.1) — the things a recipe has to speak in order to exist.
+
+|  | Reversible | Load-bearing vocabulary |
+|---|---|---|
+| **Fidelity-bearing** (Q1 yes) | **Build it now, one consumer, no permission needed.** Record it in the card's §5.1 | **Build it now, one consumer** — and design the shape against a *named* second consumer: a specific `BACKLOG.md` card, and the sentence of its paper that needs the same thing, written into §5.1 before the code |
+| **Convenience** (Q1 no) | **Wait for the second consumer.** Duplication is cheaper than premature vocabulary; write the duplication and let the second recipe show you the shape | **Wait for the second consumer, and for a reviewed card that needs it.** This quadrant is what the old rule was really about, and nothing here relaxes it |
+
+The asymmetry is deliberate. We will sometimes pay for an abstraction
+shaped by one caller. We will not pay for an implementation that quietly does
+not match its paper — because the first cost is visible in a diff and the
+second is visible only in a benchmark nobody has run yet.
+
+**"One consumer" is not "no design".** In the load-bearing quadrant the
+obligation is real and it has an artifact: name the second recipe, find the
+place in its paper that needs the same thing, and check the shape you are about
+to commit to against both. If no second consumer exists anywhere in
+`BACKLOG.md`, that is strong evidence Q1 was answered generously — a mechanic
+that only one paper in the entire backlog needs is usually a modelling choice
+wearing a framework costume.
+
+**Infrastructure with no consumer at all is still refused.** Q1 asks about a
+card that exists. "We will obviously need X" is not a card, and `Realisation`
+(§2.1) remains the one advance purchase made on that basis — grandfathered,
+documented, and not precedent.
+
+### 11.3 Fidelity debt, and who collects it
+
+A `framework-limitation` deviation is **provisional**: we would have implemented
+the paper if the framework could express it. It is not a modelling decision and
+it must not read like one — which, until §5 rows carried a kind, is exactly how
+it read: one table, one typeface, and a debt indistinguishable from a choice
+somebody had already reviewed.
+
+So the ledger below runs in both directions. Every provisional deviation names
+the ledger entry blocking it (`blocked_on`); every ledger entry names the cards
+paying for it. Tier 0 reconciles the two — for the same reason and in the same
+style as the card-key cross-check (`FIDELITY.md` §1.2), because a debt register
+nobody reconciles rots exactly like the documentation it exists to protect.
+
+**The debt is collected when the capability arrives, not when someone
+remembers.** Discharging a ledger entry — building the loader, adding the
+augmentation vocabulary — turns Tier 0 red on every card still naming it. That
+PR cannot go green until each of those cards has been revisited and its
+provisional deviation either **withdrawn** (implemented, as `fixmatch.md` §5
+deviation 5 was) or **restated as a `judgement`** with the reason it survives
+the capability that was supposed to end it.
+
+This is deliberate and it is deliberately unpleasant to route around. The
+moment the second consumer is built is the moment the first consumer's debt is
+cheapest to repay — the agent holding the context has, that hour, built the
+thing that repays it — and it is the last moment anyone is *guaranteed* to
+look. The alternative is the honour system, and we have evidence about the
+honour system in this repository:
+
+> `PseudoLabelAction` (`core/recipe.py`) said "confidence gates and soft-label
+> policies arrive with the first reviewed card that needs them", and
+> `cycle_dual.md` §5 deviation 6 said a threshold policy "waits for a reviewed
+> card and a second consumer". `fixmatch` was that card. It was reviewed, it
+> needed a gate, and it got one — as a per-row mask inside
+> `PseudoLabelTreatmentNLL`, on the objective path. Nobody then asked whether
+> the staged action path should have one too, and both documents went on
+> reading as though the capability had never been built.
+
+Retyping the cards for this section is what finally asked, and the answer turned
+out to be **no**: neither of `cycle_dual`'s papers states a confidence gate, its §4 marks
+`losses.confidence_threshold` as `n/a`, and a deviation that drops no paper
+mechanic is a judgement (§11.2 Q1). So `cycle_dual` §5.6 is a judgement now,
+with that reason written where the old one was, and `staged-gate` sits in
+§11.4 with nothing paying for it.
+
+The answer is not the point. Nothing in the old process asked the question, and
+the answer being "no" was not knowable until someone did — which is the
+difference between this section having a reconciliation step and having a
+sentence that expresses hope. Retyping the same six cards also turned up a debt
+nobody had recorded at all: `ssdml` §5.6 drops repeated sample splitting, which
+its estimator's procedure calls for, because an `XTYBatch` carries one
+`fold_id`. That had been sitting in §7 as the *basis for a choice*.
+
+### 11.4 The ledger
+
+Deliberately not built, the evidence that would change the decision, and who is
+paying for the omission. A row with cards in **Who is paying** is a *debt*; a
+row with an empty one is ordinary YAGNI.
+
+The `Key` column is the stable name a card's §5 `blocked_on` field cites; it is
+what the Tier 0 reconciliation matches on, so a key is never renamed in place —
+a renamed key is a discharged row plus a new one, which is exactly the review
+that renaming should trigger.
+
+| Key | Not building | Would build when | Who is paying |
+|---|---|---|---|
+| `stage-dag` | General stage DAG | a recipe needs genuinely parallel branches, not just ordering | — |
+| `continuous-t` | Continuous / dose-response T | the flight data or a target paper requires it | — |
+| `grad-surgery` | GradNorm / PCGrad | logged gradient cosines show sustained objective conflict | — |
+| `config-surface` | Config-first surface | sweeps outgrow the Python API in practice | — |
+| `plugins` | Plugin / entry-point system | a consumer outside this repo exists | — |
+| `distributed` | Distributed training | a single recipe stops fitting in one process | — |
+| `loader` | A loader / sampler, and with it the `optimisation.batch_size` and `labelled_unlabelled_ratio` bindings | a recipe needs a fixed labelled/unlabelled quota per batch rather than whatever the data gives. The gradient executor takes an iterable of batches; a stage field for either key would be a card key nothing could check, which §7.1 rejects for provenance and §9.1 for hyperparameters | `fixmatch` §5.4; `tarnet` §5.5 |
+| `lr-schedules` | LR schedules beyond `Constant`, `Ramp`, `SigmoidRamp`, `CosineDecay`, `Step` and `ExponentialDecay` (one-cycle, warm restarts) | a card names one. The rate is a schedule multiplier, so a new type serves both loss weights and the LR; `ExponentialDecay` entered with TARNet, `SigmoidRamp` with Mean Teacher and `CosineDecay` with FixMatch, the first real cards that name them | — |
+| `augmentation-vocabulary` | A tabular augmentation vocabulary with tunable per-operation magnitudes, and any adaptive controller over it | a set of tabular operations exists whose magnitudes are worth learning over. `FeatureMask` has one scalar and `BoundedJitter` one more, so the controller has nothing to control; SCARF corruption, SubTab feature subsets and VIME masking are the `BACKLOG.md` candidates. Genuinely blocked on prerequisites rather than on consumer count | `fixmatch` §5.10 |
+| `staged-gate` | Confidence gating / soft labels on the staged `PseudoLabelAction` path | a reviewed card whose §4 names a `losses.confidence_threshold` on a *staged writeback*. The objective path has had a gate since `fixmatch`, and §11.3 records what asking the question here settled: `cycle_dual` §5.6 is a judgement, because neither of its papers states a gate and its §4 marks the key `n/a`. Nothing is paying for this one | — |
+| `repeated-cross-fitting` | Repeated sample splitting: a second, third, … fold assignment over the same rows, and an aggregation across them | the executor can carry more than one partition. Today an `XTYBatch` has a single `fold_id`, and the artifact contract, the fold-disjointness check (§7.1) and checkpoint provenance are each written against one assignment, so a second partition has nowhere to live. This is load-bearing vocabulary under §11.2, so it also wants a named second consumer before the shape is fixed; repeated-split DML and any nested cross-fitting recipe are the candidates, and neither has a card | `ssdml` §5.6 |
+| `model-families` | The other ~35 XTYLearner families | one is actually needed for a result | — |
+
+One row that used to be here is **not** here, and its absence is the mechanism
+working: `ema-decay-schedule` was discharged. `mean_teacher` §5.7 kept a
+constant decay where the paper's ConvNet evaluation raises it, on the stated
+grounds that "P8's reviewed teacher contract takes one decay" — fidelity-bearing
+by Q1, reversible by Q2, and therefore buildable on one consumer. The decay on
+`TeacherSpec` now takes a `Schedule` (`mean_teacher.md` §5.1), the deviation is
+a judgement about Mean Teacher rather than a limit inherited from xty2, and the
+ledger row is gone. Deleting it is what would have failed Tier 0 on that card
+had nobody revisited it.
+
+`augmentation-vocabulary` is the opposite case and stays: it is blocked on
+prerequisites — a tabular operation set with magnitudes worth learning over —
+rather than on consumer count, so a second consumer would not unblock it and
+neither does the new rule.
+
+### 11.5 What this changes about the `fixmatch` exceptions
+
+`fixmatch.md` §5.1 records two framework concepts taken with one consumer —
+`Realisation.draw` / `ViewSpec.draws`, and `TeacherSpec.role` — as a deliberate,
+maintainer-sanctioned exception to the old rule, with an apology attached.
+Under §11.2 neither is an exception. Both answer Q1 yes: without them, the
+recipe could not keep the parameter set the paper reports its numbers from, and
+could not draw the same view twice independently as footnote 2 requires. Both
+are reversible in the strict sense of Q2, and that card demonstrates it rather
+than asserting it — draw 0 hashes to the pre-axis seed, `str(Realisation)`
+omits `draw=0`, a plan omits a draw count of one, and the seed half of that is
+asserted directly in `tests/invariants/test_views.py`, so every earlier plan,
+digest and recorded result stands byte-identical.
+
+That is the top-left quadrant exactly. The old rule made the right call
+reachable only through a maintainer's ad-hoc intervention, and made the agent
+write a paragraph of contrition for arriving at it. Both facts are evidence
+about the rule, not about the decision. §11.2 makes the same call the default,
+and spends the reviewer's attention on the harder question the old rule never
+asked: which cards are still paying for the abstractions we did *not* build.
+
+**Migration stays lazy.** No model is ported until it is next used. A model
+family nobody has run in a year is not a requirement, it is a liability, and
+reproducing it faithfully costs more than it is worth until someone needs the
+number. Nothing in §11.2 loosens this: it is about the shape of the framework
+under a card that exists, never about acquiring cards.
+
+### 11.6 What adopting this cost
+
+Adopting §11.2 and §11.3 took four pieces of work, and all four are in:
+
+1. **All six cards' §5 tables were retyped** to the `FIDELITY.md` §5.1 form
+   (`Kind`, `Blocked on`). Forty-seven rows: forty-one judgements, two
+   withdrawn, four debts. Two of the four were not previously
+   legible as debts at all — `tarnet` §5.5 and `ssdml` §5.6 were sitting in §7
+   as the *basis for a choice*, which is where a framework limit is least
+   visible and most comfortable. `FIDELITY.md` §5.1 now says a limitation is
+   never a §7 basis.
+2. **Tier 0 reconciles the two directions**
+   (`tests/invariants/test_deviation_debt.py`), parsing §11.4's `Key` column
+   and each card's §5 table. `test_card_keys.py` is the model — it already
+   reads `FIDELITY.md` §2 and compares it against the code, for the reason
+   restated here.
+3. **The reclassified rows were worked.** `ema-decay-schedule` was built and
+   discharged; `staged-gate` was asked and answered "no" (§11.3); a
+   `repeated-cross-fitting` row was written for the debt the retyping exposed;
+   `augmentation-vocabulary` stays blocked on prerequisites.
+4. **A `reproduced` card carrying an open debt must say so in §6**, asserted by
+   the same test. This replaces what an earlier draft of this section proposed —
+   a line in the registry's import-time warning — because there is no recipe
+   registry: §9's `xty2.create` is not built, recipes are plain functions, and
+   `FIDELITY.md` §1.1's claim that "the registry says so at import time"
+   describes something that does not exist yet. A test that runs is worth more
+   here than a warning that does not.
+
+What is *not* mechanised: nothing checks that a `judgement` is honestly a
+judgement. `test_deviation_debt.py` checks that every row is typed, that every
+debt names a live ledger key and that the ledger names the same rows back. It
+cannot check that a row typed `judgement` is not a framework limitation someone
+found it easier to call a choice. That is card review's job, and §5's two kinds
+exist to make it a question a reviewer can actually ask.
+

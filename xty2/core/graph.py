@@ -96,7 +96,8 @@ class Realisation:
             raise GraphError(
                 f"Realisation.params must be 'student' or 'teacher', got "
                 f"{self.params!r}. A third parameter set is a new realisation "
-                "axis and needs a second consumer first (DESIGN.md §11)."
+                "axis: it needs a reviewed card whose §4 checklist cannot be "
+                "honoured without it (DESIGN.md §11.2)."
             )
         if type(self.draw) is not int or self.draw < 0:
             raise GraphError(

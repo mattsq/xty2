@@ -25,6 +25,7 @@ from torch import Tensor, nn
 from xty2.core.errors import TrainingError
 from xty2.core.graph import ComponentGraph
 from xty2.core.recipe import TeacherSpec
+from xty2.core.schedules import as_schedule
 
 
 class EMATeacher(nn.Module):
@@ -48,12 +49,19 @@ class EMATeacher(nn.Module):
         return self._graph
 
     @torch.no_grad()
-    def update(self, student: ComponentGraph) -> None:
-        """Move this teacher towards the current student once."""
+    def update(self, student: ComponentGraph, step: int) -> None:
+        """Move this teacher towards the current student once.
+
+        `step` is the global optimiser step the update belongs to, and it is
+        required rather than defaulted because `TeacherSpec.decay` is a
+        schedule: a default would silently pin a scheduled decay to one point
+        on its curve, which is the class of silent difference `FIDELITY.md` §2
+        exists to catch. A constant decay ignores it.
+        """
         self._check_structure(student)
         teacher_parameters = dict(self._graph.named_parameters())
         student_parameters = dict(student.named_parameters())
-        decay = self.spec.decay
+        decay = self._decay_at(step)
         for name, teacher_parameter in teacher_parameters.items():
             source_parameter = student_parameters[name].detach()
             teacher_parameter.mul_(decay).add_(source_parameter, alpha=1.0 - decay)
@@ -82,6 +90,24 @@ class EMATeacher(nn.Module):
                 "parameters must remain requires_grad=False with grad=None "
                 "(FIDELITY.md Tier 0)."
             )
+
+    def _decay_at(self, step: int) -> float:
+        """The card's decay at `step`, re-checked at the step that uses it.
+
+        `TeacherSpec` checks step 0 and the nominal value, which is every value
+        a `Constant` ever takes and only two of the values a schedule takes.
+        The rest are checked here, where a decay outside [0, 1) would otherwise
+        turn one EMA update into an extrapolation away from the student and
+        leave no trace but a diverging teacher.
+        """
+        decay = float(as_schedule(self.spec.decay)(step))
+        if not 0.0 <= decay < 1.0:
+            raise TrainingError(
+                f"teacher EMA decay must be in [0, 1); "
+                f"{as_schedule(self.spec.decay).describe()} is {decay!r} at "
+                f"step {step}"
+            )
+        return decay
 
     def _check_structure(self, student: ComponentGraph) -> None:
         teacher_parameters = _tensor_shapes(self._graph.named_parameters())

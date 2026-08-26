@@ -193,7 +193,9 @@ only on a synthetic test.
 > pseudo-labelling and array/cross-fit executors. Per `SEED.md`, if these compose
 > cleanly the framework is **done**. The default decision here is to stop adding
 > abstraction and start producing results. Anything proposed at this gate goes
-> through the two-consumer rule.
+> through `DESIGN.md` §11.2, and the gate also reads the §11.4 ledger's **Who is
+> paying** column: an abstraction five recipes did without, that two of them are
+> paying a deviation for, is not evidence the framework is done.
 
 ---
 
@@ -219,7 +221,9 @@ recipe that never reaches it is unvalidated by definition.
 | Slow feedback — errors found only at benchmark time | Tier 0 invariants + Tier 1 synthetic smoke on every PR | P1–P4 |
 | Can't attribute a bad number | Component/objective separation; per-objective raw values, `n`, grad norms and cosines | P3 |
 | An objective silently dies (zeroed, empty rows, detached) | Zero-`n` invariant, coverage logging, and the Tier 1 "marginalisation beats complete-case" assertion | P3, P5 |
-| Agents over-build / rewrite working code | Two-consumer rule, YAGNI ledger, "no logic in recipes", card-amendment-before-code | throughout |
+| Agents over-build / rewrite working code | `DESIGN.md` §11.2 (convenience quadrant), the §11.4 ledger, "no logic in recipes", card-amendment-before-code | throughout |
+| Agents under-build, and the paper's mechanic ships missing | `DESIGN.md` §11.2 Q1: a mechanic named in card §4 justifies the abstraction on one consumer | throughout |
+| Fidelity debt is written down and never repaid | Typed `framework-limitation` deviations citing a §11.4 ledger key, reconciled in Tier 0; discharging the ledger entry turns CI red on every card still citing it, in that same PR | P0, and every packet that discharges one |
 | Abstraction turns out wrong late | Gate 1 after two recipes, with a falsifiable test (P7 must not edit P3's objective) | P7 |
 | Leakage from `q(t\|x,y)` pseudo-labels into `p(y\|x,t)` | Compile-time rejection on artifact provenance | P10 |
 | Card rot | CI parses card §4 and asserts recipe coverage; plan diff at review | P0, P5 |

@@ -49,7 +49,7 @@ from xty2.core.loss import (
 from xty2.core.optimisation import OptimiserSpec
 from xty2.core.ports import Port
 from xty2.core.rows import RowIndex, Rows, validate_population
-from xty2.core.schedules import Schedule, as_schedule
+from xty2.core.schedules import Constant, Schedule, as_schedule
 from xty2.core.schema import Schema
 from xty2.core.views import ViewSpec
 
@@ -98,9 +98,16 @@ class PseudoLabelAction:
 
     The source is a port, never a caller-set ``used_y`` flag. Outcome
     dependence is therefore derived from the producing subgraph by the
-    compiler and executor (`DESIGN.md` §2.2, §7.2). P10 deliberately emits
-    argmax labels only; confidence gates and soft-label policies arrive with
-    the first reviewed card that needs them.
+    compiler and executor (`DESIGN.md` §2.2, §7.2).
+
+    This emits argmax labels only. A confidence gate exists on the *objective*
+    path — `PseudoLabelTreatmentNLL` masks per row — and deliberately did not
+    follow onto this one: `cycle_dual`, the only staged consumer, states no gate
+    in either of its papers and marks `losses.confidence_threshold` as `n/a`
+    (`cycle_dual.md` §5.6). So a gate here would drop no paper mechanic, which
+    is what `DESIGN.md` §11.2 Q1 asks, and §11.4 carries it as `staged-gate`
+    with nothing paying for it. A reviewed card whose §4 names a threshold on a
+    staged writeback is what changes that.
     """
 
     port: Port
@@ -311,6 +318,13 @@ against the passes it planned rather than guessing from them.
 """
 
 
+def _is_decay(value: object) -> bool:
+    """A finite number in [0, 1) — the range an EMA decay must lie in."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(float(value)) and 0.0 <= float(value) < 1.0
+
+
 @dataclass(frozen=True)
 class TeacherSpec:
     """The card-driven EMA parameter set a stage maintains (`PLAN.md` P8).
@@ -323,16 +337,27 @@ class TeacherSpec:
     `role` is the fifth and is required for a different reason — it binds no
     card key, because it is not a number a paper states but a fact about this
     program that only the recipe knows.
+
+    `decay` is a `Schedule`, or a number coerced to `Constant` — the same
+    surface `Weighted.weight` has, for the same reason. Mean Teacher raises
+    decay after ramp-up in the evaluation it reports from, so a single constant
+    could not state that method as published; `mean_teacher.md` §5 carried the
+    gap as a framework limitation until this existed, and `DESIGN.md` §11.4
+    records discharging the `ema-decay-schedule` ledger row against it. A
+    number behaves exactly as it did before it was
+    a schedule: `describe()` prints the plain decay for a `Constant`, so every
+    plan, digest and recorded result predating this field stands unchanged, and
+    `tests/invariants/test_teacher.py` asserts that rather than assuming it.
     """
 
-    decay: float = REQUIRED
+    decay: Schedule | float = REQUIRED
     applies_to_buffers: bool = REQUIRED
     train_mode: bool = REQUIRED
     requires_grad: Literal[False] = REQUIRED
     role: TeacherRole = REQUIRED
 
     CARD_KEYS: ClassVar[Mapping[str, str]] = {
-        "decay": "teacher.ema_decay",
+        "nominal_decay": "teacher.ema_decay",
         "applies_to_buffers": "teacher.ema_applies_to_buffers",
         "train_mode": "teacher.teacher_in_train_mode",
         "requires_grad": "teacher.teacher_requires_grad",
@@ -342,17 +367,30 @@ class TeacherSpec:
         # Resolve the bindings first: an omitted paper-governed value should
         # fail as an omission, not later as a type error involving REQUIRED.
         card_hyperparameters(self)
-        if isinstance(self.decay, bool) or not isinstance(self.decay, (int, float)):
-            raise CompileError(
-                f"teacher EMA decay must be a finite number in [0, 1), got "
-                f"{self.decay!r}"
-            )
-        decay = float(self.decay)
-        if not math.isfinite(decay) or not 0.0 <= decay < 1.0:
-            raise CompileError(
-                f"teacher EMA decay must be a finite number in [0, 1), got "
-                f"{self.decay!r}"
-            )
+        if isinstance(self.decay, Schedule):
+            decay: Schedule = self.decay
+        else:
+            # Validated before coercion: `Constant` rejects a non-finite weight
+            # with its own error, and a decay out of range should read as a
+            # decay problem rather than as a schedule problem.
+            if not _is_decay(self.decay):
+                raise CompileError(
+                    f"teacher EMA decay must be a finite number in [0, 1), or a "
+                    f"Schedule of them, got {self.decay!r}"
+                )
+            decay = Constant(float(self.decay))
+        # A schedule cannot be checked at every step it will ever be asked
+        # about, so the two reachable now are checked now and the rest at the
+        # update that reads them (`training/teacher.py`). Both ends matter:
+        # step 0 is where it starts and `nominal` is where it settles, and a
+        # decay outside [0, 1) at either end is a sign error, not a tuning
+        # choice.
+        for label, at in (("at step 0", decay(0)), ("nominal", decay.nominal)):
+            if not 0.0 <= at < 1.0:
+                raise CompileError(
+                    f"teacher EMA decay must be a finite number in [0, 1); "
+                    f"{decay.describe()} is {at!r} {label}"
+                )
         object.__setattr__(self, "decay", decay)
         for field_name in ("applies_to_buffers", "train_mode", "requires_grad"):
             value = getattr(self, field_name)
@@ -382,13 +420,41 @@ class TeacherSpec:
                 f"got {self.role!r}"
             )
 
+    @property
+    def nominal_decay(self) -> float:
+        """The decay the schedule settles at — the number a card states.
+
+        `teacher.ema_decay` binds here rather than to `decay` itself so that a
+        recipe that schedules its decay still reports one number to the §4
+        cross-check, and so that the value a recipe reported before `decay`
+        could be a schedule is the value it reports now. `losses.weights` and
+        `losses.schedules` split the same way for the same reason: a paper
+        states a rate and its schedule as two separate facts.
+
+        Deliberately tolerant of an unvalidated `decay`, because
+        `card_hyperparameters` reads it during `__post_init__` — before the
+        range check below, so that an omitted decay fails as an omission
+        rather than as a range error about the sentinel.
+        """
+        decay = self.decay
+        return decay.nominal if isinstance(decay, Schedule) else decay
+
     def describe(self) -> str:
-        """One stable plan line."""
+        """One stable plan line.
+
+        A constant decay prints exactly as it did before `decay` could be a
+        schedule, so this line — and every digest over it — is unchanged for
+        every recipe that does not schedule its decay.
+        """
         buffers = "ema" if self.applies_to_buffers else "independent"
         mode = "train" if self.train_mode else "eval"
+        schedule = as_schedule(self.decay)
+        scheduled = (
+            "" if isinstance(schedule, Constant) else f", decay_schedule={schedule}"
+        )
         return (
-            f"ema(decay={self.decay!r}, buffers={buffers}, mode={mode}, "
-            f"requires_grad=False, role={self.role})"
+            f"ema(decay={self.nominal_decay!r}{scheduled}, buffers={buffers}, "
+            f"mode={mode}, requires_grad=False, role={self.role})"
         )
 
 

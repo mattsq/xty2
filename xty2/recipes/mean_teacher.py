@@ -6,6 +6,7 @@ from xty2.components import CategoricalPropensity, MLPEncoder, TARNetHead
 from xty2.components._nn import CFRNET_INITIALISATION
 from xty2.core import (
     ComponentGraph,
+    Constant,
     ExponentialDecay,
     GradientClipping,
     OptimiserSpec,
@@ -115,7 +116,11 @@ def mean_teacher(
                 ),
                 rows="all",
                 teacher=TeacherSpec(
-                    decay=0.99,
+                    # Constant, and explicitly so: the decay is a Schedule
+                    # surface now, and the paper's ConvNet evaluation raises it
+                    # after ramp-up. Card §5.7 declines that switch on the
+                    # merits — this states which of the two the recipe runs.
+                    decay=Constant(0.99),
                     applies_to_buffers=False,
                     train_mode=True,
                     requires_grad=False,

@@ -29,8 +29,10 @@ from xty2.core import (
     compile,
     treatment_distribution,
 )
+from xty2.core.schedules import Constant, Schedule, Step
 from xty2.objectives import ConsistencyLoss, ObservedTreatmentNLL, StopGrad
 from xty2.training import Checkpoint, StageResult, run_program, run_stage
+from xty2.training.teacher import EMATeacher
 
 from tests.invariants.conftest import (
     HIDDEN,
@@ -69,7 +71,7 @@ def _teacher_spec(
     *,
     applies_to_buffers: bool = True,
     train_mode: bool = False,
-    decay: float = 0.5,
+    decay: Schedule | float = 0.5,
     role: TeacherRole = "consistency_target",
 ) -> TeacherSpec:
     return TeacherSpec(
@@ -403,3 +405,82 @@ def test_an_evaluation_teacher_needs_no_objective_and_rejects_one() -> None:
 
     with pytest.raises(CompileError, match="silent no-op"):
         compile(_recipe(teacher=_teacher_spec(), consistency=False))
+
+
+def test_a_constant_decay_is_indistinguishable_from_the_number_it_replaced() -> None:
+    """The reversibility claim `DESIGN.md` §11.2 Q2 makes, asserted not assumed.
+
+    `TeacherSpec.decay` became a schedule for `mean_teacher`'s benefit under a
+    rule that permits one consumer *because* being wrong is cheap to undo. That
+    is only true if a recipe which never mentions a schedule cannot tell the
+    field changed — so the plan line, the card binding and the equality every
+    recorded result was keyed on are all compared against a bare number here.
+    """
+    number = _teacher_spec(decay=0.5)
+    explicit = _teacher_spec(decay=Constant(0.5))
+
+    assert number == explicit
+    assert number.decay == Constant(0.5)
+    assert number.nominal_decay == 0.5
+    assert (
+        number.describe() == "ema(decay=0.5, buffers=ema, mode=eval, "
+        "requires_grad=False, role=consistency_target)"
+    )
+    assert "decay_schedule" not in number.describe()
+
+
+def test_a_scheduled_decay_reaches_the_update_and_shows_in_the_plan() -> None:
+    """Mean Teacher's published decay switch, which used to be inexpressible.
+
+    `Step` is the shape the paper states — one decay before a boundary and
+    another after — so the assertion is that the *update* honours the boundary,
+    not merely that the spec accepted the schedule. A teacher whose decay is
+    read once at construction would pass a plan diff and fail this.
+    """
+    switch = Step(weights=(0.0, 0.75), boundaries=(2,))
+    spec = _teacher_spec(decay=switch)
+    assert spec.nominal_decay == 0.75
+    assert "decay_schedule=step 0.0 from 0, 0.75 from 2" in spec.describe()
+
+    student = ComponentGraph([BufferedEncoder(), ToyPropensity()])
+    teacher = EMATeacher(student, spec)
+    with torch.no_grad():
+        for parameter in student.parameters():
+            parameter.fill_(1.0)
+        for parameter in teacher.graph.parameters():
+            parameter.fill_(0.0)
+
+    # Before the boundary decay is 0.0: the teacher takes the student whole.
+    teacher.update(student, step=0)
+    assert all(
+        torch.allclose(p, torch.ones_like(p)) for p in teacher.graph.parameters()
+    )
+
+    with torch.no_grad():
+        for parameter in student.parameters():
+            parameter.fill_(5.0)
+    # At the boundary decay is 0.75: 0.75 * 1 + 0.25 * 5 == 2.0.
+    teacher.update(student, step=2)
+    assert all(
+        torch.allclose(p, torch.full_like(p, 2.0)) for p in teacher.graph.parameters()
+    )
+
+
+def test_a_decay_schedule_that_leaves_the_unit_interval_is_rejected() -> None:
+    """At construction where it can be, and at the update where it cannot.
+
+    `TeacherSpec` sees step 0 and the nominal value, which is every value a
+    constant takes and two of the values a schedule takes. A schedule that is
+    valid at both ends and invalid in between is the case a range check at
+    construction cannot reach, and an EMA update with a decay of 1.5 walks the
+    teacher *away* from the student while still looking like an update.
+    """
+    with pytest.raises(CompileError, match=r"\[0, 1\)"):
+        _teacher_spec(decay=Step(weights=(1.5, 0.5), boundaries=(3,)))
+
+    # 0.5 at step 0 and 0.9 nominal — both ends valid, 1.5 in the middle.
+    excursion = Step(weights=(0.5, 1.5, 0.9), boundaries=(1, 3))
+    spec = _teacher_spec(decay=excursion)
+    teacher = EMATeacher(ComponentGraph([BufferedEncoder(), ToyPropensity()]), spec)
+    with pytest.raises(TrainingError, match=r"\[0, 1\)"):
+        teacher.update(teacher.graph, step=2)
