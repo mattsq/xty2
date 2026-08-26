@@ -1,6 +1,6 @@
 # Recipe spec card: tarnet
 
-**Status:** `smoke-passing`
+**Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 ---
@@ -233,6 +233,10 @@ benchmark runner must record those external mechanics alongside their results.
 | 3 | Represent each deterministic squared-error head as a unit-scale Gaussian and train by NLL. | `Y_GIVEN_XT` must satisfy the distribution protocol so the same marginal objective can later consume a flow head unchanged. | For complete cases the NLL differs from squared error only by a positive scale and constant, so it has the same optimum. It changes the scale of the added mixture likelihood. |
 | 4 | Simulate 50% treatment missing completely at random in Tier 1. | This is the P5 acceptance condition in `PLAN.md` and `FIDELITY.md`, not part of the paper. | Not applicable to the fully observed published target; load-bearing for the smoke comparison. |
 
+### Tier 2 outcome
+
+On 2026-08-24, commit `d060df351f2fe8bac6d951c3757506c684d8b408` produced a `deviating` result: This evaluates the implemented TARNet extension against the IHDP within-sample estimand, with the paper's target retained unchanged. The pinned reference repository ships 100 of the declared 1,000 IHDP realisations. The reviewed card also requests only ten seeds, so P12 runs realisations 1-10 with one deterministic fit each. That cannot establish the published 1,000-realisation centre and is recorded as deviating even if its ten-run mean lies inside the numeric tolerance. Failed target(s): sqrt_PEHE_in_sample was 1.66989 +/- 0.178 outcome units against 0.78 <= mean <= 0.98 outcome units.
+
 ## 6. Reproduction target
 
 ```yaml
@@ -257,7 +261,7 @@ amended and reviewed before the run.
 
 | Date | Commit | Metric | Value +/- stderr | Within tolerance? |
 |---|---|---|---|---|
-| | | | | |
+| 2026-08-24 | `d060df351f2fe8bac6d951c3757506c684d8b408` | sqrt_PEHE_in_sample | 1.66989 +/- 0.178 outcome units | no |
 
 ### 6.2 P5 single-stage acceptance
 
@@ -301,6 +305,7 @@ The first implementation is deliberately one graph and one stage:
 | Categorical extension of the paper's binary sample weight | `w_i = 1 / (K p(t_i))` on observed-treatment rows. | Reduces to the paper's Eq. (3) weight for `K=2` and gives each observed treatment class equal total mass. |
 | Exact interpretation of the paper's `+/-` values | Treat the published centre `0.88` as the target and report xty2 mean and standard error explicitly. | The table does not label the dispersion statistic in its caption. |
 | Whether the published `0.88` remains attainable with the auxiliary propensity loss | Keep the target and predeclare the deviation rather than widen tolerance after seeing a run. | This is the honest falsifiable test of whether the P5 extension preserves the TARNet backbone. |
+| How the card's ten seeds map onto its 1,000-realisation IHDP variant | P12 uses realisations 1–10 from the `clinicalml/cfrnet` archive pinned in §1, with deterministic seeds `130000 + r` for split, batches and fit. It records the outcome as `deviating` regardless of the ten-run centre because the pinned repository ships only 100 realisations and ten runs cannot establish the published 1,000-realisation mean. | Fixes the sampling decision before any P12 result is observed and prevents a small subset from being silently presented as the paper's experiment. |
 | Executable ownership of split, standardisation and missingness declarations | Tier 1 fixture now; P12 benchmark runner later. They stay `n/a` in the compiled recipe until a real recipe requires an enforced loader policy. | `DESIGN.md` section 11 YAGNI ledger and the current `BatchSource` executor boundary. |
 | How component-valued architecture keys appear in `plan.hyperparameters` | Aggregate each `architecture.*` key as a mapping keyed by component name. | The first card-to-plan diff must expose the three modules separately; a scalar or last-write-wins binding would satisfy presence while hiding a discrepancy. |
 

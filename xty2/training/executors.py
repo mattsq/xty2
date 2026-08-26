@@ -61,6 +61,25 @@ from xty2.training.loss_mixer import (
 )
 from xty2.training.teacher import EMATeacher
 
+STREAM_STRIDE = 1_000_000
+"""How far apart `run_program` and `run_cross_fit` space their child seeds.
+
+A stage's view keys are `seed`, `seed + 1`, ... one per optimiser step, because
+the Mean Teacher card pins the per-step key as `s_r + 10000 + j` against the
+seed its caller supplies (`docs/recipes/mean_teacher.md` §6.2). That schedule
+is only collision-free while sibling stages and folds start further apart than
+either of them can walk, so their seeds are spaced by this stride rather than
+by one.
+"""
+
+MAX_STAGE_STEPS = STREAM_STRIDE // 2
+"""The longest stage whose keys are guaranteed to stay inside its own stride.
+
+One stage or fold spends one key per optimiser step and then one more per
+held-out prediction batch, and the prediction batches are the captured step
+batches, so half the stride is the budget `_run_stage` enforces.
+"""
+
 BatchSource = Iterable[XTYBatch]
 """What feeds a stage.
 
@@ -631,9 +650,12 @@ def run_program(
     on that state. This makes stage transitions data rather than an implicit
     consequence of whichever stage happened to mutate the shared graph last.
 
-    The stage seed is ``seed + stage_index``. It is recorded in each checkpoint
-    and gives distinct, deterministic stochastic streams without adding
-    another paper-governed recipe field.
+    The stage seed is ``seed + stage_index * STREAM_STRIDE``. It is recorded in
+    each checkpoint and gives distinct, deterministic stochastic streams
+    without adding another paper-governed recipe field. The stride is what
+    makes them distinct: a stage walks one view key per optimiser step from
+    its own seed upwards, so consecutively numbered stage seeds would hand
+    stage ``i`` step 1 the key stage ``i + 1`` already used at step 0.
     """
     sources = dict(batches)
     expected = tuple(stage.name for stage in run.stages)
@@ -696,7 +718,7 @@ def run_program(
             inputs,
             treatment_cardinality=run.recipe.schema.treatment_cardinality,
         )
-        stage_seed = seed + index
+        stage_seed = seed + index * STREAM_STRIDE
         if compiled.executor == "gradient":
             result = _run_gradient_or_action(
                 run,
@@ -920,7 +942,7 @@ def _run_cross_fit(
         )
         if initialise_from is not None:
             _restore_checkpoint(run, initialise_from)
-        fold_seed = seed + offset
+        fold_seed = seed + offset * STREAM_STRIDE
         fold_result = _run_stage(
             run,
             compiled,
@@ -1034,7 +1056,12 @@ def _pseudo_predictions(
             state = run.state(
                 compiled,
                 batch,
-                rng_key=(seed * 1_000_000_007 + fold * 1_000_003 + batch_index),
+                # The held-out prediction passes continue this stage or fold's
+                # own key run rather than starting a second scheme: training
+                # consumed `seed .. seed + steps - 1`, so prediction takes the
+                # keys directly above. Multiplying the seed instead put these
+                # keys back among the training keys of a low-seeded run.
+                rng_key=seed + compiled.steps + batch_index,
                 teacher_graph=teacher.graph if teacher is not None else None,
             )
             rows = resolve_rows(batch, *(compiled.action_rows or ("all",)))
@@ -1169,6 +1196,14 @@ def _run_stage(
     fold: int | None = None,
 ) -> StageResult:
     """Execute one already-resolved stage for `run_stage` or `run_program`."""
+    if compiled.steps > MAX_STAGE_STEPS:
+        raise TrainingError(
+            f"stage {compiled.name!r} runs {compiled.steps} steps, more than "
+            f"the {MAX_STAGE_STEPS} its share of the {STREAM_STRIDE}-wide gap "
+            "between sibling stage and fold seeds allows; its view keys would "
+            "collide with the next stage's. Widen STREAM_STRIDE before "
+            "running a stage this long."
+        )
     spec = compiled.optimiser
     graph = run.graph
     torch.manual_seed(seed)
@@ -1208,7 +1243,12 @@ def _run_stage(
                     optimiser,
                     tensors,
                     step,
-                    rng_key=seed * 1_000_000_007 + step,
+                    # The caller owns the benchmark's random streams. A stage
+                    # seed is therefore the first view key and each optimiser
+                    # step advances it once. Mean Teacher card §6 pins exactly
+                    # `s_r + 10000 + step`; multiplying the supplied seed here
+                    # silently ran a different reviewed protocol.
+                    rng_key=seed + step,
                     teacher=teacher,
                 )
                 records.append(
@@ -1470,6 +1510,8 @@ def _set_learning_rate(optimiser: torch.optim.Optimizer, lr: float) -> float:
 
 
 __all__ = [
+    "MAX_STAGE_STEPS",
+    "STREAM_STRIDE",
     "BatchSource",
     "BatchSources",
     "ProgramResult",

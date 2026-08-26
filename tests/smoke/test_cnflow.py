@@ -25,7 +25,12 @@ from xty2.recipes import cnflow
 from xty2.training import StageResult, run_stage
 
 FEATURES = 6
-TRAIN_ROWS = 128
+# Sixty-four complete cases made this load-bearing directional assertion
+# dependent on small floating-point/optimiser changes across supported Torch
+# releases. Keep the reviewed 50% MCAR mechanism, fit, pairing and 0.05-nat
+# threshold, but give both arms enough population support for the assertion to
+# test marginalisation rather than one 64-row draw.
+TRAIN_ROWS = 512
 TEST_ROWS = 512
 BATCH_SIZE = 48
 STEPS = 3_000

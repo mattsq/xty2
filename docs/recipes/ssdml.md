@@ -1,6 +1,6 @@
 # Recipe spec card: ssdml
 
-**Status:** `smoke-passing`
+**Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 ---
@@ -213,6 +213,10 @@ data:
 | 6 | Run one fixed five-fold split and no repeated sample splitting. | P10 carries one `fold_id`; repeated splitting is not needed to prove the executor seam. | Higher Monte Carlo variance than repeated DML. |
 | 7 | Preserve observed treatments and hard-fill only missing rows. | This is the P10 functional join contract. | Avoids classifier error on gold labels; the semi-supervised gain/loss comes only from formerly missing rows. |
 
+### Tier 2 outcome
+
+On 2026-08-24, commit `d060df351f2fe8bac6d951c3757506c684d8b408` produced a `deviating` result: This matches the predeclared project-local staged-imputation IRM target. It validates deterministic executor/artifact plumbing and does not transfer the DML paper's inference claim to hard labels. Failed target(s): staged_absolute_ATE_error was 0.423247 +/- 0.0131 against mean <= 0.3.
+
 ## 6. Reproduction target
 
 The paper's Monte Carlo tables assume fully observed treatment. They cannot
@@ -299,7 +303,7 @@ reproduction:
 
 | Date | Commit | Metric | Value +/- stderr | Within tolerance? |
 |---|---|---|---|---|
-| | | | | |
+| 2026-08-24 | `d060df351f2fe8bac6d951c3757506c684d8b408` | staged_absolute_ATE_error<br>oracle_treatment_absolute_ATE_error<br>out_of_fold_without_y<br>finite_complete_clipped_state<br>deterministic_array_state<br>source_batch_unchanged | 0.423247 +/- 0.0131<br>0.0334739 +/- 0.00624<br>1 +/- 0<br>1 +/- 0<br>1 +/- 0<br>1 +/- 0 | no |
 
 ## 7. Unknowns
 

@@ -12,6 +12,8 @@ from torch import Tensor
 from xty2.core import (
     DEFAULT,
     ArtifactError,
+    CompiledRun,
+    CompiledStage,
     CompileError,
     ComponentGraph,
     Executor,
@@ -130,6 +132,7 @@ def _p10_recipe(
     allow_leakage: bool = False,
     source_port: Port = Port.T_GIVEN_XY,
     action_rows: Rows = "t_missing",
+    steps: int = 1,
 ) -> Recipe:
     source_trainable: tuple[str, ...]
     if source_port == Port.T_GIVEN_XY:
@@ -160,7 +163,7 @@ def _p10_recipe(
                     trainable=source_trainable,
                     action=PseudoLabelAction(port=source_port, rows=action_rows),
                     executor=executor,
-                    steps=1,
+                    steps=steps,
                 ),
                 stage(
                     name="outcome",
@@ -499,3 +502,39 @@ def test_loading_rechecks_fold_disjointness_and_rejects_overlap(
 
     with pytest.raises(ArtifactError, match="trained on that same row"):
         PseudoLabels.load(forged, run)
+
+
+@pytest.mark.parametrize("seed", [0, 23])
+def test_folds_never_share_a_view_key(
+    seed: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Cross-fitting numbers its fold seeds the same way `run_program` numbers
+    # its stage seeds, so it inherits the same collision if they sit one apart:
+    # each fold walks one view key per optimiser step from its own seed, and
+    # fold i step 1 would reuse fold i+1 step 0's key.
+    steps = 4
+    run = compile(_p10_recipe(executor="cross_fit", steps=steps))
+
+    keys: list[int] = []
+    original = type(run).state
+
+    def spy(
+        self: CompiledRun,
+        stage: str | CompiledStage,
+        batch: XTYBatch,
+        *,
+        rng_key: int = 0,
+        teacher_graph: ComponentGraph | None = None,
+    ) -> State:
+        keys.append(rng_key)
+        return original(
+            self, stage, batch, rng_key=rng_key, teacher_graph=teacher_graph
+        )
+
+    monkeypatch.setattr(type(run), "state", spy)
+    run_cross_fit(run, "labels", [_fold_batch()], seed=seed)
+
+    # Two folds of `steps` training keys each, plus one held-out prediction
+    # pass per fold.
+    assert len(keys) == 2 * (steps + 1)
+    assert len(set(keys)) == len(keys)
