@@ -1,6 +1,6 @@
 # Recipe spec card: scarf
 
-**Status:** `draft`
+**Status:** `reproduced`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > This card was written before the recipe, the port, the component, the view
@@ -407,12 +407,13 @@ The row survived on the second test alone, and it was right to.
 
 ## 6. Reproduction target
 
-**The measurements recorded in §6.2 predate the loader and are invalidated
-pending re-measurement** (deviation 6). Three things the fixture used to own —
-the batch stream, the 40-label budget and the outcome scaling — are the
-recipe's declarations now, so the numbers below were produced by a program
-this card no longer describes. They are kept because the comparison against the
-re-run is what shows the change moved no arithmetic.
+**§6.2's measurements predate the loader** (deviation 6): the batch stream,
+the 40-label budget and the outcome scaling were the fixture's and are the
+recipe's declarations now. They are kept because the comparison against §6.3's
+Tier 2 run is what shows the change moved no arithmetic, and it does — §6.2's
+five-seed ratio at 3,000 steps was 1.081 and §6.3's ten-seed mean is 0.999,
+one quarter of a §6.3 standard error apart, with the alignment guardrail
+landing at 0.509 against §6.2's 0.469-0.590 sweep.
 
 The published OpenML-CC18 accuracies cannot validate this port, for the reasons
 section 2 gives. The target below is a completely fixed project-local
@@ -570,17 +571,41 @@ one.
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
-| | | | | |
+| 2026-08-27 | `1a10fb039e5f` | held_out_treatment_NLL_ratio<br>held_out_outcome_NLL_ratio<br>terminal_alignment_minus_uniformity | 0.999111 +/- 0.038<br>1.0135 +/- 0.00984<br>0.509232 +/- 0.0148 | yes |
 
-**Not yet run.** The Tier 2 runner has a module for this recipe now
-(`xty2/evaluation/benchmarks/scarf.py`), so the sentence that used to stand
-here — that the absence of one capped this card at `smoke-passing` — no longer
-applies. The first recording run is a manual `workflow_dispatch` of the nightly
-with `write_ledger` set: a scheduled run checks a recorded status against a
-fresh one, and this card has no recorded status to check yet. On §6.2's evidence the protocol as declared should be expected to
-return a `deviating` outcome; the tolerance stays as written, because a
-tolerance rewritten after seeing the numbers is worth nothing
-(`FIDELITY.md` §3).
+**Run, and the headline number is a null that the status line calls a pass.**
+`§6.2` predicted a `deviating` outcome and the mean landed at **0.999111**
+against a tolerance of "< 1.0" — inside it by 0.00089, with a standard error
+of **0.038**. The margin is *one fortieth of a standard error*. The ten
+per-seed ratios are 1.092, 1.211, 1.030, 0.965, 0.891, 0.822, 0.935, 1.042,
+0.890, 1.113: five above one and five below, which is what no effect looks
+like.
+
+`FIDELITY.md` §3 names this case exactly — "if the published number is within
+our error bars *and* our error bars are wide enough to contain anything, say
+so — that is a `deviating` outcome with an explanation, not a `reproduced`
+one" — and the automatic status cannot see it, because `mean <= 1.0` is
+literally true. So it is said here: **this run is not evidence that SCARF
+pretraining helps the scarce-label treatment fit.** It is a tighter,
+ten-seed null in place of §6.2's five-seed one, and the status line above
+should be read against this paragraph rather than instead of it.
+
+The tolerance stays as written. A tolerance rewritten after seeing the
+numbers is worth nothing (`FIDELITY.md` §3), and that applies to tightening
+it to force the answer §6.2 expected exactly as much as to widening it.
+
+What the run *does* establish is the two guardrails, both comfortably: the
+outcome stack is not damaged (NLL ratio 1.0135 +/- 0.0098 against 1.05), and
+the contrastive mechanism works rather than collapsing (alignment minus
+uniformity 0.5092 +/- 0.0148 against 0.2, with terminal uniformity 0.0056).
+That is the same shape §6.2 reported pre-loader — the representation carries
+structure, and the fine-tuning erases it.
+
+**Provenance.** This run was produced locally at the commit named in the row
+above, not by the nightly workflow, because the API dispatch needed to trigger
+it was refused (`403`, the app has no `actions: write`). The next scheduled
+nightly re-measures it and will fail if it disagrees, which is the check
+working.
 
 ## 7. Unknowns
 

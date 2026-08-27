@@ -246,11 +246,7 @@ than described in this paragraph.
 
 ### Tier 2 outcome
 
-**This result predates the loader and is invalidated pending a re-run**
-(deviation 5). It is kept rather than deleted, because the comparison between
-it and the re-run is the evidence that the change moved no arithmetic.
-
-On 2026-08-24, commit `d060df351f2fe8bac6d951c3757506c684d8b408` produced a `deviating` result: This evaluates the implemented TARNet extension against the IHDP within-sample estimand, with the paper's target retained unchanged. The pinned reference repository ships 100 of the declared 1,000 IHDP realisations. The reviewed card also requests only ten seeds, so P12 runs realisations 1-10 with one deterministic fit each. That cannot establish the published 1,000-realisation centre and is recorded as deviating even if its ten-run mean lies inside the numeric tolerance. Failed target(s): sqrt_PEHE_in_sample was 1.66989 +/- 0.178 outcome units against 0.78 <= mean <= 0.98 outcome units.
+On 2026-08-27, commit `1a10fb039e5f` produced a `deviating` result: This evaluates the implemented TARNet extension against the IHDP within-sample estimand, with the paper's target retained unchanged. The pinned reference repository ships 100 of the declared 1,000 IHDP realisations. The reviewed card also requests only ten seeds, so P12 runs realisations 1-10 with one deterministic fit each. That cannot establish the published 1,000-realisation centre and is recorded as deviating even if its ten-run mean lies inside the numeric tolerance. Failed target(s): sqrt_PEHE_in_sample was 1.46891 +/- 0.117 outcome units against 0.78 <= mean <= 0.98 outcome units.
 
 ## 6. Reproduction target
 
@@ -277,6 +273,7 @@ amended and reviewed before the run.
 | Date | Commit | Metric | Value +/- stderr | Within tolerance? |
 |---|---|---|---|---|
 | 2026-08-24 | `d060df351f2fe8bac6d951c3757506c684d8b408` | sqrt_PEHE_in_sample | 1.66989 +/- 0.178 outcome units | no |
+| 2026-08-27 | `1a10fb039e5f` | sqrt_PEHE_in_sample | 1.46891 +/- 0.117 outcome units | no |
 
 ### 6.2 P5 single-stage acceptance
 
