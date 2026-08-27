@@ -319,10 +319,18 @@ cross-entropy. Its descendants then modify or add mechanisms around that core:
   > is the price §15.2 asks for until FreeMatch shows the shape.
   >
   > **It reproduces, and the way it first did not is the more useful half.**
-  > `flexmatch.md` §6.2 measures a paired ratio below 1.0 against a
-  > constant-gate arm on five seeds of five, with the curriculum engaging
-  > within 32-76 steps and `T(c)` reaching `tau`. Getting there required fixing
-  > a mechanic this backlog entry should flag for every descendant below.
+  > `flexmatch.md` §6.2 measures a paired ratio of 0.977 +/- 0.014 against a
+  > constant-gate arm over five seeds at the declared budget, ahead on four of
+  > five, with the curriculum engaging on all five - first mark between steps 32
+  > and 76, `T(c)` reaching `tau`. What it does *not* establish is that the
+  > per-class half of CPL earns that: with `K = 2` both classes reach `beta = 1`
+  > together, and the class-imbalanced probe in §6.3 is a null with error bars
+  > an order of magnitude wider. Anyone wanting that question answered needs a
+  > fixture with more treatment levels, which is the one thing this section's
+  > K = 2 project DGP cannot supply at any seed count.
+  >
+  > Getting even the paired result required fixing a mechanic this backlog entry
+  > should flag for every descendant below.
   >
   > **A gated method hides a strong view that is not label-preserving; an
   > ungated phase does not.** FixMatch §2.3 asks a strong augmentation to be

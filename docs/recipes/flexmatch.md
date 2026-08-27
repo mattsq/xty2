@@ -59,7 +59,11 @@ cites a reference implementation, and no row should be read as though it did.
   training the way algorithm 1 prescribes, and that on the fixed project-local
   target in §6 it improves held-out treatment prediction against an otherwise
   identical constant-gate arm without damaging the outcome stack. §6.2 measures
-  the last of those on five replicate seeds and finds it on all five.
+  the last of those on five replicate seeds and finds it inside the declared
+  tolerance, ahead on four of five. It does **not** claim that CPL's per-class
+  differentiation is what earns that: with `K = 2` both classes reach
+  `beta = 1` together, the imbalanced probe in §6.3 is a null with wide error
+  bars, and limitation 3 below says why no seed count would settle it here.
 
   **An earlier version of this card claimed the opposite, and §5.2 and §6.2
   record why, because the error is more instructive than the result.** The
@@ -110,10 +114,14 @@ cites a reference implementation, and no row should be read as though it did.
      a near-balanced assignment both classes reach `beta = 1` together and
      `T_t(c)` collapses back to `tau` for both. What survives on such a fixture
      is the warm-up trajectory of (1), not the per-class differentiation the
-     paper's CIFAR-100 and STL-10 gains come from. §6.1 therefore declares a
-     deliberately **class-imbalanced** diagnostic variant, because a card that
-     measured only the balanced fixture would be reporting on the half of the
-     method that is inert.
+     paper's CIFAR-100 and STL-10 gains come from. §6.1 declares a deliberately
+     **class-imbalanced** diagnostic variant to probe that, and §6.3 records
+     what it found: a null with error bars an order of magnitude wider than the
+     primary fixture's, because the scarce class makes the held-out NLL that
+     much noisier. So the per-class half of CPL is **not** validated by this
+     card in either direction, and no seed count on a two-class fixture would
+     settle it — with `K = 2` both classes reach `beta = 1` together. A fixture
+     with more treatment levels is what that question needs.
   4. **A pseudo-label on `t` is not a label on `y`.** As in `fixmatch`: the
      pseudo-labelled rows train `p(t | x)` only, never `ObservedOutcomeNLL`, so
      no inferred treatment is used as if observed and the `DESIGN.md` §7.2
@@ -679,10 +687,40 @@ the training-free check that would have caught it earlier is §5.2's table.
 **No Tier 2 runner exists for this card yet**, and that is stated here rather
 than left to be inferred from an empty table. `xty2/evaluation/benchmarks/` has
 one module per recipe that has been Tier 2'd and none for this one, so §6's
-target is declared and unmeasured — the same position `doublematch` shipped in.
-Writing that runner is what turns §6.2's single seed into the ten-seed result
-§6 asks for, and it is the next thing this card needs; the status line stays
-`draft` until it has one and a reviewer has signed §8.
+target is declared and unmeasured at the declared ten seeds — the same position
+`doublematch` shipped in. Writing that runner is what turns §6.2's five seeds
+into the result §6 asks for, and it is the next thing this card needs; the
+status line stays `draft` until it has one and a reviewer has signed §8.
+
+#### The imbalanced variant
+
+§6.1's diagnostic fixture, same protocol, five seeds, 3,000 steps, the same
+paired arms. It exists because §2's third limitation says a balanced two-class
+fixture leaves CPL's *per-class* differentiation with nothing to do.
+
+| `r` | 0 | 1 | 2 | 3 | 4 | mean ± stderr |
+|---|---|---|---|---|---|---|
+| held-out `p(t\|x)` NLL, EMA — FlexMatch | 0.255 | 0.255 | 0.282 | 0.214 | 0.259 | 0.253 ± 0.011 |
+| held-out `p(t\|x)` NLL, EMA — constant gate | 0.225 | 0.304 | 0.245 | 0.220 | 0.274 | 0.254 ± 0.016 |
+| ratio | 1.133 | 0.839 | 1.151 | 0.973 | 0.945 | 1.008 ± 0.059 |
+| marginal-frequency baseline | 0.445 | 0.453 | 0.435 | 0.444 | 0.450 | 0.445 |
+
+**This is a null, and at this precision it is not evidence either way.** The
+paired difference is `-0.0006 ± 0.0157` — four hundredths of a standard error —
+and the per-seed ratios run from 0.84 to 1.15, an order of magnitude more
+spread than the primary fixture's 0.95 to 1.02. The scarce class is why: with
+`p(t = 1) ≈ 0.16` the held-out NLL is dominated by a sixth of the rows, and five
+seeds cannot resolve a percent-level effect through that. Reporting it as "CPL
+does not help when classes are imbalanced" would be reading a direction out of
+noise, which is the mistake §6.2's first draft already made once.
+
+What the run does establish is that the mechanism is not disturbed by the
+regime: the curriculum engages on all five seeds, first mark between steps 16
+and 229, marks reaching 100% of the population, `max_c T(c)` at `tau`. Whether
+the per-class half of CPL *earns* anything on a two-class fixture is a question
+this design cannot answer at any seed count worth paying for — with `K = 2` both
+classes reach `beta = 1` together — and the honest next step is a fixture with
+more treatment levels, which is a card amendment rather than a longer run.
 
 ## 7. Unknowns
 
