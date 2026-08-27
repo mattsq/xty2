@@ -102,7 +102,10 @@ def test_deviation_writeback_adds_the_required_section5_explanation() -> None:
     updated = update_card_text(_card(), result)
     assert "**Status:** `deviating`" in updated
     assert "### Tier 2 outcome" in updated
-    assert "Failed target(s): error was 0.4 +/- 0 against mean <= 0.2." in updated
+    assert (
+        "Failed target(s): error was 0.4 +/- 0 against mean <= 0.2, "
+        "by at least one stderr."
+    ) in updated
     assert updated.index("### Tier 2 outcome") < updated.index(
         "## 6. Reproduction target"
     )
@@ -250,3 +253,93 @@ def test_every_recipe_module_is_in_the_tier2_suite() -> None:
         if not path.stem.startswith("_") and path.stem != "common"
     }
     assert modules == set(RECIPES)
+
+
+# ---------------------------------------------------------------------------
+# FIDELITY.md §3 — a match its own error bars swamp is not a match
+# ---------------------------------------------------------------------------
+
+
+def test_a_target_cleared_by_less_than_one_stderr_does_not_pass() -> None:
+    """The rule §3 states in prose, checked rather than trusted.
+
+    `scarf`'s first Tier 2 run is the worked example: a mean 0.00089 inside a
+    tolerance whose standard error was 0.038, recorded as `reproduced` because
+    `mean <= 1.0` was literally true. §3 had always said such a run "is a
+    `deviating` outcome with an explanation, not a `reproduced` one"; nothing
+    checked it.
+    """
+    # Mean 0.999, target 1.0, stderr well above the 0.001 margin.
+    noisy = MetricResult.upper_bound("ratio", [0.9, 1.098], 1.0)
+    assert noisy.mean == pytest.approx(0.999)
+    margin = noisy.margin
+    assert margin == pytest.approx(0.001)
+    assert margin is not None and noisy.stderr > margin
+    assert noisy.within_noise is True
+    assert noisy.passed is False
+
+
+def test_a_target_cleared_by_more_than_one_stderr_passes() -> None:
+    clear = MetricResult.upper_bound("ratio", [0.80, 0.84], 1.0)
+    margin = clear.margin
+    assert margin == pytest.approx(0.18)
+    assert margin is not None and clear.stderr < margin
+    assert clear.within_noise is False
+    assert clear.passed is True
+
+
+def test_a_deterministic_guardrail_is_untouched_by_the_rule() -> None:
+    """`1 +/- 0` is a check, not a statistic, and the rule must not bite it.
+
+    Three of `cycle_dual`'s required metrics and three of `ssdml`'s are exactly
+    this shape — out-of-fold provenance, batch immutability, a rejected unsafe
+    recipe. A rule that failed them for having no spread would turn a proof
+    into a coin toss.
+    """
+    guardrail = MetricResult.lower_bound("out_of_fold", [1.0, 1.0, 1.0], 1.0)
+    assert guardrail.stderr == 0.0
+    assert guardrail.margin == pytest.approx(0.0)
+    assert guardrail.within_noise is False
+    assert guardrail.passed is True
+
+
+def test_a_miss_and_a_near_miss_read_differently_in_the_explanation() -> None:
+    missed = BenchmarkResult(
+        recipe="example",
+        commit="abc1234",
+        date="2026-08-24",
+        spec_digest="digest",
+        metrics=(MetricResult.upper_bound("error", [0.4, 0.4], 0.2),),
+        interpretation="A fixed test interpretation.",
+    )
+    near = BenchmarkResult(
+        recipe="example",
+        commit="abc1234",
+        date="2026-08-24",
+        spec_digest="digest",
+        metrics=(MetricResult.upper_bound("error", [0.1, 0.298], 0.2),),
+        interpretation="A fixed test interpretation.",
+    )
+    assert missed.status == "deviating"
+    assert near.status == "deviating"
+    assert "Failed target(s)" in missed.explanation
+    assert "Within noise of the target" not in missed.explanation
+    assert "Within noise of the target" in near.explanation
+    assert "Failed target(s)" not in near.explanation
+
+
+def test_an_interval_measures_its_margin_to_the_nearer_edge() -> None:
+    """A mean pressed against either edge is equally uninformative."""
+    # Mean 0.80 sits 0.02 above the lower edge and 0.18 below the upper one,
+    # so the nearer edge is what decides.
+    tight = MetricResult.interval("value", [0.75, 0.85], 0.78, 0.98)
+    assert tight.margin == pytest.approx(0.02)
+    assert tight.stderr == pytest.approx(0.05)
+    assert tight.within_noise is True
+    assert tight.passed is False
+
+    # The same mean and the same edges, measured precisely enough to clear.
+    settled = MetricResult.interval("value", [0.795, 0.805], 0.78, 0.98)
+    assert settled.margin == pytest.approx(0.02)
+    assert settled.stderr == pytest.approx(0.005)
+    assert settled.passed is True

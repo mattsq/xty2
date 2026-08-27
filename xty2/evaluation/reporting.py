@@ -237,16 +237,60 @@ class MetricResult:
 
     @property
     def passed(self) -> bool | None:
+        """Did this metric clear its target by more than its own noise?
+
+        Two conditions, not one. The mean must satisfy the relation, **and**
+        the margin by which it does must be at least one standard error.
+
+        The second is `FIDELITY.md` §3, which the code did not implement until
+        `scarf`'s first Tier 2 run made the gap concrete: its mean landed
+        0.00089 inside a tolerance whose standard error was 0.038, and the
+        status line called it `reproduced`. §3 had already written the rule —
+        "if the published number is within our error bars *and* our error bars
+        are wide enough to contain anything, say so — that is a `deviating`
+        outcome with an explanation, not a `reproduced` one" — and a rule
+        stated in prose that nothing checks is the documentation rot this
+        project exists to stop.
+
+        A deterministic guardrail is unaffected by construction: those report
+        `1 +/- 0`, and a zero standard error is cleared by any non-negative
+        margin. The rule bites exactly where the statistic is noisy, which is
+        where it is meant to.
+        """
+        margin = self.margin
+        if margin is None:
+            return None
+        return margin >= self.stderr
+
+    @property
+    def margin(self) -> float | None:
+        """How far inside its target the mean sits; negative when outside.
+
+        `None` for an informational metric, which has no target to be inside
+        of. For an interval it is the distance to the *nearer* edge, because a
+        mean pressed against either one is equally uninformative.
+        """
         if self.relation == "info":
             return None
         assert self.target is not None
         if self.relation == "between":
             assert isinstance(self.target, tuple)
-            return self.target[0] <= self.mean <= self.target[1]
+            return min(self.mean - self.target[0], self.target[1] - self.mean)
         assert isinstance(self.target, int | float)
         if self.relation == "<=":
-            return self.mean <= self.target
-        return self.mean >= self.target
+            return float(self.target) - self.mean
+        return self.mean - float(self.target)
+
+    @property
+    def within_noise(self) -> bool:
+        """Does the mean satisfy its target by less than one standard error?
+
+        The distinction the ledger's "Within tolerance?" column could not draw
+        on its own: a metric that is *nominally* inside its target and
+        statistically indistinguishable from being outside it.
+        """
+        margin = self.margin
+        return margin is not None and 0.0 <= margin < self.stderr
 
     @property
     def criterion(self) -> str:
@@ -256,9 +300,12 @@ class MetricResult:
         suffix = f" {self.unit}" if self.unit else ""
         if self.relation == "between":
             assert isinstance(self.target, tuple)
-            return f"{self.target[0]:g} <= mean <= {self.target[1]:g}{suffix}"
+            return (
+                f"{self.target[0]:g} <= mean <= {self.target[1]:g}{suffix}, "
+                "by at least one stderr"
+            )
         assert isinstance(self.target, int | float)
-        return f"mean {self.relation} {self.target:g}{suffix}"
+        return f"mean {self.relation} {self.target:g}{suffix}, by at least one stderr"
 
     def summary(self) -> str:
         suffix = f" {self.unit}" if self.unit else ""
@@ -267,6 +314,8 @@ class MetricResult:
     def as_json(self) -> dict[str, Any]:
         return {
             "name": self.name,
+            "margin": self.margin,
+            "within_noise": self.within_noise,
             "values": list(self.values),
             "mean": self.mean,
             "stderr": self.stderr,
@@ -343,13 +392,26 @@ class BenchmarkResult:
         parts = [self.interpretation.strip()]
         if self.protocol_deviation is not None:
             parts.append(self.protocol_deviation.strip())
-        failed = [
+        # A target missed outright and one cleared by less than its own noise
+        # are different findings, and collapsing them is what would let a
+        # near-miss read as a failure of the method rather than of the
+        # evidence (`FIDELITY.md` §3).
+        missed = [
             f"{metric.name} was {metric.summary()} against {metric.criterion}"
             for metric in self.metrics
-            if metric.passed is False
+            if metric.passed is False and not metric.within_noise
         ]
-        if failed:
-            parts.append("Failed target(s): " + "; ".join(failed) + ".")
+        noisy = [
+            f"{metric.name} was {metric.summary()} against {metric.criterion}, "
+            f"inside its target by {metric.margin:.3g} — less than its own "
+            "standard error, so the run does not distinguish it from a miss"
+            for metric in self.metrics
+            if metric.within_noise
+        ]
+        if missed:
+            parts.append("Failed target(s): " + "; ".join(missed) + ".")
+        if noisy:
+            parts.append("Within noise of the target: " + "; ".join(noisy) + ".")
         return " ".join(parts)
 
     def metric(self, name: str) -> MetricResult:

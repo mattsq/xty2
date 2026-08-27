@@ -1,6 +1,6 @@
 # Recipe spec card: scarf
 
-**Status:** `reproduced`
+**Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > This card was written before the recipe, the port, the component, the view
@@ -405,6 +405,10 @@ so §11.2's Q1 — "some key in some card's §4 checklist cannot be honoured" �
 never fired, while `FIDELITY.md` §5's "we would have implemented the paper" did.
 The row survived on the second test alone, and it was right to.
 
+### Tier 2 outcome
+
+On 2026-08-27, commit `40265928e87a` produced a `deviating` result: This is the predeclared project-local SCARF mechanism target: does an encoder trained only on the covariance of x help a scarce-label treatment fit. It is not a reproduction of Bahri et al., whose evidence is 69 OpenML-CC18 datasets under three label regimes and whose downstream task carries no treatment. Within noise of the target: held_out_treatment_NLL_ratio was 0.999111 +/- 0.038 against mean <= 1, by at least one stderr, inside its target by 0.000889 — less than its own standard error, so the run does not distinguish it from a miss.
+
 ## 6. Reproduction target
 
 **§6.2's measurements predate the loader** (deviation 6): the batch stream,
@@ -572,23 +576,23 @@ one.
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
 | 2026-08-27 | `1a10fb039e5f` | held_out_treatment_NLL_ratio<br>held_out_outcome_NLL_ratio<br>terminal_alignment_minus_uniformity | 0.999111 +/- 0.038<br>1.0135 +/- 0.00984<br>0.509232 +/- 0.0148 | yes |
+| 2026-08-27 | `40265928e87a` | held_out_treatment_NLL_ratio<br>held_out_outcome_NLL_ratio<br>terminal_alignment_minus_uniformity | 0.999111 +/- 0.038<br>1.0135 +/- 0.00984<br>0.509232 +/- 0.0148 | no |
 
-**Run, and the headline number is a null that the status line calls a pass.**
-`§6.2` predicted a `deviating` outcome and the mean landed at **0.999111**
-against a tolerance of "< 1.0" — inside it by 0.00089, with a standard error
-of **0.038**. The margin is *one fortieth of a standard error*. The ten
-per-seed ratios are 1.092, 1.211, 1.030, 0.965, 0.891, 0.822, 0.935, 1.042,
-0.890, 1.113: five above one and five below, which is what no effect looks
-like.
+**Run, and `§6.2` called it: the outcome is `deviating`.** The mean landed at
+**0.999111** against a tolerance of "< 1.0" — nominally inside it, by 0.00089,
+with a standard error of **0.038**. The margin is *one fortieth of a standard
+error*. The ten per-seed ratios are 1.092, 1.211, 1.030, 0.965, 0.891, 0.822,
+0.935, 1.042, 0.890, 1.113: five above one and five below, which is what no
+effect looks like.
 
-`FIDELITY.md` §3 names this case exactly — "if the published number is within
-our error bars *and* our error bars are wide enough to contain anything, say
-so — that is a `deviating` outcome with an explanation, not a `reproduced`
-one" — and the automatic status cannot see it, because `mean <= 1.0` is
-literally true. So it is said here: **this run is not evidence that SCARF
-pretraining helps the scarce-label treatment fit.** It is a tighter,
-ten-seed null in place of §6.2's five-seed one, and the status line above
-should be read against this paragraph rather than instead of it.
+`FIDELITY.md` §3 names this case exactly, and now enforces it — a required
+metric passes only when its margin is at least one standard error, so a match
+its own error bars swamp is recorded as the null it is. This card is the run
+that turned that sentence from prose into a check, and it is the only one of
+the seven the check moves; the next tightest margin in the repository is
+`fixmatch`'s at 4.7 standard errors. **This run is not evidence that SCARF
+pretraining helps the scarce-label treatment fit**, and it is a tighter,
+ten-seed statement of the null §6.2 already reported at five.
 
 The tolerance stays as written. A tolerance rewritten after seeing the
 numbers is worth nothing (`FIDELITY.md` §3), and that applies to tightening
