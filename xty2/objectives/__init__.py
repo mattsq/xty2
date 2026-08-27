@@ -7,11 +7,12 @@ It never weights itself, never calls `.backward()`, never mutates state and
 never touches parameters — weighting is the mixer's job (§6) and stepping is
 the executor's (§7).
 
-Six objectives exist so far: the three likelihood terms the first recipe needs
-(P3, P5), the view-keyed ``ConsistencyLoss`` (P6), the confidence-gated
-``PseudoLabelTreatmentNLL`` that FixMatch is assembled from, and the
-``InfoNCEContrastive`` that SCARF is. The rest arrive with the recipes that
-consume them; migration is lazy by design (§11).
+Seven objectives exist so far: the three likelihood terms the first recipe
+needs (P3, P5), the view-keyed ``ConsistencyLoss`` (P6), the confidence-gated
+``PseudoLabelTreatmentNLL`` that FixMatch is assembled from, the
+``InfoNCEContrastive`` that SCARF is, and the ``CosineFeatureConsistency``
+DoubleMatch adds to FixMatch. The rest arrive with the recipes that consume
+them; migration is lazy by design (§11).
 """
 
 from xty2.objectives.consistency import (
@@ -22,6 +23,10 @@ from xty2.objectives.consistency import (
     StopGrad,
 )
 from xty2.objectives.contrastive import InfoNCEContrastive
+from xty2.objectives.feature_consistency import (
+    CosineFeatureConsistency,
+    FeatureStopGrad,
+)
 from xty2.objectives.marginal import (
     GRAD_PATHS,
     GradPath,
@@ -40,6 +45,8 @@ __all__ = [
     "STOP_GRADIENTS",
     "ConsistencyDivergence",
     "ConsistencyLoss",
+    "CosineFeatureConsistency",
+    "FeatureStopGrad",
     "GradPath",
     "InfoNCEContrastive",
     "MissingTreatmentMarginalNLL",

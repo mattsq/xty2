@@ -51,12 +51,21 @@ dense layer on top of it — which is the structure this port maps onto.
   enough labels the *pseudo-label* term can be dropped entirely at almost no
   cost. This card claims only that the mechanism is faithfully assembled around
   `p(t | x)` and `X_REPR` in xty2, and that on the fixed project-local target in
-  §6 the added term improves held-out treatment prediction over the same fit
-  with `w_s = 0` — which is FixMatch, by the paper's own sentence in §III.
+  §6 the term does what eq. (3) says it does — it reaches a real alignment on
+  every row, including the ones the gate rejects, without collapsing the
+  representation. Whether it *improves* held-out treatment prediction over the
+  same fit with `w_s = 0` (which is FixMatch's loss, by the paper's own
+  sentence in §III, on this recipe's encoder) is **not** claimed on the
+  evidence in §6.2: the EMA the paper reports from says yes by 3.8% and the
+  network under it says no by 8.8%, and that is a ten-seed question.
 - **Not claimed:** no image number is claimed, and no training-time claim is
   made at all: §6 fixes the step budget for attributability (deviation 3), so
   "reaches the same accuracy in a third of the steps" is a claim this protocol
-  is built not to be able to test.
+  is built not to be able to test. Nor is it claimed that this recipe beats
+  `fixmatch` — measured on §6.1's fixture it does not, because the encoder
+  eq. (3) needs (deviation 9) is worse for the propensity head than the
+  `row_l2` one `fixmatch` keeps, by more than eq. (3) recovers (§6.2). The
+  claim is about the term inside the architecture the term requires.
 
 Three things worth stating before the mechanics, because they are why this
 recipe was picked rather than the next one in the sequence.
@@ -77,8 +86,9 @@ budget tried — with the mechanism diagnosed as instance discrimination
 spending its capacity pushing apart exactly the same-treatment rows the
 propensity head wants together. Eq. (3) is the same family of idea with that
 term deleted: it has **no negatives**. If the SCARF diagnosis is right, a
-negative-free feature-consistency loss should not pay the same cost, and §6's
-paired comparison is where that either shows up or does not.
+negative-free feature-consistency loss should not pay the same cost. §6.2
+records how far the measurement got: the term learns without collapsing, and
+the propensity comparison it was supposed to settle came out mixed.
 
 **The two structural limitations of `fixmatch.md` §2 are inherited unchanged**,
 because this recipe inherits eqs. (1) and (2) unchanged. The confidence gate is
@@ -142,7 +152,7 @@ Two notes on the transcription, both from reading the reference:
 
 | Paper symbol | Meaning | xty2 Port | xty2 Objective / Component |
 |---|---|---|---|
-| `f` | backbone, up to the penultimate layer | `X_RAW -> X_REPR` | `MLPEncoder` |
+| `f` | backbone, up to the penultimate layer | `X_RAW -> X_REPR` | `MLPEncoder(normalisation="none")` — unnormalised activations, as the reference's `embeds` are (deviation 9) |
 | `g` | prediction head, the final layer of the classifier | `X_REPR -> T_GIVEN_X` | `CategoricalPropensity` |
 | `h` | dimension-preserving linear projection head | `X_REPR -> X_PROJ` | `ProjectionHead(widths=(200,), normalisation="none")` — one affine layer, no activation and no output normalisation |
 | `alpha(.)` | weak augmentation | — | `ViewSpec("weak_x")`, `FeatureMask(p=0.1)`, two draws |
@@ -267,7 +277,7 @@ architecture:
     categorical_propensity: linear logits
     projection_head: relu                        # inert: a one-layer head applies no activation (Tier 0 asserts the module is a single Linear)
   normalisation:
-    mlp_encoder: row_l2
+    mlp_encoder: none                            # deviation 9: eq. (3)'s target is an unnormalised penultimate activation; on the unit sphere the term collapses the representation
     tarnet_head: none
     categorical_propensity: none
     projection_head: none                        # eq. (3) normalises both sides itself; h is affine and nothing else
@@ -280,7 +290,7 @@ architecture:
     mlp_encoder: normal std=0.1/sqrt(fan_in), bias=0
     tarnet_head: normal std=0.1/sqrt(fan_in), bias=0
     categorical_propensity: normal std=0.1/sqrt(fan_in), bias=0
-    projection_head: torch.nn.Linear default (uniform +/- 1/sqrt(fan_in))    # ref impl uses Glorot normal; §7
+    projection_head: torch Linear default Kaiming-uniform    # uniform +/- 1/sqrt(fan_in); ref impl uses Glorot normal; §7
   output_parameterisation:
     tarnet_head: K means; fixed Gaussian scale=1.0
     categorical_propensity: K softmax logits
@@ -292,6 +302,11 @@ data:
   split_protocol: one fixed project-local DGP, split train/test by the section 6 fixture; no CIFAR/SVHN/STL protocol applies (deviation 1); training rows are assignment 'train'
   missingness_mechanism: treatment MCAR to a budget of 64 labelled rows, keyed by row_id  # deviation 7
 ```
+
+One line of that block is the only place this recipe departs from the shared
+P5 backbone, and it is deviation 9: `mlp_encoder` emits unnormalised
+activations. Everything else — widths, activation, dropout, initialisation, the
+outcome head, the propensity head — is the stack `fixmatch` and `tarnet` run.
 
 The two `ViewSpec`s are `fixmatch`'s, unchanged and imported from it rather than
 restated: §III-A says "We follow one of the augmentation schemes used in
@@ -309,11 +324,12 @@ rejected at compile time.
 | 1 | `judgement` | — | Apply DoubleMatch to categorical treatment assignment `p(t \| x)` and compose it with a causal outcome likelihood and exact marginalisation over the missing treatment. | The paper studies image classes. The project-local question is whether the rejected rows can be made to train the representation the propensity head reads, and whether that composes with the reviewed P5 stack. Identical to `fixmatch.md` deviation 1, and deliberately so: the two cards differ in one term. | No published image number applies. §6 measures the paired `w_s = 0` ablation, which by §III of the paper is FixMatch, so the comparison isolates eq. (3) and nothing else. |
 | 2 | `judgement` | — | Replace the flip/translate weak augmentation and the CTA+Cutout strong one with schema-aware feature masking at 10% and 10%-then-50%. | There is no image structure in a tabular XTY batch. Inherited verbatim from `fixmatch.md` deviation 2, which is what makes the two cards' numbers comparable. | Defines the invariance eq. (3) is trained to hold. A strong view that destroyed the treatment-predictive columns would make the term train the encoder toward a degenerate direction; §6's collapse guardrail is what would show it. |
 | 3 | `judgement` | — | Train for 3,000 optimiser steps rather than the paper's 352,000, with eq. (5)'s `K` set to the same 3,000. | The shared project-local budget, so that a difference between recipes is attributable to the recipe. | This is the deviation that costs the most here, and it is stated plainly: the paper's headline claim is about *training speed* (Fig. 3), which a fixed shared budget cannot measure. §2 therefore does not claim it. |
-| 4 | `judgement` | — | Retain the P5 TARNet architecture — a 3x200 ELU encoder with `row_l2` output, a linear propensity head, the outcome head — rather than a WideResNet. `d` is 200, not the paper's 128/256/512. | Holding the causal stack fixed is what makes the DoubleMatch addition attributable, and is the same decision `fixmatch.md` deviation 6 and `mean_teacher.md` deviation 10 record. | One consequence is specific to *this* term and is not cosmetic: `row_l2` makes `z_i` a unit vector, where the reference's `embeds` are unnormalised. Eq. (3) normalises both sides, so the target side is unaffected exactly; the strong side is not, because `h` is affine — `h(v/\|v\|) != h(v)/\|v\|` in the presence of a bias. The term is therefore evaluated on a differently-scaled input than the reference's, which is a property of the retained encoder rather than of this port. |
+| 4 | `judgement` | — | Retain the P5 TARNet architecture — a 3x200 ELU encoder, a linear propensity head, the outcome head — rather than a WideResNet. `d` is 200, not the paper's 128/256/512. | Holding the causal stack fixed is what makes the DoubleMatch addition attributable, and is the same decision `fixmatch.md` deviation 6 and `mean_teacher.md` deviation 10 record. | One consequence was specific to *this* term and was not cosmetic: the encoder's `row_l2` made `z_i` a unit vector where the reference's `embeds` are unnormalised, and `h` is affine, so the term was evaluated on a differently-scaled input than the reference's. This row predicted the interaction; §6.2 measured it and deviation 9 is what came of it. What remains here is the width and depth, which change nothing about eq. (3)'s form. |
 | 5 | `judgement` | — | Retain P5's `Ramp(0.0, 0.5, 1000)` on the marginal-likelihood term while both DoubleMatch weights stay constant. | The ramp belongs to the reviewed P5 term. Eq. (4) states `w_s` as a constant and the reference exposes it as a scalar flag, so neither published term is ramped. | Early steps are dominated by the supervised terms and by eq. (3) — which, unlike eq. (2), is at full strength from step 0 because it has no gate to open. That ordering is the paper's and is what §6.2 watches. |
 | 6 | `framework-limitation` | `augmentation-vocabulary` | No adaptive augmentation: the strong view's strength is fixed, where the reference stacks CTAugment. | Identical in substance to `fixmatch.md` deviation 10 — CTAugment learns per-operation magnitudes online from labelled probe images, and its operations have no tabular meaning. The prerequisite is a tabular operation set with magnitudes worth learning over; `FeatureMask`, `BoundedJitter` and `FeatureCorruption` are one scalar each. This card adds a second card paying for that row rather than a new argument. | Removes whatever adaptivity buys, from both unlabelled terms equally. It also removes a confound: the strong view's strength is a declared constant, so eq. (3)'s target is a fixed invariance rather than a moving one. |
 | 7 | `framework-limitation` | `batch-row-repetition` | Set the §6 label budget to 64 rather than the 40 of the paper's scarcest CIFAR-10 setting, holding `B = 64` and `mu = 7` at the paper's values. | `XTYBatch.row_id` is unique because artifacts and provenance are keyed by it, so a labelled quota of `B` cannot be drawn from a 40-label population without repeating a row. Lowering `B` instead would deviate from a number the paper reports rather than from one this card chose. Same wall, same reasoning and same ledger key as `fixmatch.md` deviation 12. | Slightly more supervision than the paper's scarcest regime, applied equally to both arms of §6's pair. It moves the comparison's baseline, not the mechanism under test. |
 | 8 | `judgement` | — | Do not implement the MSE (eq. 7) or softmax cross-entropy (eq. 8) alternatives to the cosine similarity. | §V-A evaluates all three and reports the cosine as clearly best, retuning `w_s` for each. Implementing the rejected two would be building an ablation nobody has asked for (`DESIGN.md` §11.2, Q1: no card §4 key moves). | None. If a later card wants the comparison on tabular data, the objective grows a `similarity` field then, and §V-A's numbers are the prior. |
+| 9 | `judgement` | — | Drop CFRNet's `row_l2` from the encoder's output, where `fixmatch`, `tarnet` and `mean_teacher` all keep it. | This is fidelity to eq. (3) rather than a departure from it. `z_i` and `v_i` are the reference's `embeds` — the global-average-pooled penultimate activations of a WideResNet, unnormalised — and `h` is affine on them. Under `row_l2` the representation lives on the unit sphere, where a cosine target is not *part* of the geometry but the whole of it, and the term takes the shortest route: measured on §6.1's fixture the encoder collapses inside ten steps at every `w_s` from 0.5 down to 0.01, the gate never opens, and the propensity sits at the class marginal (§6.2). With the normalisation dropped the same run behaves as the paper describes. It was the interaction this card flagged in deviation 4 before it was measured. | It is the one place the causal stack is not held fixed against P5, so `fixmatch`'s and `tarnet`'s recorded numbers are **not** comparable to §6's — the same cost `fixmatch.md` deviation 9 records for adopting the paper's optimiser. §6's pair is within this recipe, so eq. (3) stays attributable. |
 
 ### 5.1 Framework additions made for this card
 
@@ -323,8 +339,8 @@ to the repository. No port, no component, no view transform, no schedule type,
 no executor, no row population, no card key. An objective is the extension
 point `DESIGN.md` §11 names for exactly this case — step 4 of `BACKLOG.md`'s
 post-P12 workflow, "add the smallest missing component/objective/view if
-necessary" — rather than a framework concept, so the table below is empty by
-the section's own definition and the paragraph is the answer.
+necessary" — rather than a framework concept, so this section's table is
+**None.** by its own definition, and the paragraphs below are the answer.
 
 The one shape decision inside it is worth recording because it is new
 vocabulary in a small way: the objective names `prediction_port` and
@@ -333,10 +349,6 @@ each take one `port` and two realisations. Eq. (3) forces it — the two sides o
 the cosine are `X_PROJ` and `X_REPR`, and no rearrangement of one port over two
 realisations expresses that. It stays inside the objective, so nothing else in
 the framework has to be written against it.
-
-| Added | Quadrant (§11.2) | Consumers today | Named second consumer | Why now |
-|---|---|---|---|---|
-| None — the recipe is assembled from existing components, objectives, views, samplers and executors, plus one new objective, which is not a framework concept | — | — | — | — |
 
 Two things this card was expected to need and did not, recorded because the
 expectation is in `BACKLOG.md` and a silent absence would read as an oversight:
@@ -367,12 +379,15 @@ architecture, the budget and the metric all differ, and the estimand is a
 treatment assignment rather than an image class. The target is a fixed
 project-local *mechanism* target.
 
-The DGP is `fixmatch.md` §6.1's, unchanged and reused deliberately: with the
-same fixture, the same budget, the same seeds and the same optimiser, the
-`w_s = 0` arm of this pair **is** the `fixmatch` recipe, so the comparison
-isolates eq. (3). That is not an approximation — §III of the paper says "our
-loss function is identical to that used in FixMatch when `w_s = 0`", and Tier 0
-asserts the corresponding statement about the two compiled plans.
+The DGP is `fixmatch.md` §6.1's, unchanged and reused deliberately: same
+fixture, same budget, same seeds, same optimiser, same quota. The `w_s = 0` arm
+of this pair is this recipe with eq. (3) switched off, which §III of the paper
+says is FixMatch — "our loss function is identical to that used in FixMatch when
+`w_s = 0`" — and Tier 0 asserts exactly how far that goes: dropping the term and
+the projection head leaves a plan that differs from `fixmatch`'s in five lines.
+Four are identity — its name, its card, and one sentence of prose about the
+fixture that the plan prints twice. The fifth is deviation 9. The pair is therefore *within* this recipe rather
+than across the two, and eq. (3) is the only thing that varies inside it.
 
 ```yaml
 reproduction:
@@ -382,7 +397,7 @@ reproduction:
   metric: held-out p(t|x) NLL ratio on the EMA parameters, DoubleMatch over the w_s = 0 ablation
   published: none - no published number applies to this adaptation
   published_source: n/a
-  tolerance: ratio < 1.0 in mean; held-out outcome NLL within 1.05x of the ablation; terminal alignment (mean cos(h(v), z)) above 0.5 with prediction concentration below 0.9, i.e. the term is satisfied without collapsing the representation
+  tolerance: ratio < 1.0 in mean; held-out outcome NLL within 1.05x of the ablation; terminal alignment (mean cos(h(v), z)) above 0.5 while target concentration stays below 0.8, i.e. the term is satisfied without collapsing the representation
   seeds: 10
   report: mean_and_stderr
 ```
@@ -399,23 +414,134 @@ The one thing this card adds to that fixture is what it measures on it. Eq. (3)
 has no gate, so mask rate and impurity say nothing about whether it is working;
 the two diagnostics that do are the ones `CosineFeatureConsistency` emits:
 
-* **`alignment`** — mean `cos(h(v_i), z_i)` over the eligible rows, which is
-  exactly `-value` and is reported for readability against the reference's
-  `1 - cos` curves.
+* **alignment** — mean `cos(h(v_i), z_i)` over the eligible rows. Not a
+  diagnostic at all: it is exactly `-value`, so the term's own logged number is
+  the alignment and a second copy of it would be noise.
 * **`prediction_concentration`** and **`target_concentration`** — the norm of
-  the mean unit vector on each side. This is the collapse detector, and it
-  exists because the loss cannot be one: a representation that maps every row
-  to the same direction attains the *best possible* `l_s`, and eq. (3) has no
-  negatives to punish it. Isotropic embeddings score about `1/sqrt(n)`;
-  a fully collapsed batch scores 1.
+  the mean unit vector on each side, and the objective's only two diagnostics.
+  This is the collapse detector, and it exists because the loss cannot be one:
+  a representation that maps every row to the same direction attains the *best
+  possible* `l_s`, and eq. (3) has no negatives to punish it. Isotropic
+  embeddings score about `1/sqrt(n)`; a fully collapsed batch scores 1. The
+  two sides are reported separately because they fail differently, and §6.2 is
+  where that stopped being a hypothetical.
 
 ### 6.2 What the Tier 1 fixture already shows
 
-Not filled in until Tier 1 has run. Single-seed numbers from
-`tests/smoke/test_doublematch.py` are recorded here when they exist, as
-evidence for §2's claim and never as a result.
+Tier 1 is not Tier 2 and these are **single-seed** numbers from
+`tests/smoke/test_doublematch.py` and from the same fixture run by hand, not a
+result. They are recorded because one of them wrote deviation 9, and because
+they are the evidence behind §2's claim.
+
+**The measurement that changed the recipe.** The first version of this card
+declared the shared P5 backbone, `row_l2` and all. Eq. (3) collapses it. Every
+number below is the 3,000-step budget on §6.1's fixture unless the row says
+otherwise, and the `w_s` sweep is at 600 steps because the outcome is already
+settled by step ten:
+
+| encoder | `w_s` | steps | held-out `p(t\|x)` NLL (EMA) | `l_s` | target conc. | mask rate |
+|---|---|---|---|---|---|---|
+| `row_l2` | 0.5 | 3,000 | 0.7029 | -1.0000 | 1.000 | 0.000 |
+| `row_l2` | 0.5 | 600 | 0.6962 | -1.0000 | 1.000 | 0.000 |
+| `row_l2` | 0.2 | 600 | 0.6962 | -1.0000 | 1.000 | 0.000 |
+| `row_l2` | 0.1 | 600 | 0.6962 | -1.0000 | 1.000 | 0.000 |
+| `row_l2` | 0.05 | 600 | 0.6962 | -1.0000 | 1.000 | 0.000 |
+| `row_l2` | 0.01 | 600 | 0.6962 | -0.9890 | 1.000 | 0.000 |
+| `row_l2` | 0 | 600 | 0.3944 | -0.0042 | 0.628 | 0.474 |
+
+The frequency baseline on this fixture is 0.6931, so every gated row of that
+table is a propensity that has learned **nothing**: `-log 2`. Three things are
+worth reading off it rather than summarising away.
+
+* The collapse is not a weight the sweep could find. Two orders of magnitude of
+  `w_s` produce the *same terminal numbers to four decimal places*, because the
+  endpoint is the same: once every row shares one direction, eq. (3)'s gradient
+  vanishes and the rest of the network is training on a constant. `w_s` sets
+  how fast it gets there, not whether.
+* It is quick. The trace at `w_s = 0.5` is `l_s = +0.011` at step 0 and
+  `-0.81` at step 10, with both concentrations already at 1.000.
+* The `w_s = 0` row is the arm that recovers, and it passes through the same
+  place: its target concentration is 0.991 at step 10 before falling back to
+  ~0.57. So the collapse basin is one the network enters on its own in the
+  first few steps — CFRNet's small initialisation makes the early encoder
+  nearly rank-one, and `row_l2` then puts every row at almost the same point of
+  the sphere. Eq. (3) does not create that state. It rewards staying in it.
+
+**The recipe as declared** (deviation 9: unnormalised encoder), same fixture,
+same seeds, same batches, 3,000 steps:
+
+| arm | held-out `p(t\|x)` NLL, EMA | same, student | held-out outcome NLL | `l_s` | target conc. | pred. conc. | mask rate |
+|---|---|---|---|---|---|---|---|
+| `w_s = 0.5` | **0.3351** | 0.5238 | 1.1795 | -0.7329 | 0.433 | 0.617 | 0.660 |
+| `w_s = 0` | 0.3485 | **0.4816** | 1.1795 | +0.0260 | 0.259 | 0.835 | 0.648 |
+
+Read the bold entries before the prose: **the two parameter sets disagree.**
+On the EMA — the model §IV reports from, and the metric §6 declares — eq. (3)
+is 3.8% better. On the network the EMA averages, it is 8.8% *worse*. The
+outcome likelihood is identical to four decimal places and the gate does not
+move, so whatever is happening is happening in the propensity alone.
+
+The mechanism part of the table is unambiguous and is what Tier 1 asserts. The
+term reaches `-0.73`, an alignment of 0.73, where the ablation's copy of it —
+the same objective at weight 0, computed and logged but never descended — sits
+at `+0.03`: the two views' features are orthogonal on average, which is where
+an untrained pair of directions starts. So the alignment is eq. (3)'s doing and
+not something the other four terms would have produced anyway. The
+representation concentrates in the process (0.259 to 0.433) and stays far from
+the 1.000 that means one direction.
+
+A second run of the same architecture, differing only in initialisation — the
+diagnostic script that rebuilt the encoder to compare against `row_l2`, which
+consumes construction RNG in a different order — gives 0.3213 against 0.3514
+on the EMA and 0.4708 against 0.5093 on the student. So the EMA ordering
+survived a change of initialisation and the student ordering **flipped**. Two
+initialisations is not a sample, and this is the whole reason §6's target is a
+ten-seed mean with a standard error: at this budget, on this fixture, a
+single-seed directional claim about eq. (3) is not supportable in either
+direction. Tier 1 records the disagreement as a fact rather than asserting the
+half that looks better.
+
+**The comparison this card is careful not to make.** Running the *shared* P5
+stack — `row_l2`, `w_s = 0`, which is `fixmatch`'s recipe up to a
+weight-zero term — on the same fixture and budget gives a held-out EMA NLL of
+**0.3066**, better than the 0.3351 the declared recipe reaches with eq. (3)
+switched on. So on this fixture the encoder change deviation 9 requires costs
+more than eq. (3) gives back, and *DoubleMatch does not beat FixMatch here*.
+That is a second gap on top of the first, and it points the other way: eq. (3)
+is worth 3.8% on the EMA inside the architecture it needs, and that
+architecture costs 8.5% against the `row_l2` one for a propensity head on a
+6-feature DGP. Neither number is a result at one seed. It is written here
+because a card that reported only the within-pair ratio would be reporting the
+comparison that flatters it, and because the encoder is the interesting part:
+the term needs a geometry that the rest of this stack was not built for.
+
+**What this says about `scarf.md` §6.2, which is why the card picked this
+method.** SCARF's contrastive pretraining left the end-to-end gain absent at
+every budget tried, diagnosed as instance discrimination pushing apart the
+same-treatment rows the propensity head wants together. Eq. (3) is the same
+family with the negatives deleted, so the prediction was that it would not pay
+the same cost. What the tables above support is weaker than that and worth
+stating exactly: the negative-free term *learns* — alignment 0.73 where the
+undescended copy sits at -0.03 — and it does so without the representation
+collapsing, which is the failure a negative-free objective is supposed to have.
+Whether deleting the negatives buys a better propensity is the question the two
+disagreeing parameter sets leave open. It is a sharper question than SCARF's
+was, and answering it needs the Tier 2 the ledger below says has not run.
+
+**The same caution at a second budget.** Stopping the pair at 1,200 steps
+instead (second initialisation) gives an EMA gap of 0.3891 against 0.3922 —
+0.8% — and a student gap of 0.2543 against 0.3004. The two parameter sets do
+not converge at the same rate, so the budget moves the comparison as much as
+the term does. `fixmatch.md` §6.2 recorded the same shape of warning about
+reading an EMA; this card is the second one to need it.
 
 ### 6.3 Result ledger
+
+No Tier 2 runner exists for this card yet, so the target above has never been
+run at ten seeds and the status line stays where it is. That is the same
+sequence `scarf` and `fixmatch` went through — the recipe and its Tier 0/Tier 1
+tests land first, and the benchmark runner is its own packet — and §6.2 says
+what the single-seed evidence does and does not support in the meantime.
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
@@ -425,14 +551,14 @@ evidence for §2's claim and never as a result.
 
 | Unspecified in paper | Our choice | Basis |
 |---|---|---|
-| `w_s` for a tabular XTY fixture. §IV-D gives eleven values across four datasets and says a well-tuned `w_s` "will be largely correlated with the number of labeled training data" (0.5 / 1 / 5 for CIFAR-10 at 40 / 250 / 4,000 labels). | `w_s = 0.5` | The paper's value at the label *count* nearest ours (64 observed treatments), and the conservative end of the range it implies. Chosen before any paired result was read, and not retuned afterwards. A sweep is the obvious follow-up and §6's tolerance is stated so that it does not depend on one. |
+| `w_s` for a tabular XTY fixture. §IV-D gives eleven values across four datasets and says a well-tuned `w_s` "will be largely correlated with the number of labeled training data" (0.5 / 1 / 5 for CIFAR-10 at 40 / 250 / 4,000 labels; the reference's README pairs them). | `w_s = 0.5` | The paper's value at the label *count* nearest ours (64 observed treatments), and the conservative end of the range it implies. **Transferred, not tuned**, and the distinction matters because a sweep did happen: §6.2's five values of `w_s` were run against the `row_l2` encoder and all five collapsed, which is evidence about deviation 9 rather than a search for a weight. No sweep has been run at the declared architecture, so 0.5 is the paper's number and not this fixture's best. Running one is the obvious follow-up; §6's tolerance is stated so that the claim does not rest on it. |
 | `gamma` for a dataset that is not one of the four. §III-B: "we suggest tuning `gamma` for different datasets in order to minimize overfitting". | `gamma = 7/8`, i.e. `CosineDecay(phase=7/16)` | The value the paper uses for three of its four datasets, and identical to FixMatch's fixed schedule — which keeps this recipe's rate trajectory byte-identical to `fixmatch`'s, so §6's pair differs in eq. (3) alone. |
 | The initialisation of `h`. | `torch.nn.Linear`'s default, uniform on `+/- 1/sqrt(fan_in)` | ref impl: `tf.layers.dense(..., kernel_initializer=tf.glorot_normal_initializer())`, which for a `d -> d` layer is normal with `std = 1/sqrt(d)`. Of the two initialisations xty2 offers, torch's default has `std = 0.577/sqrt(d)` and CFRNet's has `0.1/sqrt(d)`; the former is within a factor of two of the reference and the latter is ten times smaller. Deliberately *not* the CFRNet initialisation the other three components share. |
-| Whether `h` carries a bias. | Yes | ref impl: `tf.layers.dense` defaults to `use_bias=True`, and nothing in §III says otherwise. This is what makes deviation 4's note about `row_l2` bite at all. |
+| Whether `h` carries a bias. | Yes | ref impl: `tf.layers.dense` defaults to `use_bias=True`, and nothing in §III says otherwise; `ProjectionHead`'s `nn.Linear` does too, so the port matches without a decision to make. It is not inert: a bias is a direction every row's prediction shares, which is why `prediction_concentration` sits well above `target_concentration` in every run in §6.2 — including the healthy ones. |
 | Whether eq. (6)'s weight decay reaches `h`. | Yes, and biases are exempt | Eq. (6) writes `\|\|theta_h\|\|^2` explicitly, and the ref impl creates the projection head inside the `classify` variable scope and sums `l2_loss` over variables whose name carries `kernel` — so matrices are decayed, biases are not, exactly as `fixmatch.md` records for the classifier. |
 | The `+1` offset. Eq. (3) is `-cos`; the reference computes `mean(1 - cos)`. | Implement eq. (3), `-cos` | The paper is the primary source and the offset contributes no gradient. Recorded here because a run compared against a reference training curve will sit exactly 1.0 lower, and that is not a bug. |
 | `ProjectionHead.activation` at one layer. | `"relu"`, inert | The component requires the field because a multi-layer head needs it; a one-layer head inserts no activation module. Tier 0 asserts the built module is a single `nn.Linear`, so the declaration cannot become load-bearing without failing. |
-| Which xty2 quantity is "the output from the penultimate layer". | `X_REPR` | ref impl `libml/models.py`: `embeds` is the global-average-pooled activation and `logits = dense(embeds)`. `MLPEncoder -> X_REPR -> CategoricalPropensity` is the same two-node structure. |
+| Which xty2 quantity is "the output from the penultimate layer". | `X_REPR`, unnormalised | ref impl `libml/models.py`: `embeds` is the global-average-pooled activation and `logits = dense(embeds)`. `MLPEncoder -> X_REPR -> CategoricalPropensity` is the same two-node structure. The paper does not discuss the *geometry* of that activation because a WideResNet fixes it: BatchNorm on every block makes a rank-one batch impossible, which is the state §6.2 finds this encoder passing through. Deviation 9 is what the port has instead; a normalisation layer inside the encoder would be the other answer and is a bigger change than this card needs. |
 
 ## 8. Review
 

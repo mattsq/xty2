@@ -133,6 +133,31 @@ propensity head wants together. That is the gap CoMatch (step 5), SimMatch
 (step 6) and PAWS exist to close, which makes them a sharper next step than
 they looked before the measurement existed.
 
+Step 3 has now landed too — `docs/recipes/doublematch.md` — and it bears on
+that reading without settling it. DoubleMatch's `l_s` is SCARF's family with
+the negatives deleted (a cosine to one's own other view, no contrast set), and
+on the same fixture it does learn: an alignment of 0.73 where the same term
+left undescended sits at -0.03, and no collapse. Whether that buys a better propensity
+came out **mixed** — the EMA the paper reports from is 3.8% better and the
+network under it is 8.8% worse, and a second initialisation flips the second
+number (`doublematch.md` §6.2). So the negative-free variant clears the bar
+SCARF's did not (it learns something the propensity head does not have to
+fight), and the end-to-end question is now a Tier 2 one rather than a null
+result.
+
+It also produced a result nobody was looking for, and it is the reason to read
+that card before writing the next one: **a cosine consistency term collapses a
+representation that lives on the unit sphere.** Every recipe before this one
+inherits CFRNet's `row_l2` on the encoder output, and with it `l_s` drives the
+whole batch to one direction inside ten steps at every `w_s` from 0.5 down to
+0.01, leaving the propensity at the class marginal (`doublematch.md` §6.2).
+Dropping the normalisation — which is what the reference's unnormalised
+`embeds` are — fixes it. Anything in §5.1 that measures agreement by cosine
+(SimMatch's instance similarity, PAWS's soft assignments, BYOL, SimSiam,
+Barlow Twins' cross-correlation) meets the same geometry, and the cheap
+diagnostic that caught it is `CosineFeatureConsistency`'s concentration pair,
+which any of them can reuse.
+
 ---
 
 ## 2. Composite SSL lineage
@@ -291,6 +316,28 @@ References:
 - AllMatch: https://arxiv.org/abs/2406.15763
 
 ### 2.6 DoubleMatch
+
+> **Implemented.** `docs/recipes/doublematch.md` and
+> `xty2/recipes/doublematch.py`. It cost **one objective**
+> (`CosineFeatureConsistency`) and nothing else: no port, no component, no view,
+> no schedule type, no executor, no row population, no card key. The
+> row-eligibility test below is answered by `Objective.rows`, which has been
+> per-objective since P3 — the gate stays a per-row mask inside
+> `PseudoLabelTreatmentNLL`, so eq. (2) keeps counting the rows it rejects and
+> eq. (3) is simply entitled to all of them.
+>
+> The one shape decision worth carrying forward: the objective names
+> `prediction_port` and `target_port` separately, where every earlier objective
+> takes one port under two realisations. DoubleMatch forces it — the two sides
+> of its cosine are `X_PROJ` (strong view, through the projection head) and
+> `X_REPR` (weak view, detached) — and any method with a predictor on one
+> branch only (BYOL, SimSiam, SimMatch) needs the same asymmetry.
+>
+> Two findings are in that card's §6.2 and are summarised under the sequence
+> note above: the unit-sphere collapse, and a mixed end-to-end result whose two
+> halves disagree by parameter set — which is itself the second card in a row
+> to find that an EMA number and the network under it can point opposite ways
+> (`fixmatch.md` §6.2 was the first).
 
 DoubleMatch pairs FixMatch-style pseudo-supervision on confident rows with a
 self-supervised representation objective that still uses the low-confidence
