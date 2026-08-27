@@ -57,6 +57,11 @@ class ObservedOutcomeNLL:
         """Nothing: the term trains the head whose density it evaluates."""
         return frozenset()
 
+    @property
+    def batch_coupled(self) -> bool:
+        """No: the density of one row's outcome does not read another's."""
+        return False
+
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
     ) -> LossTerm:
@@ -113,6 +118,11 @@ class ObservedTreatmentNLL:
     def detaches(self) -> frozenset[tuple[Port, Realisation]]:
         """Nothing: the term trains the propensity head it evaluates."""
         return frozenset()
+
+    @property
+    def batch_coupled(self) -> bool:
+        """No: `-log p(t_i | x_i)` is a function of row `i` alone."""
+        return False
 
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext

@@ -268,8 +268,8 @@ optimisation:
   weight_decay:
     pretrain: none                               # the paper names none
     joint_fit: none
-  batch_size: n/a                                # external BatchSource; section 6 fixes 128, the paper's N
-  labelled_unlabelled_ratio: n/a                 # pretraining reads no labels; the fit takes what the data gives
+  batch_size: 128                                # N, the paper's; and L_cont's negative count is N - 1
+  labelled_unlabelled_ratio: n/a                 # UniformSampler enforces no quota; pretraining reads no labels at all
   total_steps_or_epochs:
     pretrain: 1000                               # optimiser steps, never epochs; see deviation 4
     joint_fit: 3000
@@ -305,11 +305,11 @@ architecture:
     categorical_propensity: K softmax logits
 
 data:
-  standardisation: n/a                           # caller-owned; section 6 records the fixed choice
-  outcome_scaling: n/a                           # caller-owned; section 6 records the fixed choice
+  standardisation: x: none fitted on 'train'     # the section 6 DGP draws standardised features
+  outcome_scaling: y: zscore fitted on 'train'   # held-out rows take the same fitted transform, never a refitted one
   treatment_encoding: n/a                        # XTYBatch contract supplies integer classes 0..K-1
-  split_protocol: n/a                            # Tier 1 fixture owns splits; section 6 fixes them
-  missingness_mechanism: n/a                     # section 6 fixes treatment MCAR; the recipe consumes t_observed
+  split_protocol: one fixed project-local DGP, split train/test by the section 6 fixture; no OpenML-CC18 protocol (deviation 7); training rows are assignment 'train'
+  missingness_mechanism: treatment MCAR to a budget of 40 labelled rows, keyed by row_id  # section 6
 ```
 
 The recipe declares one view. `corrupted_x` is
@@ -340,11 +340,11 @@ impossible row.
 | # | Kind | Blocked on | What we do differently | Why | Expected effect on the section 6 metric |
 |---|---|---|---|---|---|
 | 1 | `judgement` | — | Fine-tune into the reviewed xty2 causal stack (outcome NLL, treatment NLL, exact marginalisation over missing `t`) rather than the paper's classification head `h`. | The paper's downstream task is supervised classification. The project-local question is whether SCARF's representation helps the *treatment*-scarce XTY problem, which is the closest analogue of the semi-supervised regime section 4 of the paper reports its largest gains in. The `p(t \| x)` head is a classifier, so the analogue is exact for the metric section 6 leads with. | No published number applies. The comparison is internal: the same stage, same seeds and same batches, with and without the pretrained initialisation. |
-| 2 | `framework-limitation` | `view-population-statistics` | The empirical marginal `X̂_j` is taken over the **batch** the view is transforming, not over the training dataset. **This row is the one open question a reviewer of this card has to settle** — see §5.1. | A `ViewSpec` transform is a pure function of `(batch, rng_key)` (`DESIGN.md` §5) and there is no training-population object anywhere in xty2 for it to read: the gradient executor takes an iterable of batches. Sampling column `j` from the batch is a draw from the *batch's* empirical marginal, which is itself a uniform subsample of the training one when batches are drawn uniformly — so the corrupted value is still a real observed value of that feature, and the two distributions agree in expectation over batches. What is lost is the tail: a value held by fewer than one row in `B` cannot be drawn into the batch it is not in. | Small and in the direction of *less* corruption diversity at small batch sizes, which the paper's batch-size ablation suggests matters little above 128 — the size section 6 fixes. It would matter more on a heavy-tailed column, which the section 6 DGP does not have. |
+| 2 | `withdrawn` | — | ~~The empirical marginal `X̂_j` is taken over the **batch** the view is transforming, not over the training dataset.~~ **Withdrawn.** `FeatureCorruption` draws each replacement from the training population's column. | This was the open question §5.1 put to a reviewer, and the loader is what settled it: `TrainingPopulation` exists now, so a transform has a training set to read and the argument for deferring — that building the population from one transform's evidence would fix the shape wrongly — no longer applies. `ViewTransform.apply` takes the population, and `FeatureCorruption` **requires** it rather than falling back to the batch, so the deviation cannot return as a silent default. | The tail the old row named is reachable: a value held by fewer than one row in `B` can now be drawn, which `tests/invariants/test_scarf.py` asserts directly. §6.2's numbers were measured under the batch-local draw and are re-measured with the rest of this card. |
 | 3 | `judgement` | — | Retain the reviewed P5 encoder — 3 layers of 200 with ELU and row-`l2` normalisation — rather than the paper's 4 layers of 256 with ReLU. Take the pre-train head `g` from the paper (2 layers of 256, ReLU, `l2`-normalised). | Holding the causal stack fixed across cards is what makes an addition attributable, and is the same decision `mean_teacher.md` deviation 10 and `fixmatch.md` deviation 6 record. `g` is not part of that stack — it exists only because SCARF does — so it is taken as published. | Both arms of section 6's pair share the encoder, so the comparison is unaffected. An absolute comparison against the paper's numbers was never available. |
 | 4 | `judgement` | — | Fixed budgets of 1,000 pretraining and 3,000 fine-tuning optimiser steps, rather than "a max number of pre-train epochs of 1000" with "early stopping with patience 3 on the validation loss" and a max of 200 fine-tuning epochs early-stopped on validation classification error. | This row was typed `framework-limitation` in the card's first draft, on the true observation that a `Stage` runs `steps` optimiser steps (`DESIGN.md` §7) and has nowhere to put a validation split. That is the wrong test. `FIDELITY.md` §5's is "would we choose the same again given an infinite framework", and we would: every card in this repository fixes a project-local step budget so that a difference between recipes is attributable to the recipe (`fixmatch.md` §5.3 is the same call), and section 6's target is a *paired* comparison in which both arms get the same budget either way. Section 6.2 also measured the fine-tuning half directly — four budgets from 150 to 3,000 steps — and the result does not turn on it. Typing a decision we would make again as a debt would have put a creditor on the ledger who is owed nothing, which is its own kind of dishonesty. | Pretraining length is chosen by us rather than by the data. Section 6.2's budget sweep covers the fine-tuning half; the pretraining half is not swept, and the `L_cont` trace bottoming near step 300 says a validation-stopped run would have stopped earlier than 1,000. |
 | 5 | `judgement` | — | Corruption is restricted to columns the schema marks `mutable`, and `M` counts those columns only. | `FeatureSpec.mutable=False` is absolute in xty2 (`DESIGN.md` §5) and a view that overrode it would be able to produce rows the schema declares impossible. On the section 6 schema every column is mutable, so `M` is the paper's `M` there. | None on the section 6 fixture. On a schema with immutable columns, fewer features are corrupted than `floor(0.6 * M_all)` — recorded so that a later card on such a schema does not read the rate as if it applied to every column. |
-| 6 | `framework-limitation` | `loader` | Nothing enforces a batch size, and SCARF's loss depends on it: the number of negatives is `N - 1`. | xty2 has no loader, so `optimisation.batch_size` is a key nothing can check and the field does not exist on `Stage`. Section 6 fixes 128 in the fixture, which is where the paper's ablation finds the curve flat. | The recipe as declared is correct at any batch size and *means* something slightly different at each. A caller feeding 16-row batches would be running a much easier contrastive task than the card describes. |
+| 6 | `withdrawn` | — | ~~Nothing enforces a batch size, and SCARF's loss depends on it: the number of negatives is `N - 1`.~~ **Withdrawn.** Both stages declare `UniformSampler(batch_size=128)` and `optimisation.batch_size` binds the paper's `N`. | xty2 has a loader. The guard is stronger than the binding on its own: `InfoNCEContrastive` declares itself `batch_coupled`, and a stage holding a batch-coupled term is *refused* the `ExternalBatches` declaration at compile time — so this recipe could not hand the number back to a caller even if a later edit tried. A caller feeding 16-row batches is no longer expressible. | The section 6 results below were measured under the pre-loader batch stream and are **invalidated pending re-measurement**: the recipe now draws its own batches from a seed-derived stream, and it also owns the 40-label budget and the outcome scaling the fixture used to apply. The sampling scheme is unchanged (`tests/invariants/test_loading.py` pins it), so the paired comparison should stand; that is a prediction, not a result. |
 | 7 | `judgement` | — | No label-noise and no OpenML-CC18 protocol; one fixed project-local DGP, in section 6. | The paper's evidence is 69 datasets under three label regimes. Reproducing that shape is a Tier 2 question about data plumbing, not about whether the mechanism is assembled correctly, and no dataset in it carries a treatment. | Section 6 is a mechanism target and says so. It is not evidence for the paper's claim, only against this port being miswired. |
 
 ### 5.1 Framework additions made for this card
@@ -355,6 +355,8 @@ impossible row.
 | `ProjectionHead` (`X_REPR -> X_PROJ`) | fidelity-bearing, reversible | This card | — (not required for this quadrant) | It is `g`. Deliberately a separate class rather than a widened `MLPEncoder`: every recorded number in this repository depends on `MLPEncoder`'s construction-time RNG consumption, and a shared base class would put a reviewed component's initialisation at risk to save forty lines of validation |
 | `FeatureCorruption` view transform | fidelity-bearing, reversible | This card | — | It is the paper's corruption, and it is the whole method. `FeatureMask` is not a substitute: it fills with a constant rather than a marginal draw, and it masks each cell independently rather than exactly `floor(cM)` per row |
 | `InfoNCEContrastive` objective | fidelity-bearing, reversible | This card | — | It is `L_cont`. It is the first objective in the repository whose per-row value depends on the other rows of the batch, which is why its negatives-are-the-eligible-rows rule is written into §3.2 and into `plan_details` rather than left implicit |
+| `Objective.batch_coupled`, a required protocol member | fidelity-bearing, **load-bearing vocabulary** | `InfoNCEContrastive`, the one `True` in the repository | **Barlow Twins** and **VICReg** (`BACKLOG.md` §1, §5.1), whose losses are computed from a cross-correlation or covariance matrix over the batch axis and whose value therefore depends on `N` exactly as `L_cont`'s does. The shape was checked against them in the one place that matters: the declaration is a property of the *objective*, not of the loss family or a registry set, so a redundancy-reduction term answers for itself rather than being listed somewhere a reader has to find | Binding `optimisation.batch_size` closes deviation 6 only if the binding cannot be given back. `ExternalBatches` is a legitimate declaration for the four recipes not paying that debt, so without this member a later edit could hand SCARF's `N` to a caller and the plan would print a number the run did not enforce. Required rather than defaulted for `detaches`'s reason: a declaration with a fallback is one that can be forgotten |
+| `population` on `ViewTransform.apply` | fidelity-bearing, **load-bearing vocabulary** | `FeatureCorruption` | **VIME** (`BACKLOG.md` §5.2): mask-and-impute replaces each masked cell with a draw from the same empirical marginal over the training set — the identical read on the identical object. The argument is the *population* rather than a pre-computed statistic because SCARF corrupts per column and VIME imputes per column, and a "marginals" service would have had to guess which statistic either wanted | It is deviation 2, and the loader is what made it buildable: a training population now exists for a transform to read, so the reason for deferring — that the shape would be fixed on one transform's evidence — is gone |
 
 `X_PROJ` is the one row in the load-bearing quadrant, and the obligation
 §11.2 attaches to that quadrant is discharged in the column above rather than
@@ -364,36 +366,53 @@ stated. Nothing else here is vocabulary a future recipe must be written
 against — a transform, a component and an objective are each additions to a
 registry that existing recipes never read.
 
-Two ledger rows in `DESIGN.md` §11.4 are new with this card, and only one of
-them has a creditor. `view-population-statistics` is deviation 2's;
-`early-stopping` was written for deviation 4 and is now paid for by nobody,
-because deviation 4 is a `judgement` (see its row for why the first draft got
-that wrong). Both are written with the evidence that would change the decision,
-as `FIDELITY.md` §5.1 requires.
+Two ledger rows in `DESIGN.md` §11.4 were new with this card, and only one of
+them ever had a creditor. `view-population-statistics` was deviation 2's and is
+**discharged** — see below. `early-stopping` was written for deviation 4 and is
+paid for by nobody, because deviation 4 is a `judgement` (see its row for why
+the first draft got that wrong); the loader packet removed half of what blocked
+it, since a validation split now has somewhere to live, and amended the row to
+say so.
 
-**The open question, stated rather than settled.** `view-population-statistics`
-is a `framework-limitation` — we would have implemented the paper's
-training-set marginal if xty2 could express it — and the ledger row calls it
-load-bearing vocabulary. §11.2's decision table has no cell that lets that pair
-wait: *fidelity-bearing × load-bearing* reads "build it now, one consumer, and
-design the shape against a named second consumer". This card does not build it,
-and the reason is specific rather than a shrug: the thing that would have to be
-built is not a field on a transform but a **training population** for a view to
-read, and a training population is the object the `loader` row (§11.4) is about.
-Building it here would fix the shape of that concept on the evidence of one
-transform, and would put a tensor of training rows inside a `Recipe`, which is a
-declaration of a method rather than a container for data. Two smaller facts
-argue the same way: no §4 card key names the marginal's source, so §11.2's Q1
-test — "some key in some card's §4 checklist cannot be honoured" — does not
-actually fire here even though `FIDELITY.md` §5's test does; and the deviation's
-measured cost is small, since a uniformly drawn batch's column is a uniform
-subsample of the training column.
+A third arrived with the loader and this card carries it: `ViewTransform.apply`
+gained a `population` argument, which is load-bearing vocabulary under §11.2 —
+every transform is written against that signature. The named second consumer is
+**VIME** (`BACKLOG.md` §5.2), whose mask-and-impute replaces each masked cell
+with a draw from the same empirical marginal over the training set: the
+identical read, on the identical object. The shape was checked against it in
+one place that mattered — the argument is the population, not a pre-computed
+statistic, because VIME imputes per column exactly as SCARF corrupts per column
+and a "marginals" service would have had to guess which statistic either wanted.
 
-None of that is a reviewer's decision to skip. It is written here in the form
-§11.2 asks for so that the reviewer is asked the question — build it now, or
-record why the pair of tests disagree — instead of being handed a conclusion.
+**The open question, and how it was settled.** This card's first version put
+`view-population-statistics` to a reviewer as an open question rather than
+answering it: a `framework-limitation` that §11.2's decision table had no
+waiting cell for, deferred because the thing to build was not a field on a
+transform but a **training population** for a view to read — and a training
+population is the object the `loader` row was about. Building it on one
+transform's evidence would have fixed that shape wrongly, and would have put a
+tensor of training rows inside a `Recipe`.
+
+The loader packet answered it. `TrainingPopulation` is built by the executor
+from a `Dataset` the caller supplies, so the recipe still holds a declaration
+rather than rows, and the population a view reads is the one the stage is
+actually stepping on. `ViewTransform.apply` takes it; `FeatureCorruption`
+requires it. Deviation 2 is withdrawn and the ledger row is gone.
+
+Worth keeping is *why the question was worth asking rather than skipping*: the
+two tests genuinely disagreed here. No §4 card key names the marginal's source,
+so §11.2's Q1 — "some key in some card's §4 checklist cannot be honoured" —
+never fired, while `FIDELITY.md` §5's "we would have implemented the paper" did.
+The row survived on the second test alone, and it was right to.
 
 ## 6. Reproduction target
+
+**The measurements recorded in §6.2 predate the loader and are invalidated
+pending re-measurement** (deviation 6). Three things the fixture used to own —
+the batch stream, the 40-label budget and the outcome scaling — are the
+recipe's declarations now, so the numbers below were produced by a program
+this card no longer describes. They are kept because the comparison against the
+re-run is what shows the change moved no arithmetic.
 
 The published OpenML-CC18 accuracies cannot validate this port, for the reasons
 section 2 gives. The target below is a completely fixed project-local

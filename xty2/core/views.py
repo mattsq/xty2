@@ -23,6 +23,7 @@ import torch
 from torch import Tensor
 
 from xty2.core.batch import XTYBatch
+from xty2.core.data import TrainingPopulation
 from xty2.core.errors import ViewError, require_str
 from xty2.core.graph import IDENTITY_VIEW
 from xty2.core.schema import Schema
@@ -66,9 +67,25 @@ class ViewTransform(Protocol):
         """Columns this transform may change for some RNG draw."""
 
     def apply(
-        self, batch: XTYBatch, schema: Schema, *, generator: torch.Generator
+        self,
+        batch: XTYBatch,
+        schema: Schema,
+        *,
+        generator: torch.Generator,
+        population: TrainingPopulation | None = None,
     ) -> XTYBatch:
-        """Return a transformed batch without writing into ``batch``."""
+        """Return a transformed batch without writing into ``batch``.
+
+        ``population`` is the training rows the stage draws from, when the
+        stage declares a sampler. It exists because a transform sometimes needs
+        a statistic of the *training set* rather than of the batch in hand:
+        SCARF draws each corrupted cell from "the uniform distribution over the
+        values that feature takes on across the training dataset", and a
+        batch-local draw can never reach a value held by fewer than one row in
+        ``B``. It is ``None`` for a stage taking the caller's batches, and a
+        transform that needs it says so rather than silently falling back —
+        `FeatureCorruption` raises.
+        """
 
     def describe(self) -> str:
         """A stable one-line description for the execution plan."""
@@ -305,7 +322,13 @@ class ViewSpec:
         return frozenset(affected)
 
     def apply(
-        self, batch: XTYBatch, schema: Schema, *, rng_key: int, draw: int = 0
+        self,
+        batch: XTYBatch,
+        schema: Schema,
+        *,
+        rng_key: int,
+        draw: int = 0,
+        population: TrainingPopulation | None = None,
     ) -> XTYBatch:
         """Compute one draw of the view, deterministically and functionally."""
         if type(rng_key) is not int:
@@ -327,7 +350,9 @@ class ViewSpec:
         current = batch.clone()
         for transform, declared in zip(self.transforms, declarations, strict=True):
             before = current.clone()
-            result = transform.apply(current, schema, generator=generator)
+            result = transform.apply(
+                current, schema, generator=generator, population=population
+            )
             if not current.equal_to(before):
                 raise ViewError(
                     f"transform {transform.describe()!r} in view {self.name!r} "

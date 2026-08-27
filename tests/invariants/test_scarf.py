@@ -25,17 +25,23 @@ from xty2.core import (
     CardKeyError,
     CategoricalTreatment,
     CompileError,
+    Dataset,
+    DataSpec,
     FeatureSpec,
     LossError,
+    MissingnessSpec,
     OutcomeSpec,
     Port,
     PortContractError,
+    PreprocessSpec,
     PreservedField,
     Program,
     Recipe,
     Schema,
+    SplitSpec,
     State,
     TrainContext,
+    TrainingPopulation,
     ViewError,
     Weighted,
     XTYBatch,
@@ -44,6 +50,7 @@ from xty2.core import (
 from xty2.objectives import InfoNCEContrastive
 from xty2.recipes import scarf
 from xty2.recipes.scarf import CORRUPTED_X, CORRUPTION_RATE, TEMPERATURE
+from xty2.training.loading import build_population
 from xty2.views import FeatureCorruption, ViewSpec
 
 from tests.invariants.conftest import backward
@@ -75,11 +82,11 @@ def _schema(*, derived: bool = False, immutable: bool = True) -> Schema:
     )
 
 
-def _batch(rows: int = ROWS) -> XTYBatch:
+def _batch(rows: int = ROWS, offset: int = 0) -> XTYBatch:
     # Every cell distinct, so a value that moved can be traced to the column it
     # was drawn from and a corrupted cell is only ever equal to its original
     # when the donor happened to be its own row.
-    x = torch.arange(float(rows * 4)).reshape(rows, 4)
+    x = torch.arange(float(rows * 4)).reshape(rows, 4) + float(offset * 4)
     observed = torch.arange(rows) % 3 == 0
     return XTYBatch(
         x=x,
@@ -87,7 +94,7 @@ def _batch(rows: int = ROWS) -> XTYBatch:
         y=torch.linspace(-1.0, 1.0, rows),
         t_observed=observed,
         y_observed=torch.ones(rows, dtype=torch.bool),
-        row_id=torch.arange(rows),
+        row_id=torch.arange(offset, offset + rows),
     )
 
 
@@ -323,15 +330,92 @@ def test_every_card_value_the_plan_also_carries_agrees_with_it() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _population(batch: XTYBatch, schema: Schema) -> TrainingPopulation:
+    """The batch, standing in as its own training population.
+
+    Every assertion below is about *which* value a cell was replaced with and
+    which columns moved, so the donor pool being the batch keeps them reading
+    as they did before the marginal became the training set's. The distinction
+    those tests do not make is exactly the one
+    `test_the_donor_pool_is_the_training_population_not_the_batch` makes.
+    """
+    return build_population(
+        Dataset(
+            schema=schema,
+            rows=batch,
+            assignments={"train": torch.arange(batch.batch_size)},
+        ),
+        DataSpec(
+            split=SplitSpec(protocol="the batch itself", train="train"),
+            preprocess=PreprocessSpec(features="none", outcome="none"),
+            missingness=MissingnessSpec(mechanism="observed"),
+        ),
+        seed=0,
+    )
+
+
 def _corrupt(
-    batch: XTYBatch, schema: Schema, *, rate: float = CORRUPTION_RATE, key: int = 7
+    batch: XTYBatch,
+    schema: Schema,
+    *,
+    rate: float = CORRUPTION_RATE,
+    key: int = 7,
+    population: TrainingPopulation | None = None,
 ) -> XTYBatch:
     view = ViewSpec(
         name="corrupted_x",
         transforms=(FeatureCorruption(rate=rate, columns=None),),
         preserves=PRESERVED,
     )
-    return view.apply(batch, schema, rng_key=key)
+    return view.apply(
+        batch,
+        schema,
+        rng_key=key,
+        population=population if population is not None else _population(batch, schema),
+    )
+
+
+def test_the_donor_pool_is_the_training_population_not_the_batch() -> None:
+    """SCARF's marginal is over the training set, and the tail is the difference.
+
+    "the uniform distribution over the values that feature takes on across the
+    training dataset" — a batch-local draw cannot reach a value held by fewer
+    than one row in `B`, which is what `scarf.md` §5.2 used to record as a
+    deviation. Here the training population holds a value no row of the batch
+    does, and the corruption reaches it.
+    """
+    schema = _schema()
+    batch = _batch(rows=8)
+    training = _batch(rows=64, offset=100)
+    marked = training.x.clone()
+    marked[:, 0] = 999.0
+    population = build_population(
+        Dataset(
+            schema=schema,
+            rows=training.replace(x=marked),
+            assignments={"train": torch.arange(training.batch_size)},
+        ),
+        DataSpec(
+            split=SplitSpec(protocol="a population the batch is not", train="train"),
+            preprocess=PreprocessSpec(features="none", outcome="none"),
+            missingness=MissingnessSpec(mechanism="observed"),
+        ),
+        seed=0,
+    )
+    corrupted = _corrupt(batch, schema, rate=1.0, population=population)
+    assert bool((corrupted.x[:, 0] == 999.0).all())
+    assert not bool((batch.x[:, 0] == 999.0).any())
+
+
+def test_a_transform_that_needs_a_population_says_so_rather_than_falling_back() -> None:
+    schema = _schema()
+    view = ViewSpec(
+        name="corrupted_x",
+        transforms=(FeatureCorruption(rate=CORRUPTION_RATE, columns=None),),
+        preserves=PRESERVED,
+    )
+    with pytest.raises(ViewError, match="supplied none"):
+        view.apply(_batch(rows=4), schema, rng_key=7)
 
 
 def test_the_count_of_corrupted_columns_is_floor_rate_times_mutable() -> None:
@@ -454,7 +538,12 @@ def test_a_rate_that_floors_to_zero_columns_changes_nothing() -> None:
     batch = _batch()
     transform = FeatureCorruption(rate=0.3, columns=None)
     assert transform.affected_columns(schema) == frozenset()
-    result = transform.apply(batch, schema, generator=torch.Generator().manual_seed(0))
+    result = transform.apply(
+        batch,
+        schema,
+        generator=torch.Generator().manual_seed(0),
+        population=_population(batch, schema),
+    )
     assert torch.equal(result.x, batch.x)
 
 

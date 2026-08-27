@@ -38,6 +38,13 @@ from typing import (
 from torch import Tensor
 
 from xty2.core.card_keys import REQUIRED, card_hyperparameters, is_required
+from xty2.core.data import (
+    SAMPLERS,
+    DataSpec,
+    ExternalBatches,
+    SamplerSpec,
+    draws_from_population,
+)
 from xty2.core.errors import CompileError, Xty2Error, require_str
 from xty2.core.graph import ComponentGraph, Realisation, State
 from xty2.core.loss import (
@@ -48,7 +55,12 @@ from xty2.core.loss import (
 )
 from xty2.core.optimisation import OptimiserSpec
 from xty2.core.ports import Port
-from xty2.core.rows import RowIndex, Rows, validate_population
+from xty2.core.rows import (
+    RowIndex,
+    Rows,
+    populations_are_disjoint,
+    validate_population,
+)
 from xty2.core.schedules import Constant, Schedule, as_schedule
 from xty2.core.schema import Schema
 from xty2.core.views import ViewSpec
@@ -194,6 +206,28 @@ class Objective(Protocol):
         stating it twice.
         """
 
+    @property
+    def batch_coupled(self) -> bool:
+        """Does this term's per-row value depend on the *other* rows of the batch?
+
+        True for `InfoNCEContrastive`, whose negatives are the other `N - 1`
+        rows, and false for every likelihood term, whose per-row value would be
+        unchanged if the batch were split in two. The distinction is what makes
+        `optimisation.batch_size` a paper-governed number rather than a
+        deployment detail, and `compile()` uses it for exactly one rule: a
+        stage that hands batch construction back to the caller
+        (`ExternalBatches`) may not hold a term whose arithmetic depends on how
+        many rows arrive.
+
+        A required member rather than an attribute with a `False` fallback, on
+        the same argument `detaches` is stated with: a declaration the compiler
+        supplies a default for is a declaration that can be forgotten, and
+        forgetting this one restores the hole `scarf.md` §5.6 was written
+        about. Barlow Twins and VICReg — whose losses are computed from a
+        cross-correlation or covariance over the batch axis — are the next
+        terms that will answer true.
+        """
+
     def compute(
         self,
         state: State,
@@ -245,12 +279,19 @@ class Weighted:
         if not isinstance(candidate, Objective):
             missing = [
                 member
-                for member in ("name", "requires", "rows", "detaches", "compute")
+                for member in (
+                    "name",
+                    "requires",
+                    "rows",
+                    "detaches",
+                    "batch_coupled",
+                    "compute",
+                )
                 if not hasattr(candidate, member)
             ]
             raise CompileError(
                 f"Weighted holds an Objective — name, requires, rows, detaches, "
-                f"compute — "
+                f"batch_coupled, compute — "
                 f"got {type(candidate)}, which is missing {missing!r} "
                 "(DESIGN.md §4)."
             )
@@ -282,6 +323,11 @@ class Weighted:
     def detaches(self) -> frozenset[tuple[Port, Realisation]]:
         """The wrapped objective's stop-gradients."""
         return self.objective.detaches
+
+    @property
+    def batch_coupled(self) -> bool:
+        """Whether the wrapped objective reads the rest of the batch."""
+        return self.objective.batch_coupled
 
     @property
     def schedule(self) -> Schedule:
@@ -496,12 +542,14 @@ class Stage:
             card stating epochs converts, writing the conversion into its §7.
             Also `REQUIRED` where there are objectives; it binds
             `optimisation.total_steps_or_epochs`.
-
-    `batch_size` and `labelled_unlabelled_ratio` are the other two
-    `optimisation` keys and are deliberately absent: both are properties of
-    what feeds the stage, and no loader exists yet. A field the executor
-    could not check would be a card key nothing verifies, which is the
-    failure mode `DESIGN.md` §7.1 rejects for provenance.
+        sampler: What feeds the stage — `UniformSampler`, `QuotaSampler` or
+            `ExternalBatches`. `REQUIRED`, because it owns the other two
+            `optimisation` keys and there is no honest default: a sampler
+            inherited from the framework would be a batch composition the card
+            never stated, and a silent `ExternalBatches` would be the old hole
+            with a new name. `ExternalBatches` says the caller supplies the
+            rows and is rejected for a stage holding a batch-coupled objective
+            (`docs/proposals/loader.md` §10).
     """
 
     name: str
@@ -516,6 +564,7 @@ class Stage:
     allow_leakage: bool = False
     optimiser: OptimiserSpec = REQUIRED
     steps: int = REQUIRED
+    sampler: SamplerSpec = REQUIRED
 
     CARD_KEYS: ClassVar[Mapping[str, str]] = {
         "steps": "optimisation.total_steps_or_epochs"
@@ -572,6 +621,7 @@ class Stage:
             )
         self._check_action()
         self._check_gradient_fields()
+        self._check_sampler()
         duplicates = _duplicates(self.trainable)
         if duplicates:
             raise CompileError(
@@ -669,6 +719,50 @@ class Stage:
                 f"components {list(self.trainable)!r}; an action-only stage "
                 "does not descend a gradient"
             )
+
+    def _check_sampler(self) -> None:
+        """Every stage says what feeds it, and no stage inherits an answer.
+
+        `REQUIRED` rather than a default for the reason `optimiser` and `steps`
+        are: the field owns `optimisation.batch_size` and
+        `optimisation.labelled_unlabelled_ratio`, and a default is precisely
+        the silent inheritance §9.1 exists to make impossible. Unlike those two
+        it is required of *every* stage, including action-only and array-fit
+        ones — those read rows even when they descend no gradient, and where
+        the rows come from is exactly what was previously unsaid.
+        """
+        if is_required(self.sampler):
+            raise CompileError(
+                f"stage {self.name!r} declares no sampler, so nothing says what "
+                "feeds it. Declare UniformSampler(batch_size=...), a "
+                "QuotaSampler, or ExternalBatches() if the caller supplies the "
+                "rows — the last is a statement the plan prints, not a default "
+                "(DESIGN.md §9.1, docs/proposals/loader.md §3.4)."
+            )
+        if not isinstance(self.sampler, SAMPLERS):
+            raise CompileError(
+                f"stage {self.name!r} holds {type(self.sampler)} as its sampler; "
+                f"expected one of {[cls.__name__ for cls in SAMPLERS]!r}"
+            )
+        if isinstance(self.sampler, ExternalBatches):
+            return
+        if self.executor != "gradient":
+            raise CompileError(
+                f"stage {self.name!r} declares executor={self.executor!r} and a "
+                "sampler. An array or cross fit consumes one finite row-keyed "
+                "table rather than a stream of drawn batches, and no card asks "
+                "for a sampled one, so building that path would be a mechanism "
+                "with no consumer (DESIGN.md §11.2). Declare ExternalBatches() "
+                "and let the caller supply the table."
+            )
+        for population in self.sampler.rows:
+            if populations_are_disjoint(self.rows, population):
+                raise CompileError(
+                    f"stage {self.name!r} scopes rows to {self.rows!r} but its "
+                    f"sampler draws a quota from {population!r}, which is empty "
+                    "by construction. A quota that can never be filled is a "
+                    "wiring error, not a runtime shortfall (DESIGN.md §7.0)."
+                )
 
     def _check_gradient_fields(self) -> None:
         """A stage that descends a gradient says how, and for how long.
@@ -828,6 +922,15 @@ class Recipe:
         views: Named data views available to objective realisations. The
             untransformed ``identity`` view is built in and is not listed.
         purpose: `causal` or `predictive` (§7.2).
+        data: The split, standardisation and missingness policy, and the owner
+            of the four `data.*` card keys. Required exactly when some stage
+            declares a sampler — the same rule `optimiser` and `steps` follow,
+            and for the same reason: a policy is required when there is
+            something to apply it to, and a policy over batches the caller
+            builds would be a card key nothing could check, which is the
+            failure this capability exists to end. It holds a declaration, not
+            rows: a `Recipe` is a method, and the data arrives at run time as a
+            `Dataset`.
     """
 
     name: str
@@ -837,6 +940,7 @@ class Recipe:
     card: str
     purpose: Purpose = "causal"
     views: tuple[ViewSpec, ...] = ()
+    data: DataSpec | None = None
 
     def __init__(
         self,
@@ -847,6 +951,7 @@ class Recipe:
         card: str,
         purpose: Purpose = "causal",
         views: Sequence[ViewSpec] = (),
+        data: DataSpec | None = None,
     ) -> None:
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "schema", schema)
@@ -860,6 +965,7 @@ class Recipe:
         object.__setattr__(self, "card", card)
         object.__setattr__(self, "purpose", purpose)
         object.__setattr__(self, "views", tuple(views))
+        object.__setattr__(self, "data", data)
         self.__post_init__()
 
     def __post_init__(self) -> None:
@@ -889,6 +995,45 @@ class Recipe:
             raise CompileError(
                 f"recipe {self.name!r} has more than one view called "
                 f"{duplicate_views!r}; realisations resolve views by name"
+            )
+        self._check_data()
+
+    def _check_data(self) -> None:
+        """A policy exactly where there is something for it to govern.
+
+        Declaring one over `ExternalBatches` stages would print four `data.*`
+        values in the plan that no code path applies — a card key asserting
+        rather than binding, which `DESIGN.md` §7.1 rejects for provenance and
+        §9.1 for hyperparameters. Omitting one where a stage samples leaves the
+        same keys `n/a` on a run the framework *is* loading, which is the debt
+        `tarnet.md` §5.5 records.
+        """
+        samples = [
+            stage.name
+            for stage in self.program
+            if not is_required(stage.sampler) and draws_from_population(stage.sampler)
+        ]
+        if self.data is None:
+            if samples:
+                raise CompileError(
+                    f"recipe {self.name!r} declares no `data` policy, but "
+                    f"stage(s) {samples!r} sample from a population. The split, "
+                    "standardisation and missingness a sampled run depends on "
+                    "bind the four `data.*` card keys and have no default "
+                    "(DESIGN.md §9.1)."
+                )
+            return
+        if not isinstance(self.data, DataSpec):
+            raise CompileError(
+                f"recipe {self.name!r} holds {type(self.data)} as its data "
+                "policy; expected DataSpec"
+            )
+        if not samples:
+            raise CompileError(
+                f"recipe {self.name!r} declares a `data` policy, but every "
+                "stage takes ExternalBatches, so nothing applies it. Four "
+                "`data.*` keys would print in the plan as though they governed "
+                "the run (DESIGN.md §7.1)."
             )
 
     def stage(self, name: str) -> Stage:

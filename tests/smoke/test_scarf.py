@@ -34,6 +34,7 @@ from torch.nn import functional as F
 from xty2.core import (
     CategoricalTreatment,
     CompiledRun,
+    Dataset,
     FeatureSpec,
     GaussianOutcome,
     OutcomeSpec,
@@ -126,31 +127,19 @@ def _population(
     )
 
 
-def _take(batch: XTYBatch, rows: torch.Tensor) -> XTYBatch:
-    return XTYBatch(
-        x=batch.x.index_select(0, rows),
-        t=batch.t.index_select(0, rows),
-        y=batch.y.index_select(0, rows),
-        t_observed=batch.t_observed.index_select(0, rows),
-        y_observed=batch.y_observed.index_select(0, rows),
-        row_id=batch.row_id.index_select(0, rows),
-    )
+def _dataset(train: XTYBatch) -> Dataset:
+    """The training rows, under the assignment the recipe's policy names.
 
-
-@dataclass(frozen=True)
-class _BatchStream:
-    population: XTYBatch
-    indices: torch.Tensor
-
-    def __iter__(self) -> Iterator[XTYBatch]:
-        for rows in self.indices:
-            yield _take(self.population, rows)
-
-
-def _batch_indices(rows: int, *, steps: int, seed: int) -> torch.Tensor:
-    generator = torch.Generator().manual_seed(seed)
-    return torch.stack(
-        [torch.randperm(rows, generator=generator)[:BATCH_SIZE] for _ in range(steps)]
+    Tier 1 used to build the batch stream, the label budget and the outcome
+    scaling itself. All three are now declared on the recipe — `UniformSampler`
+    at `N = 128`, a 40-label MCAR budget, and a z-scored outcome fitted on
+    these rows — so the fixture supplies data and an assignment and stops
+    deciding what the method is.
+    """
+    return Dataset(
+        schema=_schema(),
+        rows=train,
+        assignments={"train": torch.arange(train.batch_size)},
     )
 
 
@@ -210,25 +199,41 @@ def _evaluate(
     )
 
 
-def _standardised(seed: int) -> tuple[XTYBatch, _Population]:
+def _populations(seed: int) -> tuple[XTYBatch, _Population]:
+    """The train and test rows, before any policy.
+
+    The train rows arrive **fully observed**: the 40-label budget is the
+    recipe's declaration now, not the fixture's, which is what makes
+    `data.missingness_mechanism` a key the plan can be diffed on.
+    """
     train = _population(
-        TRAIN_ROWS, seed=seed, observed_treatments=OBSERVED_TREATMENTS, row_offset=0
+        TRAIN_ROWS, seed=seed, observed_treatments=TRAIN_ROWS, row_offset=0
     )
     test = _population(
         TEST_ROWS, seed=seed + 2, observed_treatments=TEST_ROWS, row_offset=10_000
     )
-    mean = train.batch.y.mean()
-    scale = float(train.batch.y.std(unbiased=False))
-    train_batch = train.batch.replace(y=(train.batch.y - mean) / scale)
-    test = replace(test, batch=test.batch.replace(y=(test.batch.y - mean) / scale))
-    return train_batch, test
+    return train.batch, test
+
+
+def _on_the_training_scale(test: _Population, result: ProgramResult) -> _Population:
+    """Apply the outcome scaling the run *fitted*, never one refitted here.
+
+    Refitting on the evaluation rows is the leakage `FIDELITY.md` §2 names
+    first. `StageResult.population` hands back what was fitted and the rows it
+    came from, so the held-out transform is the training one by construction.
+    """
+    statistics = result.stage("joint_fit").population
+    assert statistics is not None
+    location = statistics.statistics["y_location"]
+    scale = statistics.statistics["y_scale"]
+    return replace(test, batch=test.batch.replace(y=(test.batch.y - location) / scale))
 
 
 @pytest.fixture(scope="module")
 def paired_fit() -> tuple[_Metrics, _Metrics]:
     """SCARF and its no-pretraining ablation, same start and same batches."""
     schema = _schema()
-    train, test = _standardised(seed=90_001)
+    train, test = _populations(seed=90_001)
 
     torch.manual_seed(90_006)
     pretrained = scarf(schema)
@@ -237,25 +242,21 @@ def paired_fit() -> tuple[_Metrics, _Metrics]:
     for name, value in pretrained.system.state_dict().items():
         assert torch.equal(value, ablated.system.state_dict()[name])
 
-    fitting = _BatchStream(
-        train, _batch_indices(TRAIN_ROWS, steps=FIT_STEPS, seed=90_005)
-    )
-    contrastive = _BatchStream(
-        train, _batch_indices(TRAIN_ROWS, steps=PRETRAIN_STEPS, seed=90_004)
-    )
+    data = _dataset(train)
 
     with_pretraining = compile(pretrained)
     without = compile(ablated)
     full = run_program(
         with_pretraining,
-        {"pretrain": contrastive, "joint_fit": fitting},
+        {"pretrain": data, "joint_fit": data},
         seed=90_010,
     )
-    first = _evaluate(with_pretraining, full, test, train)
+    scaled = _on_the_training_scale(test, full)
+    first = _evaluate(with_pretraining, full, scaled, train)
     # The ablation's single stage is index 0, so its seed is offset by one
     # stride to give its fit the same stochastic stream as the paired arm's.
-    bare = run_program(without, {"joint_fit": fitting}, seed=90_010 + STREAM_STRIDE)
-    return first, _evaluate(without, bare, test, train)
+    bare = run_program(without, {"joint_fit": data}, seed=90_010 + STREAM_STRIDE)
+    return first, _evaluate(without, bare, _on_the_training_scale(test, bare), train)
 
 
 def _diagnostic(result: ProgramResult, step: int, name: str) -> float:
@@ -412,32 +413,27 @@ def _frozen(recipe: Recipe) -> Recipe:
 def _probe_pair(offset: int) -> tuple[_Metrics, _Metrics]:
     """One frozen-encoder pair, on the seed family `offset` names."""
     schema = _schema()
-    train, test = _standardised(seed=90_001 + offset * 1_000)
+    train, test = _populations(seed=90_001 + offset * 1_000)
 
     torch.manual_seed(90_006 + offset)
     pretrained = _frozen(scarf(schema))
     torch.manual_seed(90_006 + offset)
     ablated = _frozen(_unpretrained(scarf(schema)))
 
-    fitting = _BatchStream(
-        train, _batch_indices(TRAIN_ROWS, steps=PROBE_STEPS, seed=90_005 + offset)
-    )
-    contrastive = _BatchStream(
-        train, _batch_indices(TRAIN_ROWS, steps=PRETRAIN_STEPS, seed=90_004 + offset)
-    )
+    data = _dataset(train)
     with_pretraining = compile(pretrained)
     without = compile(ablated)
     full = run_program(
         with_pretraining,
-        {"pretrain": contrastive, "joint_fit": fitting},
+        {"pretrain": data, "joint_fit": data},
         seed=90_010 + offset,
     )
     bare = run_program(
-        without, {"joint_fit": fitting}, seed=90_010 + offset + STREAM_STRIDE
+        without, {"joint_fit": data}, seed=90_010 + offset + STREAM_STRIDE
     )
     return (
-        _evaluate(with_pretraining, full, test, train),
-        _evaluate(without, bare, test, train),
+        _evaluate(with_pretraining, full, _on_the_training_scale(test, full), train),
+        _evaluate(without, bare, _on_the_training_scale(test, bare), train),
     )
 
 

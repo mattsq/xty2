@@ -94,6 +94,11 @@ class ScaledRepr:
     def detaches(self) -> frozenset[tuple[Port, Realisation]]:
         return frozenset()
 
+    @property
+    def batch_coupled(self) -> bool:
+        """No: a double reads one row at a time (§4)."""
+        return False
+
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
     ) -> LossTerm:
@@ -121,6 +126,11 @@ class Constantly:
     def detaches(self) -> frozenset[tuple[Port, Realisation]]:
         return frozenset()
 
+    @property
+    def batch_coupled(self) -> bool:
+        """No: a double reads one row at a time (§4)."""
+        return False
+
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
     ) -> LossTerm:
@@ -145,6 +155,11 @@ class Misreporting:
     def detaches(self) -> frozenset[tuple[Port, Realisation]]:
         return frozenset()
 
+    @property
+    def batch_coupled(self) -> bool:
+        """No: a double reads one row at a time (§4)."""
+        return False
+
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
     ) -> LossTerm:
@@ -166,6 +181,11 @@ class NotATerm:
     @property
     def detaches(self) -> frozenset[tuple[Port, Realisation]]:
         return frozenset()
+
+    @property
+    def batch_coupled(self) -> bool:
+        """No: a double reads one row at a time (§4)."""
+        return False
 
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext

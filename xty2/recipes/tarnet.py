@@ -6,13 +6,18 @@ from xty2.components import CategoricalPropensity, MLPEncoder, TARNetHead
 from xty2.components._nn import CFRNET_INITIALISATION
 from xty2.core import (
     ComponentGraph,
+    DataSpec,
     ExponentialDecay,
     GradientClipping,
+    MissingnessSpec,
     OptimiserSpec,
+    PreprocessSpec,
     Ramp,
     Recipe,
     Schema,
+    SplitSpec,
     Stage,
+    UniformSampler,
     WeightDecay,
     Weighted,
 )
@@ -24,6 +29,34 @@ from xty2.objectives import (
 
 ENCODER_WIDTHS = (200, 200, 200)
 OUTCOME_WIDTHS = (100, 100, 100)
+
+BATCH_SIZE = 100
+"""`optimisation.batch_size`, card §4: the pinned reference implementation's.
+
+Card §4 used to read `n/a  # external BatchSource; ref impl uses 100` — the
+number was known, and there was nowhere to put it. Deviation 5 is what that
+cost, and this is where it is repaid.
+"""
+
+DATA_POLICY = DataSpec(
+    split=SplitSpec(
+        protocol=(
+            "the archive's own realisation, fit/validation split 90/10 by "
+            "seeded permutation as the reference loader does"
+        ),
+        train="fit",
+    ),
+    # "the IHDP archive x is passed through unchanged by the reference loader",
+    # card §4. Declaring `none` is not a no-op: it is what makes the plan say
+    # so, and what the fitted-on check has to agree with.
+    preprocess=PreprocessSpec(features="none", outcome="none"),
+    # TARNet's data arrives fully observed. The 50% MCAR of Tier 1 belongs to
+    # the fixture that generates it and is card §5 deviation 4's business, not
+    # a property of the method — so the recipe declares that it consumes
+    # whatever mask the data carries.
+    missingness=MissingnessSpec(mechanism="observed"),
+)
+"""The four `data.*` card keys, in the one place a plan can print them."""
 
 
 def tarnet(schema: Schema) -> Recipe:
@@ -97,11 +130,13 @@ def tarnet(schema: Schema) -> Recipe:
                     eps=1e-8,
                 ),
                 steps=3_000,
+                sampler=UniformSampler(batch_size=BATCH_SIZE),
             ),
         ),
         card="docs/recipes/tarnet.md",
         purpose="causal",
+        data=DATA_POLICY,
     )
 
 
-__all__ = ["ENCODER_WIDTHS", "OUTCOME_WIDTHS", "tarnet"]
+__all__ = ["BATCH_SIZE", "DATA_POLICY", "ENCODER_WIDTHS", "OUTCOME_WIDTHS", "tarnet"]

@@ -99,6 +99,11 @@ class ConsistencyLoss:
         """Arithmetic choices that must change the plan and its digest."""
         return (f"divergence = {self.divergence!r}",)
 
+    @property
+    def batch_coupled(self) -> bool:
+        """No: the divergence pairs one row's two realisations with each other."""
+        return False
+
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
     ) -> LossTerm:

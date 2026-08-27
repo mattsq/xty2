@@ -16,6 +16,7 @@ from xty2.core import (
     Realisation,
     Recipe,
     Schema,
+    TrainingPopulation,
     ViewError,
     Weighted,
     XTYBatch,
@@ -169,8 +170,14 @@ class _CorruptTreatment:
         return frozenset()
 
     def apply(
-        self, batch: XTYBatch, schema: Schema, *, generator: torch.Generator
+        self,
+        batch: XTYBatch,
+        schema: Schema,
+        *,
+        generator: torch.Generator,
+        population: TrainingPopulation | None = None,
     ) -> XTYBatch:
+        del population
         del generator
         return batch.replace(t=(batch.t + 1) % schema.treatment_cardinality)
 
@@ -192,8 +199,14 @@ class _InPlaceTransform:
         return frozenset({"mass"})
 
     def apply(
-        self, batch: XTYBatch, schema: Schema, *, generator: torch.Generator
+        self,
+        batch: XTYBatch,
+        schema: Schema,
+        *,
+        generator: torch.Generator,
+        population: TrainingPopulation | None = None,
     ) -> XTYBatch:
+        del population
         del schema, generator
         batch.x.add_(1.0)
         return batch
@@ -216,8 +229,14 @@ class _FeatureWrite:
         return frozenset(self.declared)
 
     def apply(
-        self, batch: XTYBatch, schema: Schema, *, generator: torch.Generator
+        self,
+        batch: XTYBatch,
+        schema: Schema,
+        *,
+        generator: torch.Generator,
+        population: TrainingPopulation | None = None,
     ) -> XTYBatch:
+        del population
         del generator
         index = schema.index_of(self.target)
         x = batch.x.clone()

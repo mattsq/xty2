@@ -36,6 +36,11 @@ import torch
 
 from xty2.core.batch import XTYBatch
 from xty2.core.card_keys import card_hyperparameters
+from xty2.core.data import (
+    ExternalBatches,
+    TrainingPopulation,
+    sampler_lines,
+)
 from xty2.core.errors import CompileError, SchemaError, TrainingError, ViewError
 from xty2.core.graph import (
     IDENTITY_VIEW,
@@ -233,6 +238,9 @@ class ExecutionPlan:
     components: tuple[PlannedComponent, ...]
     stages: tuple[CompiledStage, ...]
     hyperparameters: Mapping[str, Any]
+    data: tuple[str, ...] = ()
+    """The recipe's data policy as the plan prints it, empty where a recipe
+    declares none because every stage takes the caller's batches."""
 
     def render(self) -> str:
         """The plan as text. Deterministic — the same recipe prints the same bytes."""
@@ -242,6 +250,8 @@ class ExecutionPlan:
             f"card: {self.card}",
             f"schema: D = {self.features}, K = {self.treatments}",
         ]
+        if self.data:
+            lines += ["", "data", *(f"  {line}" for line in self.data)]
         if self.views:
             lines += ["", *self._view_lines()]
         lines += ["", *self._component_lines(), "", *self._lineage_lines()]
@@ -337,6 +347,9 @@ class ExecutionPlan:
         elif compiled.action is not None:
             lines.append(f"  action: array fit {compiled.action.name}")
             lines.append(f"  action rows: {_rows(compiled.action_rows or ('all',))}")
+        sampler = sampler_lines(compiled.stage.sampler)
+        lines.append(f"  sampler: {sampler[0]}")
+        lines += [f"    {line.strip()}" for line in sampler[1:]]
         if compiled.objectives:
             lines += [
                 f"  steps: {compiled.steps}",
@@ -451,6 +464,7 @@ class CompiledRun:
         *,
         rng_key: int = 0,
         teacher_graph: ComponentGraph | None = None,
+        population: TrainingPopulation | None = None,
     ) -> State:
         """Run one stage's planned forward passes over `batch`.
 
@@ -503,7 +517,11 @@ class CompiledRun:
             viewed = batches_by_view.get((view_name, draw))
             if viewed is None:
                 viewed = self.recipe.view(view_name).apply(
-                    batch, self.recipe.schema, rng_key=rng_key, draw=draw
+                    batch,
+                    self.recipe.schema,
+                    rng_key=rng_key,
+                    draw=draw,
+                    population=population,
                 )
                 batches_by_view[view_name, draw] = viewed
             if forward.realisation.params == "teacher":
@@ -550,6 +568,7 @@ def compile(recipe: Recipe) -> CompiledRun:
     )
     _check_static_leakage(recipe, stages)
     _check_declared_draws(views, stages)
+    _check_batch_coupling(recipe)
     plan = ExecutionPlan(
         recipe=recipe.name,
         purpose=recipe.purpose,
@@ -560,6 +579,7 @@ def compile(recipe: Recipe) -> CompiledRun:
         components=tuple(_plan_component(graph, name) for name in graph.names),
         stages=stages,
         hyperparameters=_hyperparameters(recipe, stages),
+        data=() if recipe.data is None else recipe.data.describe_lines(),
     )
     return CompiledRun(
         recipe=recipe,
@@ -568,6 +588,34 @@ def compile(recipe: Recipe) -> CompiledRun:
         _initial_parameters=_snapshot(graph.named_parameters()),
         _initial_buffers=_snapshot(graph.named_buffers()),
     )
+
+
+def _check_batch_coupling(recipe: Recipe) -> None:
+    """`ExternalBatches` is refused where the batch size is method-bearing.
+
+    This is the bar that stops the caller-supplies-batches declaration being an
+    escape hatch. `InfoNCEContrastive`'s negatives are the other `N - 1` rows,
+    so its value *is* a function of how many rows arrive; handing that number
+    back to the caller is exactly the gap `scarf.md` §5.6 was written about.
+    Every likelihood term in the repository declares `batch_coupled = False`
+    and is unaffected.
+    """
+    for stage in recipe.program:
+        if not isinstance(stage.sampler, ExternalBatches):
+            continue
+        coupled = sorted(
+            weighted.name for weighted in stage.objectives if weighted.batch_coupled
+        )
+        if not coupled:
+            continue
+        raise CompileError(
+            f"stage {stage.name!r} of recipe {recipe.name!r} declares "
+            f"ExternalBatches, but objective(s) {coupled!r} read the rest of "
+            "the batch, so their arithmetic depends on how many rows arrive. "
+            "Declare a sampler that fixes `optimisation.batch_size`: a term "
+            "whose value the caller can change is a card key nothing checks "
+            "(docs/proposals/loader.md §10)."
+        )
 
 
 def _snapshot(
@@ -1150,6 +1198,13 @@ def _hyperparameters(
     owners: dict[str, str] = {}
     for component in recipe.system.components:
         _merge_component(resolved, owners, component)
+    if recipe.data is not None:
+        # Recipe-scoped, and the only owner at that scope: a split and the
+        # standardisation fitted on it are one policy for the run, and a
+        # per-stage split would make the leakage argument unstatable.
+        _merge_owner(
+            resolved, owners, recipe.data, "the recipe's data policy", scope=None
+        )
     scoped = len(recipe.program) > 1
     for stage in recipe.program:
         stage_label = f"stage {stage.name!r}"
@@ -1168,6 +1223,13 @@ def _hyperparameters(
                 f"the optimiser of {stage_label}",
                 scope=stage.name if scoped else None,
             )
+        _merge_owner(
+            resolved,
+            owners,
+            stage.sampler,
+            f"the sampler of {stage_label}",
+            scope=stage.name if scoped else None,
+        )
         if stage.teacher is not None:
             _merge_owner(
                 resolved,

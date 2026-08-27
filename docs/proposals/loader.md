@@ -1,11 +1,15 @@
 # Proposal — bringing data loading into the model pipeline
 
-**Status:** draft, for review. **Nothing described here is built.**
+**Status:** **built.** `DESIGN.md` §7.3 is the architecture; this document is
+kept as the reasoning behind it, and §13 records where the build differed from
+the draft. Read §7 and §10 for the parts a reviewer still has to judge.
 **Reads with:** `DESIGN.md` §7 (program), §9.1 (card-key binding), §11.2 (the
 abstraction test), §11.4 (the ledger); `FIDELITY.md` §2 (the checklist), §5 (the
 two kinds of deviation).
-**Discharges, if accepted:** the `loader` ledger row, and with it
-`fixmatch` §5.4, `scarf` §5.6 and `tarnet` §5.5.
+**Discharged:** the `loader` ledger row (`fixmatch` §5.4, `scarf` §5.6,
+`tarnet` §5.5) and `view-population-statistics` (`scarf` §5.2). **Opened:**
+`out-of-core-data`, `stateful-sampler` and `batch-row-repetition`, the last of
+which `fixmatch` §5.12 pays for.
 
 This is the framework analogue of a spec card: written and reviewed *before* the
 code, for the same reason (`FIDELITY.md` §1). It is not a description of the
@@ -555,3 +559,68 @@ the reason for deferring it has evaporated.
 implements, and (a)–(c) already move seven digests. If it is deferred, the
 ledger row must be rewritten in the same PR to say what is actually blocking it
 now, because "there is no training-population object" will no longer be true.
+
+---
+
+## 13. What the build changed
+
+The design survived contact largely intact. Five things moved, and four of them
+were forced by something concrete rather than chosen.
+
+**1. `PreprocessSpec` lost its `fit_on` field.** The draft gave the
+preprocessing its own fit split and the `SplitSpec` its own `train`, which is
+two sources for one fact. The fit split is `SplitSpec.train` and nothing else,
+so the leakage check has one thing to check against and the two cannot
+disagree. The four `data.*` card keys moved to `DataSpec` for the same reason —
+a canonical key names one value, and the split the standardisation was fitted
+on is part of what `data.standardisation` *means*, so the value is composed
+from the parts rather than restated.
+
+**2. A label budget is a first-class alternative to a rate.**
+`MissingnessSpec` takes `rate` **or** `observed`, exactly one. The fixtures
+forced this and they were right to: FixMatch reports CIFAR-10 at 40, 250 and
+4,000 *labels*, SCARF's scarce regime is stated the same way, and a rate would
+have made the declaration depend on how many rows the population happened to
+hold — the silent difference the card key exists to stop. Induced missingness
+also refuses data that already carries some: composing two mechanisms would
+make the declared budget describe neither.
+
+**3. A quota larger than its population is an error, and cannot be otherwise.**
+The draft did not consider it; the fixtures walked straight into it. FixMatch
+draws `B = 64` labelled rows from a 40-label split, which its reference does by
+iterating the labelled set as a repeating shuffle — so a step sees some rows
+twice, and `XTYBatch.row_id` must be unique because artifacts and provenance
+are keyed by it. A `cycle` option was written and then removed: it could not
+produce a valid batch, so it was a capability no card could use. The honest
+outcome is a **new ledger row**, `batch-row-repetition`, and a
+`framework-limitation` on `fixmatch` §5.12 raising that card's Tier 1 budget
+from 40 to 64 while holding `B` and `mu` at the paper's values. This is the
+mechanism §11.3 describes working in the same PR that built the capability.
+
+**4. `StageResult` carries the population.** Not in the draft, and the reason
+is §7.3's own logic: a run that fitted a standardisation and could not hand it
+back would make *refitting* it on the evaluation split the path of least
+resistance, which is the leakage `FIDELITY.md` §2 names first. Both smoke
+fixtures that evaluate on held-out rows now take the transform the run fitted.
+
+**5. Part (d) landed with the rest.** The draft left population-reading
+transforms optional and recommended folding them in; §12's argument held, and
+one fact settled it — `scarf`'s §6 numbers were already invalidated by the
+batch stream moving, so changing `FeatureCorruption` in the same packet cost
+nothing extra. `view-population-statistics` is discharged and `scarf` §5.2 is
+withdrawn. `FeatureCorruption` **requires** the population rather than falling
+back to the batch, so the deviation cannot return as a default nobody reads.
+
+One thing the draft got right and is worth naming, because it was the
+load-bearing bet: **§6's bit-identity requirement.** `UniformSampler` is pinned
+to the pre-loader helper by a Tier 0 test, so the four recipes that kept
+`ExternalBatches` moved their digests and not their arithmetic, and the three
+that adopted a sampler moved to a stream drawn by the same *scheme* under a
+different seed. Their recorded §6 results are marked invalidated pending
+re-measurement rather than silently retained — for `fixmatch` genuinely so,
+since the quota is new arithmetic.
+
+**What was refused.** A sampler on an `array_fit` or `cross_fit` stage: those
+consume one finite row-keyed table rather than a stream, no card asks for a
+sampled one, and building it would have been a mechanism with no consumer
+(§11.2). `ssdml` declares `ExternalBatches` and is unaffected.

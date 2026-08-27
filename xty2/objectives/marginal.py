@@ -109,6 +109,11 @@ class MissingTreatmentMarginalNLL:
             return frozenset({(Port.T_GIVEN_X, DEFAULT)})
         return frozenset()
 
+    @property
+    def batch_coupled(self) -> bool:
+        """No: the sum is over treatments `k`, never over other rows."""
+        return False
+
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
     ) -> LossTerm:

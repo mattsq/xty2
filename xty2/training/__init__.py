@@ -32,6 +32,7 @@ from xty2.training.executors import (
     run_stage,
     trainable_only,
 )
+from xty2.training.loading import build_population, check_fitted_on, iterate
 from xty2.training.loss_mixer import (
     PERIODIC_STEPS,
     GradientProbe,
@@ -63,8 +64,11 @@ __all__ = [
     "RunDirectory",
     "StageResult",
     "StepRecord",
+    "build_population",
+    "check_fitted_on",
     "gradient_report",
     "is_read_only",
+    "iterate",
     "run_array_fit",
     "run_cross_fit",
     "run_program",

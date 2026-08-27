@@ -162,6 +162,18 @@ class InfoNCEContrastive:
             "including the positive",
         )
 
+    @property
+    def batch_coupled(self) -> bool:
+        """**Yes** — the negatives are the other `N - 1` rows of the batch.
+
+        The one `True` in the repository today, and the reason the declaration
+        exists: it is what makes `optimisation.batch_size` a paper-governed
+        number for this term rather than a deployment detail, and it is what
+        stops a stage running this objective from handing batch construction
+        back to the caller (`scarf.md` §5.6).
+        """
+        return True
+
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
     ) -> LossTerm:

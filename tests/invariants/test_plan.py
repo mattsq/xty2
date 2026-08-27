@@ -51,6 +51,7 @@ data lineage
 stage fit
   rows: all
   executor: gradient
+  sampler: external: the caller supplies batches; no quota is enforced
   steps: 3
   optimisation
     optimiser     sgd(momentum=0.0, nesterov=False)
@@ -117,6 +118,7 @@ data lineage
 stage infer
   rows: t_observed
   executor: gradient
+  sampler: external: the caller supplies batches; no quota is enforced
   steps: 3
   optimisation
     optimiser     sgd(momentum=0.0, nesterov=False)

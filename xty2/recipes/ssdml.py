@@ -10,6 +10,7 @@ from xty2.components._nn import (
 from xty2.core import (
     ComponentGraph,
     Constant,
+    ExternalBatches,
     GradientClipping,
     OptimiserSpec,
     Port,
@@ -79,6 +80,7 @@ def ssdml(schema: Schema) -> Recipe:
                     eps=1e-8,
                 ),
                 steps=500,
+                sampler=ExternalBatches(),
             ),
             Stage(
                 name="dml_ate",
@@ -94,6 +96,7 @@ def ssdml(schema: Schema) -> Recipe:
                 ),
                 inputs=("propensity_labels",),
                 executor="array_fit",
+                sampler=ExternalBatches(),
             ),
         ),
         card="docs/recipes/ssdml.md",

@@ -22,6 +22,7 @@ from xty2.core import (
     CompiledRun,
     Constant,
     CosineDecay,
+    Dataset,
     FeatureSpec,
     GaussianOutcome,
     OutcomeSpec,
@@ -42,9 +43,6 @@ TEST_ROWS = 2_048
 BATCH_SIZE = 256
 STEPS = 3_000
 SHORT_STEPS = 600
-OBSERVED_TREATMENTS = 40
-"""Card §6: 40 of 1,024, the label-scarce regime FixMatch is aimed at."""
-
 CLUSTER_SIGNAL = 0.45
 SEPARATED = 0.02
 """`p(t=1 | cluster=0)`; the assignment is 0.02/0.98 and the gate can open."""
@@ -124,31 +122,19 @@ def _population(
     )
 
 
-def _take(batch: XTYBatch, rows: torch.Tensor) -> XTYBatch:
-    return XTYBatch(
-        x=batch.x.index_select(0, rows),
-        t=batch.t.index_select(0, rows),
-        y=batch.y.index_select(0, rows),
-        t_observed=batch.t_observed.index_select(0, rows),
-        y_observed=batch.y_observed.index_select(0, rows),
-        row_id=batch.row_id.index_select(0, rows),
-    )
+def _dataset(train: XTYBatch) -> Dataset:
+    """The training rows, under the assignment the recipe's policy names.
 
-
-@dataclass(frozen=True)
-class _BatchStream:
-    population: XTYBatch
-    indices: torch.Tensor
-
-    def __iter__(self) -> Iterator[XTYBatch]:
-        for rows in self.indices:
-            yield _take(self.population, rows)
-
-
-def _batch_indices(rows: int, *, steps: int, seed: int) -> torch.Tensor:
-    generator = torch.Generator().manual_seed(seed)
-    return torch.stack(
-        [torch.randperm(rows, generator=generator)[:BATCH_SIZE] for _ in range(steps)]
+    Tier 1 used to own the batch stream, the label budget and the outcome
+    scaling. All three are the recipe's declarations now — `QuotaSampler` at
+    `B = 64` and `mu = 7`, a 40-label MCAR budget, and a z-scored outcome
+    fitted on these rows — so the fixture supplies data and stops deciding
+    what eq. (5) mixes.
+    """
+    return Dataset(
+        schema=_schema(),
+        rows=train,
+        assignments={"train": torch.arange(train.batch_size)},
     )
 
 
@@ -277,11 +263,18 @@ def _evaluate(
     )
 
 
-def _standardised(low: float, seed: int) -> tuple[XTYBatch, _Population]:
+def _populations(low: float, seed: int) -> tuple[XTYBatch, _Population]:
+    """The train and test rows, before any policy.
+
+    The train rows arrive **fully observed**: the 40-label budget is the
+    recipe's declaration now, which is what makes eq. (5)'s two populations —
+    and therefore `mu` — something the plan states rather than something the
+    fixture happened to produce.
+    """
     train = _population(
         TRAIN_ROWS,
         seed=seed,
-        observed_treatments=OBSERVED_TREATMENTS,
+        observed_treatments=TRAIN_ROWS,
         row_offset=0,
         low=low,
     )
@@ -292,25 +285,29 @@ def _standardised(low: float, seed: int) -> tuple[XTYBatch, _Population]:
         row_offset=10_000,
         low=low,
     )
-    mean = train.batch.y.mean()
-    scale = float(train.batch.y.std(unbiased=False))
-    train_batch = train.batch.replace(y=(train.batch.y - mean) / scale)
-    test = replace(test, batch=test.batch.replace(y=(test.batch.y - mean) / scale))
-    return train_batch, test
+    return train.batch, test
+
+
+def _on_the_training_scale(test: _Population, result: StageResult) -> _Population:
+    """Apply the outcome scaling the run *fitted*, never one refitted here."""
+    population = result.population
+    assert population is not None
+    location = population.statistics["y_location"]
+    scale = population.statistics["y_scale"]
+    return replace(test, batch=test.batch.replace(y=(test.batch.y - location) / scale))
 
 
 def _run(recipe: Recipe, train: XTYBatch, test: _Population, steps: int) -> _Metrics:
     run = compile(_with_steps(recipe, steps))
-    batches = _BatchStream(train, _batch_indices(TRAIN_ROWS, steps=steps, seed=90_005))
-    result = run_stage(run, "joint_fit", batches, seed=90_010)
-    return _evaluate(run, result, test, train)
+    result = run_stage(run, "joint_fit", _dataset(train), seed=90_010)
+    return _evaluate(run, result, _on_the_training_scale(test, result), train)
 
 
 @pytest.fixture(scope="module")
 def paired_fit() -> tuple[_Metrics, _Metrics]:
     """FixMatch and its `lambda_u = 0` ablation, same seeds and same batches."""
     schema = _schema()
-    train, test = _standardised(SEPARATED, seed=90_001)
+    train, test = _populations(SEPARATED, seed=90_001)
 
     torch.manual_seed(90_006)
     scheduled = fixmatch(schema)
@@ -328,7 +325,7 @@ def paired_fit() -> tuple[_Metrics, _Metrics]:
 @pytest.fixture(scope="module")
 def overlapping_fit() -> _Metrics:
     """The same recipe where positivity holds and the gate should not be trusted."""
-    train, test = _standardised(OVERLAPPING, seed=91_001)
+    train, test = _populations(OVERLAPPING, seed=91_001)
     torch.manual_seed(90_006)
     return _run(fixmatch(_schema()), train, test, SHORT_STEPS)
 
@@ -447,12 +444,11 @@ def test_overlap_opens_the_gate_on_labels_it_should_not_trust(
 
 
 def _short_trace(threshold: float) -> StageResult:
-    train, _ = _standardised(SEPARATED, seed=90_001)
+    train, _ = _populations(SEPARATED, seed=90_001)
     torch.manual_seed(90_006)
     recipe = _with_threshold(fixmatch(_schema()), threshold)
     run = compile(_with_steps(recipe, 200))
-    batches = _BatchStream(train, _batch_indices(TRAIN_ROWS, steps=200, seed=90_005))
-    return run_stage(run, "joint_fit", batches, seed=90_010)
+    return run_stage(run, "joint_fit", _dataset(train), seed=90_010)
 
 
 def test_the_reviewed_threshold_is_the_one_that_ran() -> None:

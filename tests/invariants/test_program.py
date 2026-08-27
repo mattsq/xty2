@@ -15,6 +15,7 @@ from xty2.core import (
     Stage,
     State,
     TrainingError,
+    TrainingPopulation,
     Weighted,
     XTYBatch,
     compile,
@@ -112,14 +113,22 @@ def test_duplicate_stage_names_are_rejected_by_the_program() -> None:
 
 def test_the_plan_prints_checkpoint_transitions() -> None:
     plan = compile(_recipe()).plan.render()
-    assert "stage base\n  rows: all\n  executor: gradient\n  steps: 1" in plan
+    assert (
+        "stage base\n  rows: all\n  executor: gradient\n"
+        "  sampler: external: the caller supplies batches; no quota is enforced\n"
+        "  steps: 1"
+    ) in plan
     assert (
         "stage branch\n  rows: all\n  executor: gradient\n"
-        "  initialise from: base\n  steps: 1"
+        "  initialise from: base\n"
+        "  sampler: external: the caller supplies batches; no quota is enforced\n"
+        "  steps: 1"
     ) in plan
     assert (
         "stage replay\n  rows: all\n  executor: gradient\n"
-        "  initialise from: base\n  steps: 1"
+        "  initialise from: base\n"
+        "  sampler: external: the caller supplies batches; no quota is enforced\n"
+        "  steps: 1"
     ) in plan
 
 
@@ -266,10 +275,16 @@ def test_stages_never_share_a_view_key(
         *,
         rng_key: int = 0,
         teacher_graph: ComponentGraph | None = None,
+        population: TrainingPopulation | None = None,
     ) -> State:
         keys.append(rng_key)
         return original(
-            self, stage, batch, rng_key=rng_key, teacher_graph=teacher_graph
+            self,
+            stage,
+            batch,
+            rng_key=rng_key,
+            teacher_graph=teacher_graph,
+            population=population,
         )
 
     monkeypatch.setattr(type(run), "state", spy)

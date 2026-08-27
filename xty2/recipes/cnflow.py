@@ -15,6 +15,7 @@ from xty2.components.density import (
 from xty2.core import (
     ComponentGraph,
     Constant,
+    ExternalBatches,
     GradientClipping,
     OptimiserSpec,
     Recipe,
@@ -107,6 +108,7 @@ def cnflow(schema: Schema) -> Recipe:
                     eps=1e-8,
                 ),
                 steps=3_000,
+                sampler=ExternalBatches(),
             ),
         ),
         card="docs/recipes/cnflow.md",

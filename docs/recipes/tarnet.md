@@ -180,8 +180,8 @@ optimisation:
   lr: 0.001                                      # ref impl configs/example_ihdp.txt
   lr_schedule: staircase 1.0 * 0.97^floor(step/100)  # ref impl cfr_net_train.py:280-282
   weight_decay: 0.0001 (components tarnet_head only; norm and bias exempt)  # ref impl cfr/cfr_net.py:259-261, 305-306
-  batch_size: n/a                                # external BatchSource; ref impl uses 100
-  labelled_unlabelled_ratio: n/a                 # no fixed quota; Tier 1 applies 50% MCAR at dataset level
+  batch_size: 100                                # ref impl configs/example_ihdp.txt; UniformSampler
+  labelled_unlabelled_ratio: n/a                 # UniformSampler enforces no quota; TARNet has no unlabelled stream
   total_steps_or_epochs: 3000 optimiser steps    # ref impl configs/example_ihdp.txt
 
 architecture:
@@ -210,19 +210,21 @@ architecture:
     categorical_propensity: K softmax logits
 
 data:
-  standardisation: n/a                          # caller-owned; IHDP archive x is passed through unchanged by ref loader
-  outcome_scaling: n/a                          # caller-owned; ref loader applies none
+  standardisation: x: none fitted on 'fit'      # IHDP archive x is passed through unchanged by ref loader
+  outcome_scaling: y: none fitted on 'fit'      # ref loader applies none
   treatment_encoding: n/a                       # XTYBatch contract supplies integer classes 0..K-1
-  split_protocol: n/a                           # Tier 1 fixture and P12 benchmark runner own their splits
-  missingness_mechanism: n/a                    # Tier 1 fixture applies 50% treatment MCAR; paper has no missing t
+  split_protocol: the archive's own realisation, fit/validation split 90/10 by seeded permutation as the reference loader does; training rows are assignment 'fit'
+  missingness_mechanism: observed: the dataset's own t_observed mask, unchanged  # TARNet's data arrives labelled
 ```
 
-The `n/a` entries under batching and data are a deliberate P5 boundary, not
-missing research. `DESIGN.md` section 11 leaves the loader/sampler out until a
-recipe needs an enforced per-batch quota. The gradient executor consumes a
-caller-supplied `BatchSource`, so this recipe cannot honestly claim that it
-enforces batch size, splitting or preprocessing. The Tier 1 fixture and the P12
-benchmark runner must record those external mechanics alongside their results.
+Five of these keys were `n/a` until the loader existed, and the two that still
+are say something about the *method* rather than about xty2: `UniformSampler`
+enforces no labelled/unlabelled quota because TARNet has no unlabelled stream,
+and the treatment encoding is the `XTYBatch` contract's. Deviation 5 records
+what the change cost and bought; the standardisation is now fitted on the `fit`
+assignment by the compiled program, and
+`TrainingPopulation.fitted_on_row_ids` is checked against it at run time rather
+than described in this paragraph.
 
 ## 5. Deviations from the paper
 
@@ -232,9 +234,21 @@ benchmark runner must record those external mechanics alongside their results.
 | 2 | `judgement` | — | Generalise two treatment heads to `K` categorical heads. | xty2 v1 is categorical-treatment-first and the candidate-treatment contract must work for `K != B`. | None when the IHDP benchmark runs with `K=2`; no published target exists for `K>2`. |
 | 3 | `judgement` | — | Represent each deterministic squared-error head as a unit-scale Gaussian and train by NLL. | `Y_GIVEN_XT` must satisfy the distribution protocol so the same marginal objective can later consume a flow head unchanged. | For complete cases the NLL differs from squared error only by a positive scale and constant, so it has the same optimum. It changes the scale of the added mixture likelihood. |
 | 4 | `judgement` | — | Simulate 50% treatment missing completely at random in Tier 1. | This is the P5 acceptance condition in `PLAN.md` and `FIDELITY.md`, not part of the paper. | Not applicable to the fully observed published target; load-bearing for the smoke comparison. |
-| 5 | `framework-limitation` | `loader` | Declare the split, standardisation and missingness policy on this card and enforce it in the Tier 1 fixture and the P12 runner, rather than in the recipe. `data.split_protocol`, `data.standardisation` and `data.missingness_mechanism` stay `n/a` in `plan.hyperparameters`. | xty2 has no loader, so a recipe-level data policy has nothing to bind to: a stage field for any of these would be a card key nothing could check, which `DESIGN.md` section 7.1 rejects for provenance and section 9.1 for hyperparameters. Section 7 used to carry this as the *basis* for a choice; it is a limitation, and `FIDELITY.md` section 5.1 puts it here where the ledger can see it. | None for the published IHDP target, which arrives fully observed and pre-split. What it costs is a guarantee rather than a number: the standardisation the published value depends on is enforced by the fixture instead of by the compiled program, so a later runner could fit it on the wrong split and nothing in the plan would say so — the leakage point `FIDELITY.md` section 2 names first. |
+| 5 | `withdrawn` | — | ~~Declare the split, standardisation and missingness policy on this card and enforce it in the Tier 1 fixture and the P12 runner, rather than in the recipe.~~ **Withdrawn.** The recipe declares a `DataSpec`, `optimisation.batch_size` binds `100`, and the three `data.*` keys carry values in `plan.hyperparameters`. | The original entry was correct and is now paid: xty2 has a loader. What it bought is the guarantee this row said was missing — the standardisation is fitted on the declared `fit` assignment by the compiled program, and `TrainingPopulation.fitted_on_row_ids` is checked against that assignment at run time, so a runner that fitted it on the wrong split fails rather than passing silently. The 50% Tier 1 MCAR remains the *fixture's*, which is deviation 4's business and not a property of TARNet, so the recipe declares `mechanism: observed`. | The section 6 result below was measured under the pre-loader batch stream and is **invalidated** by this change, not merely re-labelled: the recipe now owns the batch size and its sampler seed is derived from the stage seed, so the stream moved. The sampling *scheme* is identical — one fresh permutation per step, first 100 rows, asserted against the old helper in `tests/invariants/test_loading.py` — so the number should move within its existing error bars, but that is a prediction and the nightly run is what settles it. |
+
+### 5.1 Framework additions made for this card
+
+| Added | Quadrant (§11.2) | Consumers today | Named second consumer | Why now |
+|---|---|---|---|---|
+| `DataSpec` on `Recipe` — split, standardisation and missingness as declarations the compiler reads | fidelity-bearing, **load-bearing vocabulary** | This card, `scarf` and `fixmatch` | **VIME** (`BACKLOG.md` §5.2), whose protocol standardises on the training split before masking, and whose corruption then reads the same population. The shape was checked against it in one place: the policy names the *split* the statistics are fitted on rather than carrying the statistics, so a second consumer fitting a different statistic on the same split adds a field rather than a concept | Three of this card's §4 keys were `n/a` with the reason "xty2 has no loader" written beside them, and deviation 5 recorded the guarantee that cost: the standardisation a published number depends on was enforced by the fixture, so a runner could fit it on the wrong split and nothing in the plan would say so. That is §11.2 Q1 answered yes by three cards at once |
+| `Dataset` and `TrainingPopulation` — the rows a caller supplies, and what the policy makes of them | fidelity-bearing, **load-bearing vocabulary** | The three cards above | **repeated cross-fitting** (`DESIGN.md` §11.4, paid for by `ssdml` §5.6): `Dataset.assignments` is a mapping of named subsets rather than one `split` field precisely so a second partition over the same rows is additive. That row is amended, not discharged — the artifact contract still assumes one assignment | A `Recipe` is a declaration of a method, so the rows cannot live in it; a policy with nothing to apply it to cannot be checked. The pair is what lets the recipe declare and the caller supply. `fitted_on_row_ids` is `Checkpoint.trained_on_row_ids` applied to preprocessing, and it is what makes deviation 5's guarantee falsifiable rather than described |
+| `UniformSampler`, and `Stage.sampler` as a `REQUIRED` field | fidelity-bearing, reversible | The three cards above; the other four declare `ExternalBatches` | — (not required for this quadrant) | `optimisation.batch_size` was `n/a` here with "ref impl uses 100" written in the comment: the number was known and had nowhere to go. The sampler is *defined* as the scheme every fixture already used, which is what let seven recipes adopt it without re-basing onto new noise |
 
 ### Tier 2 outcome
+
+**This result predates the loader and is invalidated pending a re-run**
+(deviation 5). It is kept rather than deleted, because the comparison between
+it and the re-run is the evidence that the change moved no arithmetic.
 
 On 2026-08-24, commit `d060df351f2fe8bac6d951c3757506c684d8b408` produced a `deviating` result: This evaluates the implemented TARNet extension against the IHDP within-sample estimand, with the paper's target retained unchanged. The pinned reference repository ships 100 of the declared 1,000 IHDP realisations. The reviewed card also requests only ten seeds, so P12 runs realisations 1-10 with one deterministic fit each. That cannot establish the published 1,000-realisation centre and is recorded as deviating even if its ten-run mean lies inside the numeric tolerance. Failed target(s): sqrt_PEHE_in_sample was 1.66989 +/- 0.178 outcome units against 0.78 <= mean <= 0.98 outcome units.
 
@@ -307,7 +321,7 @@ The first implementation is deliberately one graph and one stage:
 | Exact interpretation of the paper's `+/-` values | Treat the published centre `0.88` as the target and report xty2 mean and standard error explicitly. | The table does not label the dispersion statistic in its caption. |
 | Whether the published `0.88` remains attainable with the auxiliary propensity loss | Keep the target and predeclare the deviation rather than widen tolerance after seeing a run. | This is the honest falsifiable test of whether the P5 extension preserves the TARNet backbone. |
 | How the card's ten seeds map onto its 1,000-realisation IHDP variant | P12 uses realisations 1–10 from the `clinicalml/cfrnet` archive pinned in §1, with deterministic seeds `130000 + r` for split, batches and fit. It records the outcome as `deviating` regardless of the ten-run centre because the pinned repository ships only 100 realisations and ten runs cannot establish the published 1,000-realisation mean. | Fixes the sampling decision before any P12 result is observed and prevents a small subset from being silently presented as the paper's experiment. |
-| Executable ownership of split, standardisation and missingness declarations | Tier 1 fixture now; P12 benchmark runner later. | Section 5.5 owns this: it is a framework limitation blocked on `loader`, not a basis for a choice (`FIDELITY.md` section 5.1). The current `BatchSource` executor boundary is what it is blocked behind. |
+| Executable ownership of split, standardisation and missingness declarations | The compiled program owns all three: `DataSpec` on the recipe, checked against the supplied `Dataset` at run time. | This row used to record a framework limitation living in section 7, which `FIDELITY.md` section 5.1 now forbids; deviation 5 held it, and deviation 5 is withdrawn. What is left here is genuinely an unknown the paper does not settle: the reference loader's 90/10 fit/validation split is transcribed from its code rather than from the paper. |
 | How component-valued architecture keys appear in `plan.hyperparameters` | Aggregate each `architecture.*` key as a mapping keyed by component name. | The first card-to-plan diff must expose the three modules separately; a scalar or last-write-wins binding would satisfy presence while hiding a discrepancy. |
 
 ## 8. Review

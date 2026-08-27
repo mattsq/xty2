@@ -7,6 +7,7 @@ from xty2.components._nn import TORCH_LINEAR_INITIALISATION
 from xty2.core import (
     ComponentGraph,
     Constant,
+    ExternalBatches,
     GradientClipping,
     OptimiserSpec,
     Port,
@@ -106,6 +107,7 @@ def cycle_dual(schema: Schema) -> Recipe:
                     eps=1e-8,
                 ),
                 steps=500,
+                sampler=ExternalBatches(),
             ),
             Stage(
                 name="outcome_fit",
@@ -130,6 +132,7 @@ def cycle_dual(schema: Schema) -> Recipe:
                     eps=1e-8,
                 ),
                 steps=1_000,
+                sampler=ExternalBatches(),
             ),
         ),
         card="docs/recipes/cycle_dual.md",

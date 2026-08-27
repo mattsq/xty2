@@ -181,6 +181,17 @@ class PseudoLabelTreatmentNLL:
             "denominator = every eligible row; rejected rows contribute 0",
         )
 
+    @property
+    def batch_coupled(self) -> bool:
+        """No: the gate reads one row's own confidence, not the batch's.
+
+        The distinction matters here more than anywhere: a *threshold* over the
+        batch's own confidences — FreeMatch's self-adaptive one, say — would
+        make this true, and the same class name would then mean something the
+        card had not declared.
+        """
+        return False
+
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
     ) -> LossTerm:
