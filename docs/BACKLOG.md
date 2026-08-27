@@ -136,27 +136,36 @@ they looked before the measurement existed.
 Step 3 has now landed too — `docs/recipes/doublematch.md` — and it bears on
 that reading without settling it. DoubleMatch's `l_s` is SCARF's family with
 the negatives deleted (a cosine to one's own other view, no contrast set), and
-on the same fixture it does learn: an alignment of 0.73 where the same term
-left undescended sits at -0.03, and no collapse. Whether that buys a better propensity
-came out **mixed** — the EMA the paper reports from is 3.8% better and the
-network under it is 8.8% worse, and a second initialisation flips the second
-number (`doublematch.md` §6.2). So the negative-free variant clears the bar
-SCARF's did not (it learns something the propensity head does not have to
-fight), and the end-to-end question is now a Tier 2 one rather than a null
-result.
+on the declared encoder it does learn, and without collapsing: an alignment of
+0.61 where the same term left undescended sits within 0.01 of zero. Whether
+that buys a better propensity came out **mixed**, and mixed in a way worth
+knowing about — two initialisation draws of one architecture put the EMA
+comparison on opposite sides of 1.0 (`doublematch.md` §6.2). So the
+negative-free variant clears the bar SCARF's did not, and the end-to-end
+question is a Tier 2 one rather than a null result.
 
 It also produced a result nobody was looking for, and it is the reason to read
-that card before writing the next one: **a cosine consistency term collapses a
-representation that lives on the unit sphere.** Every recipe before this one
-inherits CFRNet's `row_l2` on the encoder output, and with it `l_s` drives the
-whole batch to one direction inside ten steps at every `w_s` from 0.5 down to
-0.01, leaving the propensity at the class marginal (`doublematch.md` §6.2).
-Dropping the normalisation — which is what the reference's unnormalised
-`embeds` are — fixes it. Anything in §5.1 that measures agreement by cosine
-(SimMatch's instance similarity, PAWS's soft assignments, BYOL, SimSiam,
-Barlow Twins' cross-correlation) meets the same geometry, and the cheap
-diagnostic that caught it is `CosineFeatureConsistency`'s concentration pair,
-which any of them can reuse.
+that card before writing the next one: **a cosine consistency term collapses
+this project's shared encoder, and the cause is the scale of the
+representation, not its geometry.** Eq. (3)'s gradient carries `1/||.||`.
+CFRNet's `0.1/sqrt(fan_in)` leaves `MLPEncoder`'s pre-normalisation activations
+at a norm of 0.011 — about a hundredth of what a batch-normalised backbone
+hands such a term in the papers these methods come from — and `row_l2` passes
+that factor upstream, so the term arrives ninety times too loud and drives the
+whole batch to one direction inside ten steps at every `w_s` from 0.5 to 0.01
+(`doublematch.md` §6.2). Changing only the initialisation removes it; changing
+only the normalisation does not, which is what the first version of that card
+got wrong and an adversarial review caught.
+
+Two things follow for §5.1's cosine-shaped methods (SimMatch's instance
+similarity, PAWS's soft assignments, BYOL, SimSiam, and Barlow Twins by the
+same argument about its cross-correlation). Any of them meets this the moment
+it reads `X_REPR` from the P5 backbone, so measure `||f(x)||` before tuning a
+weight. And the cheap diagnostic that caught it is
+`CosineFeatureConsistency`'s concentration pair, which any of them can reuse —
+provided it is read over the whole trajectory: the architecture that card first
+declared spends 135 steps fully collapsed and recovers, which a terminal
+reading scores as healthy.
 
 ---
 
@@ -334,10 +343,11 @@ References:
 > branch only (BYOL, SimSiam, SimMatch) needs the same asymmetry.
 >
 > Two findings are in that card's §6.2 and are summarised under the sequence
-> note above: the unit-sphere collapse, and a mixed end-to-end result whose two
-> halves disagree by parameter set — which is itself the second card in a row
-> to find that an EMA number and the network under it can point opposite ways
-> (`fixmatch.md` §6.2 was the first).
+> note above: the scale-driven collapse of the shared encoder, and a mixed
+> end-to-end result whose two readings disagree — and swap which of them is
+> favourable between two initialisation draws of one architecture. It is the
+> second card in a row to find that an EMA number and the network under it can
+> point opposite ways (`fixmatch.md` §6.2 was the first).
 
 DoubleMatch pairs FixMatch-style pseudo-supervision on confident rows with a
 self-supervised representation objective that still uses the low-confidence

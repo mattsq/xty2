@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 import torch
 from torch import nn
+from xty2.components import MLPEncoder
 from xty2.core import (
     DEFAULT,
     CompileError,
@@ -30,6 +31,7 @@ from xty2.objectives import CosineFeatureConsistency
 from xty2.recipes import doublematch, fixmatch
 from xty2.recipes.doublematch import SELF_SUPERVISED_WEIGHT
 from xty2.recipes.fixmatch import WEAK_X_LABELLED
+from xty2.recipes.tarnet import ENCODER_WIDTHS
 
 ROOT = Path(__file__).resolve().parents[2]
 CARD = ROOT / "docs" / "recipes" / "doublematch.md"
@@ -276,7 +278,7 @@ def test_removing_eq_three_leaves_exactly_the_fixmatch_plan() -> None:
     §III: "our loss function is identical to that used in FixMatch when
     `w_s = 0`". Dropping eq. (3) and the projection head leaves a plan that
     differs from `fixmatch`'s in five lines, and the point of the test is that
-    they are enumerable: three are the recipe's identity (its name, its card,
+    they are enumerable: four are the recipe's identity (its name, its card,
     and one sentence of prose about the fixture, which the plan prints twice),
     and the fifth is **deviation 9** — the encoder's output normalisation, the
     one place this recipe departs from the shared P5 backbone.
@@ -304,29 +306,61 @@ def test_removing_eq_three_leaves_exactly_the_fixmatch_plan() -> None:
     assert differing[4][0].strip().startswith("data.split_protocol")
     # Deviation 9, and the only computational difference of the five.
     assert differing[3] == (
-        "    mlp_encoder            = 'none'",
-        "    mlp_encoder            = 'row_l2'",
+        "    mlp_encoder            = 'torch Linear default Kaiming-uniform'",
+        "    mlp_encoder            = 'normal std=0.1/sqrt(fan_in), bias=0'",
     )
     for mine, yours in differing[:3] + differing[4:]:
         assert mine.replace("doublematch", "fixmatch").replace("/STL", "") == yours
 
 
-def test_the_two_recipes_build_byte_identical_shared_parameters() -> None:
-    """The projection head is new weight, and everything else is not.
+def test_deviation_nine_is_a_hundredfold_change_in_representation_scale() -> None:
+    """The measurement deviation 9 exists for, made executable.
 
-    `h` is constructed last, so the three components `fixmatch` also has
-    consume the same construction-time RNG and initialise identically. That is
-    what lets §6's pair share a seed and differ in eq. (3) alone.
+    Eq. (3)'s gradient carries `1 / ||.||` — `F.normalize`'s backward does —
+    so the term is only as well-scaled as the representation it is handed. Under
+    CFRNet's `0.1/sqrt(fan_in)` this encoder's pre-normalisation activations sit
+    at a norm around 0.01, roughly a hundredth of what a batch-normalised
+    backbone hands the term in the paper, and `row_l2` passes that factor
+    upstream. Torch's default initialisation puts it back at order 1.
+
+    Asserted as an order of magnitude rather than a constant: the claim is
+    about scale, and pinning four decimals here would make an unrelated change
+    to the fixture fail a test about the encoder.
     """
     schema = _schema()
-    torch.manual_seed(19)
-    ours = doublematch(schema).system.state_dict()
-    torch.manual_seed(19)
-    theirs = fixmatch(schema).system.state_dict()
-    assert set(theirs) < set(ours)
-    for name, value in theirs.items():
-        assert torch.equal(value, ours[name])
-    assert any("projection_head" in name for name in set(ours) - set(theirs))
+    batch = _batch()
+    scales: dict[str, float] = {}
+    for name, recipe in (
+        ("doublematch", doublematch(schema)),
+        ("fixmatch", fixmatch(schema)),
+    ):
+        encoder = recipe.system["mlp_encoder"]
+        initialisation = encoder.initialisation
+        assert isinstance(initialisation, str)
+        unnormalised = MLPEncoder(
+            input_dim=schema.num_features,
+            widths=ENCODER_WIDTHS,
+            activation="elu",
+            normalisation="none",
+            dropout=0.0,
+            initialisation=initialisation,
+        )
+        unnormalised.load_state_dict(encoder.state_dict())
+        with torch.no_grad():
+            values = ComponentGraph([unnormalised]).evaluate(
+                batch, schema=schema, only=("mlp_encoder",)
+            )
+        representation = values[Port.X_REPR]
+        assert isinstance(representation, torch.Tensor)
+        scales[name] = float(representation.norm(dim=-1).mean())
+
+    assert scales["fixmatch"] < 0.1
+    assert 0.3 < scales["doublematch"] < 30.0
+    assert scales["doublematch"] > 50.0 * scales["fixmatch"]
+    # Both encoders still emit unit vectors: deviation 9 changes the scale the
+    # normalisation divides out, not the geometry it produces.
+    for recipe in (doublematch(schema), fixmatch(schema)):
+        assert recipe.system["mlp_encoder"].normalisation == "row_l2"
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +407,58 @@ def test_every_answered_card_key_reaches_the_plan() -> None:
     answered = _card_section_four()
     missing = sorted(set(answered) - set(plan.hyperparameters))
     assert not missing, "card keys missing from plan: " + ", ".join(missing)
+
+
+def _rendered(value: object) -> str:
+    """The plan's value as §4 writes it. `test_fixmatch.py`'s helper."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, tuple):
+        return "[" + ", ".join(str(item) for item in value) + "]"
+    return str(value)
+
+
+def test_every_card_value_the_plan_also_carries_agrees_with_it() -> None:
+    """Key presence is not the cross-check; the values are.
+
+    This card originally shipped with the key-level check above plus two
+    hand-picked value tests, which left `architecture.*` for three of four
+    components, every `data.*` key, three of four `teacher.*` keys and
+    `optimisation.lr_schedule` free to drift. The adversarial review found the
+    gap and confirmed the values themselves were sound, so this is enforcement
+    catching up with `fixmatch.md`'s, not a repair.
+    """
+    hyperparameters = compile(doublematch(_schema())).plan.hyperparameters
+    mismatched: list[str] = []
+    # As `test_fixmatch.py`: the card states widths schema-generically and the
+    # plan resolves them against the schema being compiled.
+    symbolic = {"architecture.widths_depths": {"K": "3", "X_REPR": "200"}}
+    checked = 0
+    for key, stated in _card_section_four().items():
+        planned = hyperparameters.get(key)
+        if planned is None:
+            mismatched.append(f"{key}: absent from the plan")
+            continue
+        if isinstance(stated, str):
+            if not isinstance(planned, dict) and _rendered(planned) != stated:
+                mismatched.append(f"{key}: card {stated!r} vs plan {planned!r}")
+            checked += 1
+            continue
+        assert isinstance(planned, dict), f"{key} is scoped in the card only"
+        for scope, value in stated.items():
+            if scope not in planned:
+                mismatched.append(f"{key}[{scope}]: absent from the plan")
+                continue
+            resolved = value
+            for symbol, concrete in symbolic.get(key, {}).items():
+                resolved = resolved.replace(symbol, concrete)
+            if _rendered(planned[scope]) != resolved:
+                mismatched.append(
+                    f"{key}[{scope}]: card {resolved!r} vs plan {planned[scope]!r}"
+                )
+            checked += 1
+    assert not mismatched, "card and plan disagree: " + "; ".join(mismatched)
+    assert checked >= 40
 
 
 def test_the_per_objective_card_values_are_the_ones_that_ran() -> None:

@@ -114,20 +114,23 @@ def doublematch(
         system=ComponentGraph(
             [
                 # `f`. The one departure from the shared P5 backbone, and it
-                # is eq. (3)'s own: the reference takes `z_i` and `v_i` from
-                # unnormalised penultimate activations, where every other xty2
-                # recipe inherits CFRNet's `row_l2`. On the unit sphere a
-                # cosine target *is* the whole geometry of the representation,
-                # and the term takes the shortest route to it — measured, the
-                # encoder collapses inside ten steps at every `w_s` from 0.5
-                # down to 0.01 (card §5 deviation 9 and §6.2).
+                # is the *initialisation*, not the geometry: eq. (3)'s gradient
+                # carries `1/||.||`, and CFRNet's `0.1/sqrt(fan_in)` leaves this
+                # encoder's pre-normalisation activations at a norm of 0.011,
+                # about a hundredth of what a batch-normalised backbone hands
+                # the term in the paper. `row_l2` then passes that factor
+                # upstream and the representation collapses. Measured across
+                # three encoder configurations in card §6.2; deviation 9 is
+                # the row, and an earlier version of this recipe changed the
+                # normalisation instead, which does not fix the scale and only
+                # lets the run climb back out of the basin it still enters.
                 MLPEncoder(
                     input_dim=schema.num_features,
                     widths=ENCODER_WIDTHS,
                     activation="elu",
-                    normalisation="none",
+                    normalisation="row_l2",
                     dropout=0.0,
-                    initialisation=CFRNET_INITIALISATION,
+                    initialisation=TORCH_LINEAR_INITIALISATION,
                 ),
                 TARNetHead(
                     representation_dim=ENCODER_WIDTHS[-1],
@@ -258,8 +261,11 @@ def doublematch(
         data=DATA_POLICY,
         views=(
             # §III-A: "We follow one of the augmentation schemes used in
-            # FixMatch". The two specs are that card's, imported rather than
-            # copied so that one reviewed decision has one home.
+            # FixMatch". The two rates and the preserved-field set are imported
+            # so that those have one home; the two `ViewSpec` constructions are
+            # restated, which is a second place to edit one reviewed decision
+            # (card §4). Tier 0's plan comparison against `fixmatch` is what
+            # catches a divergence between them.
             ViewSpec(
                 name="weak_x",
                 transforms=(FeatureMask(p=WEAK_MASK_RATE, columns=None, value=0.0),),

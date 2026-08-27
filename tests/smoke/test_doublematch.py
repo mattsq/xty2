@@ -5,14 +5,18 @@ are **imported** rather than restated: `doublematch.md` §6.1 says the fixture i
 that one "in full and without modification", and a copy would be a second thing
 to keep true. What is new here is what the run is measured on. Eq. (3) has no
 gate, so mask rate and impurity say nothing about it; the questions are whether
-it learns anything, whether it does so without collapsing the representation —
-which its own loss cannot answer, because a collapsed encoder attains the best
-possible value — and what it then does to the propensity and the outcome stack.
-The last of those came out mixed on one seed, and the test that reports it says
-so rather than asserting the half that looks better (card §6.2).
+it learns anything, and what the representation does while it learns — which
+its own loss cannot answer, because a collapsed encoder attains the best
+possible value. What eq. (3) then does to held-out treatment prediction came
+out mixed on one seed and is **not** asserted anywhere here: the card's §6.2
+records the numbers and §6's ten-seed Tier 2 target owns the claim. Tier 1 is
+the wiring tier (`FIDELITY.md` §3), and a directional single-seed assertion is
+a result wearing wiring's clothes.
 
-The last test is the one that produced deviation 9. It is kept executable so
-that the encoder's output normalisation cannot quietly come back.
+The last test is the one that produced deviation 9. It is kept executable, and
+differential, so that the encoder's output normalisation cannot quietly come
+back — and so that the fact both encoders collapse, while only one recovers,
+cannot be rounded off into "the declared one does not collapse".
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ import pytest
 import torch
 from torch.nn import functional as F
 from xty2.components import MLPEncoder
-from xty2.components._nn import CFRNET_INITIALISATION
+from xty2.components._nn import CFRNET_INITIALISATION, TORCH_LINEAR_INITIALISATION
 from xty2.core import (
     CategoricalTreatment,
     CompiledRun,
@@ -54,7 +58,8 @@ from tests.smoke.test_fixmatch import (
 
 SELF_SUPERVISED = "cosine_feature_consistency"
 PSEUDO_LABEL = "pseudo_label_treatment_nll"
-COLLAPSE_STEPS = 200
+COLLAPSE_STEPS = 400
+"""Long enough for the declared encoder to have left the basin (card §6.2)."""
 BATCH_ROWS = 512
 """`B + mu B`, the quota the imported fixture's recipe declares."""
 
@@ -75,15 +80,23 @@ def _with_weight(recipe: Recipe, weight: float) -> Recipe:
     return replace(recipe, program=Program((replace(stage, objectives=objectives),)))
 
 
-def _with_row_l2_encoder(recipe: Recipe) -> Recipe:
-    """The shared P5 backbone this recipe deviates from (deviation 9)."""
+def _with_encoder(recipe: Recipe, initialisation: str) -> Recipe:
+    """Swap the encoder's initialisation, and nothing else.
+
+    Used for **both** arms of the collapse comparison, including the one whose
+    initialisation it does not change. Replacing the encoder consumes
+    construction RNG in a different order from building the recipe, so an arm
+    built this way and an arm left alone would differ in their draws as well as
+    in the field under test. Putting both through the same path costs one
+    redundant construction and buys an A/B on one flag.
+    """
     encoder = MLPEncoder(
         input_dim=recipe.schema.num_features,
         widths=ENCODER_WIDTHS,
         activation="elu",
         normalisation="row_l2",
         dropout=0.0,
-        initialisation=CFRNET_INITIALISATION,
+        initialisation=initialisation,
     )
     return replace(
         recipe,
@@ -184,10 +197,15 @@ def test_the_self_supervised_term_learns_the_invariance(
 ) -> None:
     """Eq. (3) is descended, and the ablation's copy of it is not.
 
-    The ablated arm computes the same term at weight 0, so its value is a
-    read-out of what the other objectives do to the representation on their
-    own. That it stays near zero — orthogonal, on average — is what makes the
-    scheduled arm's alignment attributable to the term rather than to training.
+    The ablated arm computes the same term at weight 0 and logs it without
+    descending it. Note what that control is and is not: `h` is trained by
+    eq. (3) and by nothing else, so at `w_s = 0` it keeps its initialisation
+    and its output is dominated by its own random bias (card §7). The
+    ablation's ≈0 is therefore close to definitional — a fixed random direction
+    against `z` — and it is asserted here as a floor on the *logging path*,
+    not as evidence that the other four terms would have failed to align the
+    representation. The adversarial review corrected an earlier version of this
+    docstring that claimed the latter.
     """
     scheduled, ablated = paired_fit
     late = range(STEPS - 100, STEPS)
@@ -196,24 +214,43 @@ def test_the_self_supervised_term_learns_the_invariance(
     assert abs(_mean(ablated.result, late, SELF_SUPERVISED, "value")) < 0.2
 
 
-def test_the_representation_does_not_collapse_under_the_term(
+def test_the_representation_does_not_collapse_at_any_point(
     paired_fit: tuple[_Metrics, _Metrics],
 ) -> None:
-    """The card's §6 guardrail, and the reason the diagnostics exist.
+    """Over the whole trajectory, not over its last hundred steps.
 
     A collapsed encoder attains eq. (3)'s minimum, so "the loss went down" is
-    compatible with the worst possible outcome. The term does concentrate the
-    representation relative to the ablation — that is what an invariance is —
-    and the claim is that it stops well short of one direction.
+    compatible with the worst possible outcome, and the concentration pair is
+    the only thing that can tell the two apart. The first version of this test
+    averaged the last hundred steps of a 3,000-step run and called that "does
+    not collapse"; an adversarial review pointed out that the recipe it was
+    then guarding spent 135 steps at a concentration above 0.99 before
+    recovering, which a terminal reading cannot see. Deviation 9 is the fix for
+    that, and this is the assertion that would have caught it.
     """
     scheduled, ablated = paired_fit
-    late = range(STEPS - 100, STEPS)
-    concentration = _mean(
-        scheduled.result, late, SELF_SUPERVISED, "target_concentration"
-    )
-    assert concentration < 0.8
-    assert concentration > _mean(
-        ablated.result, late, SELF_SUPERVISED, "target_concentration"
+    trajectory = [
+        _term(scheduled.result, step, SELF_SUPERVISED).diagnostics[  # type: ignore[attr-defined]
+            "target_concentration"
+        ]
+        for step in range(STEPS)
+    ]
+    assert max(trajectory) < 0.9
+    assert trajectory[-1] < 0.5
+    # Not asserted as "more concentrated than the ablation": measured on this
+    # architecture the term leaves the representation *less* concentrated than
+    # the `w_s = 0` arm does, where on the one deviation 9 replaced it left it
+    # more so (card §6.2). Neither direction is a property of eq. (3) worth
+    # holding a recipe to.
+    assert (
+        0.0
+        < _mean(
+            ablated.result,
+            range(STEPS - 100, STEPS),
+            SELF_SUPERVISED,
+            "target_concentration",
+        )
+        < 0.9
     )
 
 
@@ -272,29 +309,6 @@ def test_both_arms_learn_a_propensity_worth_having(
     assert ablated.treatment_nll < 0.75 * ablated.frequency_nll
 
 
-def test_eq_three_moves_the_held_out_propensity_and_the_two_readings_disagree(
-    paired_fit: tuple[_Metrics, _Metrics],
-) -> None:
-    """The card's §6 metric on one seed, and the reason it is not a result.
-
-    The EMA is the model §IV of the paper reports from and the one §6 declares,
-    and on it eq. (3) wins here. The network the EMA averages goes the other
-    way by more. Both directions are asserted, because both were measured and
-    the disagreement is the finding: a single-seed claim about eq. (3) on this
-    fixture is not supportable in either direction, which is why §6's target is
-    a ten-seed mean and why this card claims the mechanism rather than the
-    improvement (§6.2).
-
-    A second initialisation of the same architecture agrees on the first line
-    and flips the second, so neither margin should be read as a property of the
-    method. What this test pins is that the recipe still produces the numbers
-    the card records.
-    """
-    scheduled, ablated = paired_fit
-    assert scheduled.treatment_nll < ablated.treatment_nll
-    assert scheduled.student_treatment_nll > ablated.student_treatment_nll
-
-
 def test_the_outcome_stack_is_not_damaged(
     paired_fit: tuple[_Metrics, _Metrics],
 ) -> None:
@@ -303,26 +317,50 @@ def test_the_outcome_stack_is_not_damaged(
     assert scheduled.outcome_nll < 1.05 * ablated.outcome_nll
 
 
-def test_a_unit_sphere_representation_collapses_under_eq_three() -> None:
-    """Deviation 9, kept executable.
+def test_only_the_declared_initialisation_stays_out_of_the_collapse_basin() -> None:
+    """Deviation 9, kept executable — and **differential**, which it must be.
 
-    With CFRNet's `row_l2` on the encoder's output — the backbone every other
-    xty2 recipe shares — eq. (3) drives the whole representation to one
-    direction within a few dozen steps, and it never comes back: the cosine is
-    the entire geometry of a unit-sphere representation, so agreement and
-    collapse are the same move. The supervised cross-entropy sits at `log 2`
-    and the confidence gate never opens.
+    An earlier version ran one arm alone and asserted concentration, loss,
+    coverage and a baseline-level NLL at 200 steps; the adversarial review
+    showed the architecture that recipe *shipped* satisfied all four of them
+    too, so the test could not tell the condemned configuration from the
+    declared one and guarded nothing.
 
-    Two hundred steps is enough because the failure is immediate; the card's
-    §6.2 records the same run at the full budget and at four values of `w_s`.
+    Both arms now go through the same construction path and differ in one
+    field. Under CFRNet's initialisation the representation is a hundredth of
+    the scale eq. (3) is written for, `row_l2` hands that factor to the
+    encoder, and the run goes to one direction and stays: the gate never opens
+    and the propensity never beats the training frequencies. Under torch's it
+    does not happen at all.
     """
     train, test = _populations(SEPARATED, seed=90_001)
     torch.manual_seed(90_006)
-    metrics = _run(
-        _with_row_l2_encoder(doublematch(_schema())), train, test, COLLAPSE_STEPS
+    small = _run(
+        _with_encoder(doublematch(_schema()), CFRNET_INITIALISATION),
+        train,
+        test,
+        COLLAPSE_STEPS,
+    )
+    torch.manual_seed(90_006)
+    declared = _run(
+        _with_encoder(doublematch(_schema()), TORCH_LINEAR_INITIALISATION),
+        train,
+        test,
+        COLLAPSE_STEPS,
     )
     late = range(COLLAPSE_STEPS - 50, COLLAPSE_STEPS)
-    assert _mean(metrics.result, late, SELF_SUPERVISED, "target_concentration") > 0.99
-    assert _mean(metrics.result, late, SELF_SUPERVISED, "value") < -0.99
-    assert _mean(metrics.result, late, PSEUDO_LABEL, "coverage") == 0.0
-    assert metrics.treatment_nll > 0.95 * metrics.frequency_nll
+
+    assert _mean(small.result, late, SELF_SUPERVISED, "target_concentration") > 0.99
+    assert _mean(small.result, late, SELF_SUPERVISED, "value") < -0.99
+    assert _mean(small.result, late, PSEUDO_LABEL, "coverage") == 0.0
+    assert small.treatment_nll > 0.95 * small.frequency_nll
+
+    trajectory = [
+        _term(declared.result, step, SELF_SUPERVISED).diagnostics[  # type: ignore[attr-defined]
+            "target_concentration"
+        ]
+        for step in range(COLLAPSE_STEPS)
+    ]
+    assert max(trajectory) < 0.9
+    assert _mean(declared.result, late, PSEUDO_LABEL, "coverage") > 0.0
+    assert declared.treatment_nll < 0.9 * declared.frequency_nll

@@ -23,16 +23,28 @@ Four properties of that sentence are decisions rather than details.
   `stop_grad` takes one value; a symmetrised or undetached variant is a
   different method and waits for the card that states one (`DESIGN.md` §11).
   Neither is sufficient, and the first consumer measured that rather than
-  inheriting the reassurance: on a representation that the encoder normalises
-  onto the unit sphere, this term collapses it anyway, within ten steps, at
-  every weight tried (`docs/recipes/doublematch.md` §5 deviation 9 and §6.2).
-  A cosine is the whole geometry of a unit-sphere embedding, so agreement and
-  collapse are the same move there. Anything reading `X_REPR` from an encoder
-  with `normalisation="row_l2"` meets it.
+  inheriting the reassurance: it collapsed the representation within ten steps,
+  at every weight from 0.5 down to 0.01, and never recovered
+  (`docs/recipes/doublematch.md` §6.2). The cause is **scale**, not geometry —
+  see the next note — and the control that establishes it (hold the encoder's
+  normalisation fixed, change only its initialisation) is one an earlier
+  version of that card asserted a mechanism without running.
 * **Nothing is gated.** The whole point of the method is that this term sees
   the rows the pseudo-label term rejects, so the row population is the
   objective's `rows` and there is no mask inside the arithmetic. What the
   denominator counts is therefore exactly what `reduce_rows` counts.
+* **The cosine's gradient carries `1 / ||prediction||`.** `F.normalize`'s
+  backward does, and nothing here floors it beyond its `eps=1e-12`. The term is
+  therefore only as well-scaled as the vectors it is handed: a producer whose
+  output can approach zero norm makes this loss arbitrarily loud, and a
+  producer that normalises its own output — an encoder ending in `row_l2` —
+  hands the same factor to *its* upstream instead, sized by the
+  pre-normalisation activation. That is not hypothetical and it is not about
+  the unit sphere: `doublematch.md` §6.2 measures a representation whose norm
+  is 0.011 under one initialisation and 1.94 under another, the same encoder
+  and the same normalisation, and the first collapses under this term while the
+  second does not. Before pointing this objective at a new pair of ports, check
+  what norm they carry.
 * **Collapse is a diagnostic, not a loss.** The value alone cannot distinguish
   a representation that has learned the invariance from one that has stopped
   distinguishing rows: both drive the cosine to 1. The two concentration
