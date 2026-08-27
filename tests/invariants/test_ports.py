@@ -36,7 +36,7 @@ def conforming_value(port: Port) -> object:
         return torch.randn(BATCH_SIZE, NUM_FEATURES)
     if port is Port.Y_RAW:
         return torch.randn(BATCH_SIZE)
-    if port is Port.X_REPR:
+    if port is Port.X_REPR or port is Port.X_PROJ:
         return torch.randn(BATCH_SIZE, REPR_WIDTH)
     if port is Port.JOINT_ENERGY:
         return torch.randn(BATCH_SIZE, NUM_TREATMENTS)
@@ -51,6 +51,7 @@ def test_the_port_vocabulary_is_exactly_the_design_document_s() -> None:
         "x",
         "y",
         "x_repr",
+        "x_proj",
         "p(y|x,t)",
         "p(t|x)",
         "q(t|x,y)",
@@ -91,6 +92,7 @@ def test_every_spec_rejects_the_wrong_type(port: Port, schema: Schema) -> None:
         (Port.X_RAW, torch.randn(BATCH_SIZE), "must have 2 axes"),
         (Port.X_RAW, torch.zeros(BATCH_SIZE, NUM_FEATURES, dtype=torch.long), "float"),
         (Port.X_REPR, torch.randn(BATCH_SIZE, 0), "must be positive"),
+        (Port.X_PROJ, torch.randn(BATCH_SIZE, 0), "must be positive"),
         (
             Port.JOINT_ENERGY,
             torch.randn(BATCH_SIZE, NUM_TREATMENTS + 1),

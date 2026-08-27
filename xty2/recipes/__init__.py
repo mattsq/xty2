@@ -14,24 +14,38 @@ from xty2.recipes.fixmatch import (
     fixmatch,
 )
 from xty2.recipes.mean_teacher import mean_teacher
+from xty2.recipes.scarf import (
+    CORRUPTION_RATE,
+    JOINT_FIT_STEPS,
+    PRETRAIN_STEPS,
+    PROJECTION_WIDTHS,
+    TEMPERATURE,
+    scarf,
+)
 from xty2.recipes.ssdml import SSDML_ENCODER_WIDTHS, ssdml
 from xty2.recipes.tarnet import ENCODER_WIDTHS, OUTCOME_WIDTHS, tarnet
 
 __all__ = [
     "CNFLOW_ENCODER_WIDTHS",
+    "CORRUPTION_RATE",
     "CYCLE_DUAL_ENCODER_WIDTHS",
     "CYCLE_DUAL_OUTCOME_WIDTHS",
     "CYCLE_DUAL_POSTERIOR_WIDTHS",
     "ENCODER_WIDTHS",
     "FIXMATCH_STEPS",
+    "JOINT_FIT_STEPS",
     "OUTCOME_WIDTHS",
+    "PRETRAIN_STEPS",
+    "PROJECTION_WIDTHS",
     "SSDML_ENCODER_WIDTHS",
     "STRONG_MASK_RATE",
+    "TEMPERATURE",
     "WEAK_MASK_RATE",
     "cnflow",
     "cycle_dual",
     "fixmatch",
     "mean_teacher",
+    "scarf",
     "ssdml",
     "tarnet",
 ]

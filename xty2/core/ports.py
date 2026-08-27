@@ -36,6 +36,7 @@ class Port(StrEnum):
     X_RAW = "x"
     Y_RAW = "y"
     X_REPR = "x_repr"
+    X_PROJ = "x_proj"
     Y_GIVEN_XT = "p(y|x,t)"
     T_GIVEN_X = "p(t|x)"
     T_GIVEN_XY = "q(t|x,y)"
@@ -205,6 +206,12 @@ PORT_SPECS: dict[Port, PortSpec] = {
     ),
     Port.X_REPR: PortSpec(
         Port.X_REPR, "tensor", (Axis.BATCH, Axis.FREE), "a learned representation of x"
+    ),
+    Port.X_PROJ: PortSpec(
+        Port.X_PROJ,
+        "tensor",
+        (Axis.BATCH, Axis.FREE),
+        "a projection of x_repr into the space a contrastive loss is computed in",
     ),
     Port.T_GIVEN_X: PortSpec(
         Port.T_GIVEN_X,

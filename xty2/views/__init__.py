@@ -8,11 +8,13 @@ from xty2.core.views import (
     ViewSpec,
     ViewTransform,
 )
+from xty2.views.corruption import FeatureCorruption
 from xty2.views.masking import FeatureMask
 from xty2.views.perturbations import BoundedJitter
 
 __all__ = [
     "BoundedJitter",
+    "FeatureCorruption",
     "FeatureMask",
     "FeatureValues",
     "PreservedField",

@@ -138,6 +138,7 @@ class Port(str, Enum):
     Y_RAW           = "y"
     # Computed quantities
     X_REPR          = "x_repr"
+    X_PROJ          = "x_proj"
     Y_GIVEN_XT      = "p(y|x,t)"
     T_GIVEN_X       = "p(t|x)"
     T_GIVEN_XY      = "q(t|x,y)"
@@ -157,6 +158,7 @@ compile time and asserted in tests:
 | `X_RAW` | `Tensor` | `[B, D]`, as `batch.x` |
 | `Y_RAW` | `Tensor` | `[B, *Dy]`, as `batch.y` |
 | `X_REPR` | `Tensor` | `[B, H]` |
+| `X_PROJ` | `Tensor` | `[B, H]` |
 | `T_GIVEN_X` | `TreatmentDistribution` | `probs: [B, K]`, rows sum to 1 |
 | `T_GIVEN_XY` | `TreatmentDistribution` | `probs: [B, K]` |
 | `Y_GIVEN_XT` | `OutcomeDistribution` | `log_prob(y, t)` broadcasts over t (§3.1) |
@@ -168,6 +170,18 @@ Ports are the framework's vocabulary — the load-bearing quadrant of §11.2.
 reviewed card that cannot state its §4 mechanics without it is enough to build
 it, but the shape is designed against a named second consumer, and that naming
 is written down before the code.
+
+`X_PROJ` is the one port added under that rule so far, and it is the worked
+example of it. `scarf` needs SCARF's pre-train head `g` — a component the paper
+specifies and specifies *discarding* after pretraining — so its card §4
+`architecture.widths_depths` names a component that has nowhere to write, which
+is Q1 answered yes. The shape was designed against CoMatch (`BACKLOG.md` §2.7),
+whose §3 defines "a non-linear projection head (a MLP) `g(·)`, which transforms
+a feature `f(x)` into a normalized low-dimensional embedding `z(x) = g(f(x))`":
+per-realisation, coexisting with `T_GIVEN_X` over one encoder, and 64-wide
+where SCARF is 256-wide — which is why the contract is `[B, H]` with a free
+width rather than one the schema fixes. `scarf.md` §5.1 carries that reasoning
+in the form §11.2 requires.
 
 ### 2.2 Raw inputs are ports too
 
@@ -466,6 +480,13 @@ stage transition: FixMatch's artificial label is a per-batch detached target,
 where §7's `PseudoLabelAction` emits an immutable side table between stages.
 Both exist because those are two different mechanisms, not two spellings of
 one.
+
+`InfoNCEContrastive` is the second, and arrived with `docs/recipes/scarf.md`.
+It is the first objective whose per-row value depends on the *other* rows of
+the batch, which is why its card §3.2 argues, and its `plan_details` prints,
+where its negatives come from: the eligible set is both the anchors and the
+candidates, since a negative taken from a row the objective is not entitled to
+would be reading outside its declared population by another route.
 
 ---
 
@@ -1187,11 +1208,13 @@ that renaming should trigger.
 | `config-surface` | Config-first surface | sweeps outgrow the Python API in practice | — |
 | `plugins` | Plugin / entry-point system | a consumer outside this repo exists | — |
 | `distributed` | Distributed training | a single recipe stops fitting in one process | — |
-| `loader` | A loader / sampler, and with it the `optimisation.batch_size` and `labelled_unlabelled_ratio` bindings | a recipe needs a fixed labelled/unlabelled quota per batch rather than whatever the data gives. The gradient executor takes an iterable of batches; a stage field for either key would be a card key nothing could check, which §7.1 rejects for provenance and §9.1 for hyperparameters | `fixmatch` §5.4; `tarnet` §5.5 |
+| `loader` | A loader / sampler, and with it the `optimisation.batch_size` and `labelled_unlabelled_ratio` bindings | a recipe needs a fixed labelled/unlabelled quota per batch rather than whatever the data gives. The gradient executor takes an iterable of batches; a stage field for either key would be a card key nothing could check, which §7.1 rejects for provenance and §9.1 for hyperparameters | `fixmatch` §5.4; `scarf` §5.6; `tarnet` §5.5 |
 | `lr-schedules` | LR schedules beyond `Constant`, `Ramp`, `SigmoidRamp`, `CosineDecay`, `Step` and `ExponentialDecay` (one-cycle, warm restarts) | a card names one. The rate is a schedule multiplier, so a new type serves both loss weights and the LR; `ExponentialDecay` entered with TARNet, `SigmoidRamp` with Mean Teacher and `CosineDecay` with FixMatch, the first real cards that name them | — |
-| `augmentation-vocabulary` | A tabular augmentation vocabulary with tunable per-operation magnitudes, and any adaptive controller over it | a set of tabular operations exists whose magnitudes are worth learning over. `FeatureMask` has one scalar and `BoundedJitter` one more, so the controller has nothing to control; SCARF corruption, SubTab feature subsets and VIME masking are the `BACKLOG.md` candidates. Genuinely blocked on prerequisites rather than on consumer count | `fixmatch` §5.10 |
+| `augmentation-vocabulary` | A tabular augmentation vocabulary with tunable per-operation magnitudes, and any adaptive controller over it | a set of tabular operations exists whose magnitudes are worth learning over. `FeatureMask` has one scalar and `BoundedJitter` one more, so the controller has nothing to control; SCARF corruption, SubTab feature subsets and VIME masking were the `BACKLOG.md` candidates, and `scarf` has since built the first of the three — `FeatureCorruption`, which carries one scalar of its own. Three operations with one magnitude each is still not a vocabulary worth learning over, so the row stands and the prerequisite is now two thirds outstanding rather than three. Genuinely blocked on prerequisites rather than on consumer count | `fixmatch` §5.10 |
 | `staged-gate` | Confidence gating / soft labels on the staged `PseudoLabelAction` path | a reviewed card whose §4 names a `losses.confidence_threshold` on a *staged writeback*. The objective path has had a gate since `fixmatch`, and §11.3 records what asking the question here settled: `cycle_dual` §5.6 is a judgement, because neither of its papers states a gate and its §4 marks the key `n/a`. Nothing is paying for this one | — |
 | `repeated-cross-fitting` | Repeated sample splitting: a second, third, … fold assignment over the same rows, and an aggregation across them | the executor can carry more than one partition. Today an `XTYBatch` has a single `fold_id`, and the artifact contract, the fold-disjointness check (§7.1) and checkpoint provenance are each written against one assignment, so a second partition has nowhere to live. This is load-bearing vocabulary under §11.2, so it also wants a named second consumer before the shape is fixed; repeated-split DML and any nested cross-fitting recipe are the candidates, and neither has a card | `ssdml` §5.6 |
+| `view-population-statistics` | A view transform fitted on the training population rather than on the batch it transforms — an empirical marginal, a quantile grid, a column covariance — and the population object it would read | a card's §4 names a statistic of the *training set* that an augmentation must use. `scarf` is the first: SCARF draws each corrupted cell from "the uniform distribution over the values that feature takes on across the training dataset", and a `ViewSpec` transform is a pure function of `(batch, rng_key)` (§5) with no population to read. VIME's mask-and-impute and any quantile-based tabular augmentation are the `BACKLOG.md` candidates. This is load-bearing vocabulary under §11.2 — a transform contract every future view is written against — and it is entangled with `loader`, since a training population is the thing a loader would own. **That combination is the one §11.2's table has no waiting cell for**, and this row is deferred anyway rather than quietly: `scarf` §5.1 records the argument in full, including the two halves that pull apart here — no §4 card key names the marginal's source, so §11.2's Q1 test does not fire, while `FIDELITY.md` §5's "we would have implemented the paper" test does. A card review that lets this row stand is answering that question, not skipping it | `scarf` §5.2 |
+| `early-stopping` | A stage that ends on a monitored validation metric rather than after a fixed `steps` count, and the held-out split it would have to watch | a card's protocol cannot be stated as a fixed step budget without changing what the method does. `Stage.steps` binds `optimisation.total_steps_or_epochs` and is `REQUIRED` (§9.1), and there is nowhere for a validation split to live — the executor takes one iterable of batches per stage — so this would be the executor contract and load-bearing under §11.2. SimCLRv2-style staged pretraining and any early-stopped meta-learner are the `BACKLOG.md` candidates, and neither has a card. **Nothing is paying for this one**, and the way that came about is worth keeping: `scarf` §5.4 cited it as a debt in its first draft, because SCARF stops pretraining by "early stopping with patience 3 on the validation loss" and we fix 1,000 steps. Asking §11.2's questions properly turned that around — every card here fixes a project-local budget for attributability and would keep doing so with the capability in hand, which is `FIDELITY.md` §5's definition of a judgement, and `scarf` §6.2 measured four fine-tuning budgets and found its result did not turn on the choice. Same shape as `staged-gate`: the row survives because the question is real, not because a card is owed | — |
 | `model-families` | The other ~35 XTYLearner families | one is actually needed for a result | — |
 
 One row that used to be here is **not** here, and its absence is the mechanism
