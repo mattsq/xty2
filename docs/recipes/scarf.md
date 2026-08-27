@@ -457,8 +457,17 @@ y         = baseline + t * effect + 0.5 * eps_y
 ```
 
 Treatment observation is MCAR: exactly 40 of the 1,024 training rows keep their
-`t`. The outcome is standardised by the training mean and standard deviation and
-the same constants are applied to the held-out rows. Batches are **128 rows** —
+`t`, and the recipe's `DataSpec` is what applies that budget. The outcome is
+standardised by the training mean and standard deviation and the same constants
+are applied to the held-out rows; the recipe declares both, so the held-out rows
+take the transform the run *fitted* rather than one refitted on them.
+
+Replicates are indexed `r in {0, ..., 9}` with base seed `s_r = 90000 + 100*r`.
+The train and held-out populations use `s_r+1` and `s_r+2`, both arms are
+initialised from `s_r+6`, and the pretrained arm's program runs under stage
+seed `s_r+10000` while the ablation's single stage runs under
+`s_r+10000 + STREAM_STRIDE`, so its fit sees the stream the paired arm's
+`joint_fit` sees. Batches are **128 rows** —
 the paper's `N`, and the one place this fixture departs from `fixmatch.md`
 §6.1's 256, because the batch size is a hyperparameter of SCARF's loss
 (deviation 6) and not merely of the loader.
@@ -563,11 +572,12 @@ one.
 |---|---|---|---|---|
 | | | | | |
 
-**Not yet run.** The Tier 2 runner (`xty2/evaluation/benchmarks/`) has one
-module per recipe and this recipe has none, exactly as `fixmatch.md` §6.3
-records for its own. Until that module exists this card's status may not go past
-`smoke-passing`, and the block above is a declared protocol rather than a
-result. On §6.2's evidence the protocol as declared should be expected to
+**Not yet run.** The Tier 2 runner has a module for this recipe now
+(`xty2/evaluation/benchmarks/scarf.py`), so the sentence that used to stand
+here — that the absence of one capped this card at `smoke-passing` — no longer
+applies. The first recording run is a manual `workflow_dispatch` of the nightly
+with `write_ledger` set: a scheduled run checks a recorded status against a
+fresh one, and this card has no recorded status to check yet. On §6.2's evidence the protocol as declared should be expected to
 return a `deviating` outcome; the tolerance stays as written, because a
 tolerance rewritten after seeing the numbers is worth nothing
 (`FIDELITY.md` §3).

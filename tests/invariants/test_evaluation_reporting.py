@@ -13,7 +13,7 @@ from xty2.evaluation import (
     mean_and_stderr,
     update_card_text,
 )
-from xty2.evaluation.benchmarks import cycle_dual
+from xty2.evaluation.benchmarks import RECIPES, benchmark_function, cycle_dual
 
 ROOT = Path(__file__).parents[2]
 
@@ -214,3 +214,39 @@ def test_amending_a_protocol_scalar_stops_the_benchmark(tmp_path: Path) -> None:
         cycle_dual.run(
             amended, commit="abc1234", date="2026-08-25", workers=1, cache_root=tmp_path
         )
+
+
+# ---------------------------------------------------------------------------
+# The Tier 2 suite covers every recipe it claims to (PLAN.md P12)
+# ---------------------------------------------------------------------------
+
+
+def test_every_tier2_recipe_has_a_card_a_module_and_a_test() -> None:
+    """The three files a nightly matrix entry needs, checked together.
+
+    The nightly derives its matrix from `RECIPES`, so a name in that tuple is a
+    job that will run `tests/benchmarks/test_<name>.py` against
+    `docs/recipes/<name>.md`. A name with a missing piece fails at 3am in CI
+    rather than here, which is the wrong end of the feedback loop — and a card
+    that quietly has no Tier 2 job at all is the failure `scarf.md` §6.3 and
+    `fixmatch.md` §6.3 each recorded about themselves.
+    """
+    root = Path(__file__).resolve().parents[2]
+    for recipe in RECIPES:
+        assert (root / "docs" / "recipes" / f"{recipe}.md").is_file(), recipe
+        assert (
+            root / "xty2" / "evaluation" / "benchmarks" / f"{recipe}.py"
+        ).is_file(), recipe
+        assert (root / "tests" / "benchmarks" / f"test_{recipe}.py").is_file(), recipe
+        assert benchmark_function(recipe) is not None
+
+
+def test_every_recipe_module_is_in_the_tier2_suite() -> None:
+    """And the other direction: a benchmark module nothing runs is not a target."""
+    root = Path(__file__).resolve().parents[2]
+    modules = {
+        path.stem
+        for path in (root / "xty2" / "evaluation" / "benchmarks").glob("*.py")
+        if not path.stem.startswith("_") and path.stem != "common"
+    }
+    assert modules == set(RECIPES)

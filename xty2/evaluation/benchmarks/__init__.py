@@ -1,4 +1,11 @@
-"""The five card-defined Tier 2 benchmark cases (`docs/PLAN.md` P12)."""
+"""The card-defined Tier 2 benchmark cases (`docs/PLAN.md` P12).
+
+Seven, since `scarf` and `fixmatch` acquired modules. Both cards' §6.3 recorded
+the absence as the reason their status could not pass `smoke-passing`: "the
+Tier 2 runner has one module per recipe and this recipe has none". A declared
+protocol nothing can execute is a target in the same sense a tolerance nobody
+measures against is one.
+"""
 
 from __future__ import annotations
 
@@ -32,11 +39,27 @@ def benchmark_function(recipe: str) -> BenchmarkFunction:
         from xty2.evaluation.benchmarks.ssdml import run
 
         return run
+    if recipe == "scarf":
+        from xty2.evaluation.benchmarks.scarf import run
+
+        return run
+    if recipe == "fixmatch":
+        from xty2.evaluation.benchmarks.fixmatch import run
+
+        return run
     raise KeyError(
         f"unknown Tier 2 recipe {recipe!r}; expected one of {list(RECIPES)!r}"
     )
 
 
-RECIPES = ("tarnet", "cnflow", "mean_teacher", "cycle_dual", "ssdml")
+RECIPES = (
+    "tarnet",
+    "cnflow",
+    "mean_teacher",
+    "cycle_dual",
+    "ssdml",
+    "scarf",
+    "fixmatch",
+)
 
 __all__ = ["RECIPES", "BenchmarkFunction", "benchmark_function"]

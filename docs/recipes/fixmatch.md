@@ -387,7 +387,7 @@ the first fifth of a 3,000-step decay.
 reproduction:
   dataset: project-local seed-locked two-cluster XTY DGP (6 features, K=2), specified in 6.1
   variant: paired fit against an otherwise identical lambda_u = 0 ablation, same seeds and same batches
-  split: 1024 train rows with 40 observed treatments, 2048 held-out rows with every treatment observed
+  split: 1024 train rows with 64 observed treatments, 2048 held-out rows with every treatment observed
   metric: held-out p(t|x) NLL ratio on the EMA parameters, FixMatch over the lambda_u = 0 ablation; paper mask rate (eq. 6) and impurity (eq. 5), measured on the trained network, as guardrails
   published: none - no published number applies to this adaptation
   published_source: n/a
@@ -411,18 +411,28 @@ effect    = 1.0 + 0.5*tanh(x[:,2])
 y         = baseline + t * effect + 0.5 * eps_y
 ```
 
-Treatment observation is MCAR: exactly 40 of the 1,024 training rows keep their
-`t`. Forty is a choice, and the reason is the paper's: FixMatch's claim is about
-the label-scarce regime, and at 205 labels this DGP is already solved by eq. (3)
-alone, leaving eq. (4) nothing to add. The 0.45 cluster signal is set for the
+Treatment observation is MCAR: exactly 64 of the 1,024 training rows keep their
+`t`, and the recipe's `DataSpec` is what applies that budget. The scarcity is a
+choice and the reason is the paper's: FixMatch's claim is about the label-scarce
+regime, and at 205 labels this DGP is already solved by eq. (3) alone, leaving
+eq. (4) nothing to add. Sixty-four rather than the forty this section first
+declared is deviation 12's, not a preference — it is `B`, and a labelled batch
+larger than the labelled population cannot be drawn without repeating a row. The 0.45 cluster signal is set for the
 same reason — strong enough that a confident model is possible, weak enough that
 40 labels do not settle the question by themselves. Both were fixed before any
 paired result was read, and both are what the tolerance above is stated against.
 
 The outcome is standardised by the training mean and standard deviation and the
-same constants are applied to the held-out rows. Batches are 256 rows drawn by a
-seed-locked permutation stream shared by both arms of the pair, so the two fits
-differ only in `lambda_u`.
+same constants are applied to the held-out rows; the recipe declares both, so
+the held-out rows take the transform the run *fitted* rather than one refitted
+on them. Each step draws eq. (5)'s own mixture — `B = 64` rows with an observed
+treatment and `mu B = 448` without — from a seed-locked stream shared by both
+arms of the pair, so the two fits differ only in `lambda_u`.
+
+Replicates are indexed `r in {0, ..., 9}` with base seed `s_r = 90000 + 100*r`.
+The train and held-out populations use `s_r+1` and `s_r+2`, both arms are
+initialised from `s_r+6`, and both fits run under stage seed `s_r+10000`, from
+which the sampler's own stream is derived by hash.
 
 Outcome-side guardrails are stated as non-inferiority against the ablation
 rather than as absolute bands. Under a 0.02/0.98 propensity the counterfactual
@@ -499,6 +509,11 @@ failure.
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
 | | | | | |
+
+**The runner exists now** (`xty2/evaluation/benchmarks/fixmatch.py`), and the
+first recording run is a manual `workflow_dispatch` of the nightly with
+`write_ledger` set: a scheduled run checks a recorded status against a fresh
+one, and this card has no recorded status to check yet.
 
 **Not yet run.** The Tier 2 runner (`xty2/evaluation/benchmarks/`) has one
 module per recipe and this recipe has none; adding it is a separate, reviewed
