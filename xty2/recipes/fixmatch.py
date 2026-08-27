@@ -7,15 +7,21 @@ from xty2.components._nn import CFRNET_INITIALISATION
 from xty2.core import (
     ComponentGraph,
     CosineDecay,
+    DataSpec,
     GradientClipping,
+    MissingnessSpec,
     OptimiserSpec,
     Port,
+    PreprocessSpec,
     PreservedField,
+    Quota,
+    QuotaSampler,
     Ramp,
     Realisation,
     Recipe,
     RecomputeRule,
     Schema,
+    SplitSpec,
     Stage,
     TeacherSpec,
     ViewSpec,
@@ -63,6 +69,63 @@ constant-fill mask the two collapse to one of rate `1 - 0.9 * 0.5 = 0.55`
 
 FIXMATCH_STEPS = 3_000
 """Card §4. Also the `K` of the cosine rate schedule (card §5, deviation 3)."""
+
+LABELLED_BATCH = 64
+"""`B`, section 2.4 and appendix B.3: labelled examples per step."""
+
+OBSERVED_TREATMENTS = LABELLED_BATCH
+"""Card section 6's label budget: the scarcest xty2 can run this recipe at.
+
+Section 4's smallest CIFAR-10 regime is 40 labels *in total*, against `B = 64`
+drawn per step — the reference iterates the labelled set as an endlessly
+repeating shuffle, so a step sees some labelled rows twice. `XTYBatch.row_id`
+must be unique (`DESIGN.md` section 7.1), so a repeated row cannot be put in a
+batch and the smallest budget expressible here is `B` itself. Card section 5
+carries that as a framework limitation against ledger key
+`batch-row-repetition`; it is a deviation from the *fixture's* label regime,
+not from `B` or `mu`, both of which are the paper's.
+"""
+
+MU = 7
+"""`mu`, eq. (5): the unlabelled batch is `mu B` rows.
+
+This is the number deviation 4 was written about. It is a batch *composition*,
+so a per-term weight cannot stand in for it: `lambda_u` sets the two terms'
+relative gradient, and `mu` sets how many rows eq. (4) averages over, which is
+what makes its estimate of the unlabelled loss as precise as the paper's.
+`QuotaSampler` derives both card keys from the quotas below, so the plan prints
+the ratio the sampler runs rather than one the recipe asserts.
+"""
+
+FIXMATCH_SAMPLER = QuotaSampler(
+    quotas=(
+        Quota(rows="t_observed", size=LABELLED_BATCH),
+        Quota(rows="t_missing", size=MU * LABELLED_BATCH),
+    )
+)
+"""`optimisation.batch_size = 512` and `labelled_unlabelled_ratio = 7`, derived."""
+
+DATA_POLICY = DataSpec(
+    split=SplitSpec(
+        protocol=(
+            "one fixed project-local DGP, split train/test by the section 6 "
+            "fixture; no CIFAR/SVHN protocol applies (deviation 1)"
+        ),
+        train="train",
+    ),
+    # Section 6 standardises the outcome on the training rows. Declared here
+    # rather than done in the fixture, so the plan names the split it is fitted
+    # on and the run checks that claim rather than carrying it.
+    preprocess=PreprocessSpec(features="none", outcome="zscore"),
+    # The scarce label here is the *treatment*, and the quota above is stated
+    # over `t_observed` and `t_missing`, so the budget that produces those two
+    # populations is part of the same declaration. A count rather than a rate,
+    # because that is how section 4 states it: CIFAR-10 at 40, 250 and 4,000
+    # labels.
+    missingness=MissingnessSpec(mechanism="mcar", observed=OBSERVED_TREATMENTS),
+)
+"""The four `data.*` card keys."""
+
 
 PRESERVED_FIELDS: frozenset[PreservedField] = frozenset(
     {"t", "y", "t_observed", "y_observed", "row_id", "fold_id", "weight"}
@@ -181,10 +244,12 @@ def fixmatch(
                     clipping=GradientClipping.none(),
                 ),
                 steps=FIXMATCH_STEPS,
+                sampler=FIXMATCH_SAMPLER,
             ),
         ),
         card="docs/recipes/fixmatch.md",
         purpose="causal",
+        data=DATA_POLICY,
         views=(
             ViewSpec(
                 name="weak_x",
@@ -207,7 +272,12 @@ def fixmatch(
 
 
 __all__ = [
+    "DATA_POLICY",
+    "FIXMATCH_SAMPLER",
     "FIXMATCH_STEPS",
+    "LABELLED_BATCH",
+    "MU",
+    "OBSERVED_TREATMENTS",
     "STRONG_MASK_RATE",
     "STRONG_X",
     "WEAK_MASK_RATE",

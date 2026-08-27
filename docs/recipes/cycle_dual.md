@@ -317,6 +317,7 @@ reproduction:
 | Date | Commit | Metric | Value +/- stderr | Within tolerance? |
 |---|---|---|---|---|
 | 2026-08-24 | `d060df351f2fe8bac6d951c3757506c684d8b408` | absolute_ATE_error<br>hidden_treatment_accuracy<br>out_of_fold_and_used_y<br>observed_treatments_preserved<br>source_batch_unchanged<br>unsafe_recipe_rejected | 0.0860431 +/- 0.0198 outcome units<br>0.908346 +/- 0.00224<br>1 +/- 0<br>1 +/- 0<br>1 +/- 0<br>1 +/- 0 | yes |
+| 2026-08-27 | `40265928e87a` | absolute_ATE_error<br>hidden_treatment_accuracy<br>out_of_fold_and_used_y<br>observed_treatments_preserved<br>source_batch_unchanged<br>unsafe_recipe_rejected | 0.0860431 +/- 0.0198 outcome units<br>0.908346 +/- 0.00224<br>1 +/- 0<br>1 +/- 0<br>1 +/- 0<br>1 +/- 0 | yes |
 
 ## 7. Unknowns
 

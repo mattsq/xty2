@@ -13,16 +13,21 @@ from xty2.core import (
     DEFAULT,
     ComponentGraph,
     Constant,
+    DataSpec,
     GradientClipping,
+    MissingnessSpec,
     OptimiserSpec,
     Port,
+    PreprocessSpec,
     PreservedField,
     Ramp,
     Realisation,
     Recipe,
     RecomputeRule,
     Schema,
+    SplitSpec,
     Stage,
+    UniformSampler,
     ViewSpec,
     WeightDecay,
     Weighted,
@@ -56,6 +61,40 @@ PRETRAIN_STEPS = 1_000
 
 JOINT_FIT_STEPS = 3_000
 """Card §4: the project-local fitting budget every other recipe uses."""
+
+OBSERVED_TREATMENTS = 40
+"""Card §6: 40 labelled treatments of 1,024, the label-scarce regime."""
+
+BATCH_SIZE = 128
+"""`N`, card §4 — and for this recipe it is arithmetic, not plumbing.
+
+`L_cont` contrasts each anchor against the other `N - 1` rows, so the number of
+negatives *is* the batch size and the task is a different one at every value.
+Card §4 read `n/a  # external BatchSource; section 6 fixes 128, the paper's N`,
+and deviation 6 was what that cost. `InfoNCEContrastive` declares itself
+batch-coupled, so this stage could not have handed the number back to the
+caller even if the recipe tried.
+"""
+
+DATA_POLICY = DataSpec(
+    split=SplitSpec(
+        protocol=(
+            "one fixed project-local DGP, split train/test by the section 6 "
+            "fixture; no OpenML-CC18 protocol (deviation 7)"
+        ),
+        train="train",
+    ),
+    # Section 6 standardises the outcome on the training rows and reports on
+    # the original scale. Declaring it here rather than doing it in the fixture
+    # is the point: the plan now names the split the statistics come from, and
+    # `TrainingPopulation.fitted_on_row_ids` is checked against it.
+    preprocess=PreprocessSpec(features="none", outcome="zscore"),
+    # Section 6's label budget. Pretraining reads no labels at all — which is
+    # the paper's point — so this governs the fine-tuning stage's populations
+    # only, and a count is how section 4 of the paper states its scarce regime.
+    missingness=MissingnessSpec(mechanism="mcar", observed=OBSERVED_TREATMENTS),
+)
+"""The four `data.*` card keys."""
 
 PRESERVED_FIELDS: frozenset[PreservedField] = frozenset(
     {"t", "y", "t_observed", "y_observed", "row_id", "fold_id", "weight"}
@@ -150,6 +189,7 @@ def scarf(schema: Schema, *, recompute_rules: tuple[RecomputeRule, ...] = ()) ->
                 rows="all",
                 optimiser=ADAM,
                 steps=PRETRAIN_STEPS,
+                sampler=UniformSampler(batch_size=BATCH_SIZE),
             ),
             Stage(
                 name="joint_fit",
@@ -177,10 +217,12 @@ def scarf(schema: Schema, *, recompute_rules: tuple[RecomputeRule, ...] = ()) ->
                 initialise_from="pretrain",
                 optimiser=ADAM,
                 steps=JOINT_FIT_STEPS,
+                sampler=UniformSampler(batch_size=BATCH_SIZE),
             ),
         ),
         card="docs/recipes/scarf.md",
         purpose="causal",
+        data=DATA_POLICY,
         views=(
             ViewSpec(
                 name="corrupted_x",
@@ -195,8 +237,10 @@ def scarf(schema: Schema, *, recompute_rules: tuple[RecomputeRule, ...] = ()) ->
 __all__ = [
     "ADAM",
     "ANCHOR_X",
+    "BATCH_SIZE",
     "CORRUPTED_X",
     "CORRUPTION_RATE",
+    "DATA_POLICY",
     "JOINT_FIT_STEPS",
     "PRETRAIN_STEPS",
     "PROJECTION_WIDTHS",

@@ -17,6 +17,7 @@ from xty2.core import (
     CompileError,
     ComponentGraph,
     Executor,
+    ExternalBatches,
     LossTerm,
     Port,
     Program,
@@ -30,6 +31,7 @@ from xty2.core import (
     State,
     TrainContext,
     TrainingError,
+    TrainingPopulation,
     Weighted,
     XTYBatch,
     compile,
@@ -78,6 +80,11 @@ class _PosteriorTreatmentNLL:
     @property
     def detaches(self) -> frozenset[tuple[Port, Realisation]]:
         return frozenset()
+
+    @property
+    def batch_coupled(self) -> bool:
+        """No: a double reads one row at a time (§4)."""
+        return False
 
     def compute(
         self,
@@ -197,6 +204,7 @@ def _array_recipe(action: _MeanArrayFit | None = None) -> Recipe:
                 rows="t_observed",
                 action=action if action is not None else _MeanArrayFit(),
                 executor="array_fit",
+                sampler=ExternalBatches(),
             ),
         ),
         card="docs/recipes/array_fixture.md",
@@ -262,12 +270,13 @@ def test_action_only_labels_name_their_producing_checkpoint() -> None:
         Stage(
             name="labels",
             action=PseudoLabelAction(port=Port.T_GIVEN_XY),
+            sampler=ExternalBatches(),
         )
 
 
 def test_the_leakage_opt_out_cannot_be_placed_on_a_non_consumer() -> None:
     with pytest.raises(CompileError, match="consumes no artifact inputs"):
-        Stage(name="fit", allow_leakage=True)
+        Stage(name="fit", allow_leakage=True, sampler=ExternalBatches())
 
 
 def test_an_outcome_term_that_excludes_joined_rows_is_not_rejected() -> None:
@@ -331,7 +340,12 @@ def test_array_fit_runs_once_on_resolved_rows_and_emits_tensor_state() -> None:
 
 def test_array_fit_is_never_inferred_from_the_presence_of_fit() -> None:
     with pytest.raises(CompileError, match="only under executor='array_fit'"):
-        Stage(name="array", action=_MeanArrayFit(), executor="gradient")
+        Stage(
+            name="array",
+            action=_MeanArrayFit(),
+            executor="gradient",
+            sampler=ExternalBatches(),
+        )
 
     run = compile(_array_recipe())
     with pytest.raises(TrainingError, match="run_array_fit"):
@@ -525,10 +539,16 @@ def test_folds_never_share_a_view_key(
         *,
         rng_key: int = 0,
         teacher_graph: ComponentGraph | None = None,
+        population: TrainingPopulation | None = None,
     ) -> State:
         keys.append(rng_key)
         return original(
-            self, stage, batch, rng_key=rng_key, teacher_graph=teacher_graph
+            self,
+            stage,
+            batch,
+            rng_key=rng_key,
+            teacher_graph=teacher_graph,
+            population=population,
         )
 
     monkeypatch.setattr(type(run), "state", spy)

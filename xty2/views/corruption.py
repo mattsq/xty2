@@ -28,6 +28,7 @@ from dataclasses import dataclass
 import torch
 
 from xty2.core.batch import XTYBatch
+from xty2.core.data import TrainingPopulation
 from xty2.core.errors import ViewError
 from xty2.core.schema import FeatureSpec, Schema
 
@@ -87,8 +88,33 @@ class FeatureCorruption:
         return frozenset(spec.name for spec in self._mutable(schema))
 
     def apply(
-        self, batch: XTYBatch, schema: Schema, *, generator: torch.Generator
+        self,
+        batch: XTYBatch,
+        schema: Schema,
+        *,
+        generator: torch.Generator,
+        population: TrainingPopulation | None = None,
     ) -> XTYBatch:
+        """`x~`: `floor(cM)` cells per row, each redrawn from its column.
+
+        The draw is from the column's empirical marginal **over the training
+        population** — "the uniform distribution over the values that feature
+        takes on across the training dataset" — not over the batch in hand. The
+        two agree in expectation when batches are drawn uniformly, and differ
+        in the tail: a value held by fewer than one row in `B` cannot be drawn
+        into a batch it is not in.
+
+        `population` is therefore required rather than optional here. A
+        transform that quietly fell back to the batch would be the deviation
+        `scarf.md` §5.2 used to carry, restored as a default nobody reads.
+        """
+        if population is None:
+            raise ViewError(
+                "FeatureCorruption draws each replacement from the training "
+                "population's empirical marginal, and this stage supplied none. "
+                "A stage declaring ExternalBatches has no training population; "
+                "declare a sampler so the loader builds one."
+            )
         self.validate(schema)
         names = self.affected_columns(schema)
         specs = tuple(spec for spec in self._mutable(schema) if spec.name in names)
@@ -101,6 +127,9 @@ class FeatureCorruption:
             device=batch.device,
         )
         selected = batch.x.index_select(1, indices)
+        # The donor pool is the training population's columns, which is what
+        # makes this the paper's marginal rather than the batch's.
+        donor_pool = population.rows.x.index_select(1, indices)
 
         # `q` columns per row, drawn without replacement: a random permutation
         # per row, keep the first `q`. Taking the smallest `q` of a uniform
@@ -116,13 +145,13 @@ class FeatureCorruption:
         corrupt = ranks < self.corrupted_per_row(schema)
 
         donors = torch.randint(
-            rows,
+            donor_pool.shape[0],
             (rows, width),
             dtype=torch.long,
             device=batch.device,
             generator=generator,
         )
-        replacement = torch.where(corrupt, selected.gather(0, donors), selected)
+        replacement = torch.where(corrupt, donor_pool.gather(0, donors), selected)
         return batch.replace(x=batch.x.index_copy(1, indices, replacement))
 
     def describe(self) -> str:

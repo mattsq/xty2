@@ -259,10 +259,23 @@ Rules that keep this honest:
 
 - **Tolerance is declared before the run**, in the card, at review time. A
   tolerance widened after seeing the result is a deviation and goes in §5.
-- **Report the standard error.** A single-seed match on a high-variance
-  benchmark is not evidence. If the published number is within our error bars
-  *and* our error bars are wide enough to contain anything, say so — that is a
-  `deviating` outcome with an explanation, not a `reproduced` one.
+- **Report the standard error, and let it decide.** A single-seed match on a
+  high-variance benchmark is not evidence. If the published number is within
+  our error bars *and* our error bars are wide enough to contain anything, that
+  is a `deviating` outcome with an explanation, not a `reproduced` one.
+  **This is enforced rather than asked for**: a required metric passes only
+  when its mean satisfies the target *and* the margin by which it does is at
+  least one standard error. A deterministic guardrail — the `1 +/- 0` rows of
+  `cycle_dual` §6 and `ssdml` §6 — is untouched, because a zero standard error
+  is cleared by any non-negative margin; the rule bites exactly where the
+  statistic is noisy.
+  It was prose until `scarf`'s first Tier 2 run made the gap concrete: a mean
+  0.00089 inside its tolerance against a standard error of 0.038, recorded
+  `reproduced` because `mean <= 1.0` was literally true, with five of ten
+  per-seed values on the wrong side. The sentence above had been in this
+  document the whole time. A rule nothing checks is the documentation rot this
+  document exists to stop, and it rots the same way whether it governs a card
+  or the runner.
 - **Record the run in the card.** Date, commit, metric, stderr. The card is the
   ledger; the CI artifact is the evidence.
 - **A number that moves outside tolerance is a regression**, and the nightly job

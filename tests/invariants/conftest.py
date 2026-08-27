@@ -18,6 +18,7 @@ from xty2.core import (
     Component,
     ComponentGraph,
     Constant,
+    ExternalBatches,
     FeatureSpec,
     GaussianOutcome,
     GradientClipping,
@@ -177,12 +178,18 @@ class ToyObjective:
     name: str
     requires: frozenset[tuple[Port, Realisation]]
     rows: Rows = "all"
+    couples_batch: bool = False
     CARD_KEYS: ClassVar[Mapping[str, str]] = {}
 
     @property
     def detaches(self) -> frozenset[tuple[Port, Realisation]]:
         """Nothing. A double that detached would need to say so (§4)."""
         return frozenset()
+
+    @property
+    def batch_coupled(self) -> bool:
+        """False unless a test asks for the contrastive shape (§4)."""
+        return self.couples_batch
 
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
@@ -208,6 +215,7 @@ def objective(
     realisation: Realisation = DEFAULT,
     weight: float | Schedule = 1.0,
     reduction: Reduction = "mean",
+    batch_coupled: bool = False,
 ) -> Weighted:
     """A weighted `ToyObjective` requiring `ports` under one realisation."""
     return weighted(
@@ -215,6 +223,7 @@ def objective(
             name=name,
             requires=frozenset((port, realisation) for port in ports),
             rows=rows,
+            couples_batch=batch_coupled,
         ),
         weight=weight,
         reduction=reduction,
@@ -243,8 +252,17 @@ def optimiser(**overrides: Any) -> OptimiserSpec:
 
 
 def stage(name: str = "fit", **overrides: Any) -> Stage:
-    """A stage with the two gradient fields filled in (`PLAN.md` P4)."""
-    defaults: dict[str, Any] = {"optimiser": optimiser(), "steps": STEPS}
+    """A stage with the gradient fields and its sampler filled in.
+
+    `ExternalBatches` by default because that is what a Tier 0 fixture is: it
+    hands the loop a hand-built list of batches so the test can say exactly
+    what a step sees. Tests about the loader pass a real sampler explicitly.
+    """
+    defaults: dict[str, Any] = {
+        "optimiser": optimiser(),
+        "steps": STEPS,
+        "sampler": ExternalBatches(),
+    }
     return Stage(name=name, **(defaults | overrides))
 
 

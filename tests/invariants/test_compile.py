@@ -18,6 +18,7 @@ from xty2.core import (
     REQUIRED,
     CompileError,
     ComponentGraph,
+    ExternalBatches,
     LossTerm,
     Port,
     Ramp,
@@ -221,7 +222,9 @@ def test_a_row_pairing_empty_by_construction_is_rejected() -> None:
 
 def test_a_stage_with_no_objectives_is_rejected() -> None:
     with pytest.raises(CompileError, match="neither objectives nor an action"):
-        compile(two_head_recipe(program=(Stage(name="fit"),)))
+        compile(
+            two_head_recipe(program=(Stage(name="fit", sampler=ExternalBatches()),))
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +243,7 @@ def test_a_stage_that_descends_says_how(field: str) -> None:
             name="fit",
             objectives=(objective("outcome_nll", Port.Y_GIVEN_XT),),
             trainable=("encoder", "outcome_head"),
+            sampler=ExternalBatches(),
             **{field: REQUIRED},
         )
 
@@ -247,7 +251,7 @@ def test_a_stage_that_descends_says_how(field: str) -> None:
 def test_a_stage_with_no_objectives_needs_neither() -> None:
     # An empty stage is rejected by compile(), while an action-only stage is
     # valid and has nothing to descend. Neither should inherit an optimiser.
-    assert Stage(name="fit").steps is REQUIRED
+    assert Stage(name="fit", sampler=ExternalBatches()).steps is REQUIRED
 
 
 @pytest.mark.parametrize("steps", [0, -1, 2.5])
@@ -317,7 +321,11 @@ def test_a_purpose_outside_the_two_is_rejected() -> None:
 
 def test_a_stage_rejects_an_unknown_row_population() -> None:
     with pytest.raises(CompileError, match="stage 'fit': unknown row population"):
-        Stage(name="fit", rows="t_known")  # type: ignore[arg-type]
+        Stage(
+            name="fit",
+            rows="t_known",  # type: ignore[arg-type]
+            sampler=ExternalBatches(),
+        )
 
 
 def test_an_objective_with_an_unknown_row_population_names_where_it_is() -> None:
@@ -387,6 +395,11 @@ class _WidthBindingObjective:
     @property
     def detaches(self) -> frozenset[tuple[Port, Realisation]]:
         return frozenset()
+
+    @property
+    def batch_coupled(self) -> bool:
+        """No: a double reads one row at a time (§4)."""
+        return False
 
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
@@ -485,6 +498,11 @@ class _DetachingObjective:
     def detaches(self) -> frozenset[tuple[Port, Realisation]]:
         return frozenset({(self.detached, DEFAULT)})
 
+    @property
+    def batch_coupled(self) -> bool:
+        """No: a double reads one row at a time (§4)."""
+        return False
+
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
     ) -> LossTerm:
@@ -563,6 +581,10 @@ def test_detaching_a_port_the_objective_does_not_require_is_rejected() -> None:
         @property
         def detaches(self) -> frozenset[tuple[Port, Realisation]]:
             return frozenset({(Port.T_GIVEN_X, DEFAULT)})
+
+        @property
+        def batch_coupled(self) -> bool:
+            return False
 
         def compute(
             self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext

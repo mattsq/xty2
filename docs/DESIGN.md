@@ -888,6 +888,139 @@ loader catches executions that are wrong in fact.
 
 ---
 
+### 7.3 Data: the policy is declared, the rows are supplied
+
+The gradient executor used to take an `Iterable[XTYBatch]` and nothing else, so
+five keys of the `FIDELITY.md` §2 checklist — `optimisation.batch_size`,
+`optimisation.labelled_unlabelled_ratio`, `data.standardisation`,
+`data.split_protocol`, `data.missingness_mechanism` — had nothing to bind to,
+and three reviewed cards carried `framework-limitation` rows saying so. Those
+five are three different failures, not one: FixMatch's `mu = 7` is a method
+mechanic the recipe could not express; SCARF's `N` is an objective's arithmetic
+left unpinned, since `InfoNCEContrastive`'s negatives are the other `N - 1`
+rows; and TARNet's standardisation is a leakage point outside the plan, which
+§7.2 makes a compile-time rule for treatment labels and had no rule for at all.
+
+Two things were conflated under the word "loader", and they are known at
+different times:
+
+| | What it is | Where it lives | When |
+|---|---|---|---|
+| **Policy** | how a population is split, standardised, made missing, and turned into batches | the `Recipe` — declarative, compiled, plan-visible, digest-covered, card-key-bound | authoring time |
+| **Data** | the rows | the caller, passed to the executor | run time |
+
+The recipe never holds a tensor of training rows: it is a declaration of a
+method, not a container for data. It holds a *policy*, and the executor applies
+it to whatever population it is handed.
+
+```python
+@dataclass(frozen=True)
+class DataSpec:                      # on the Recipe; owns the four data.* keys
+    split: SplitSpec                 # protocol prose, and which assignment is train
+    preprocess: PreprocessSpec       # features / outcome standardisation
+    missingness: MissingnessSpec     # observed, or MCAR to a rate or a label budget
+
+@dataclass(frozen=True)
+class Dataset:                       # supplied by the caller; never in a Recipe
+    schema: Schema
+    rows: XTYBatch
+    assignments: Mapping[str, Tensor]
+```
+
+`assignments` is a mapping of **named subsets** rather than one `split` field,
+because `repeated-cross-fitting` (§11.4) is blocked on a second partition
+having nowhere to live. Naming them is what makes a second additive later; it
+does not discharge that row, since the artifact contract and the
+fold-disjointness check are still written against one assignment.
+
+**The load is derived, not declared**, which is §7.1's rule about artifacts
+applied here. A caller-supplied loader that *reported* the batch size it used
+would be a provenance claim nothing can falsify. So the executor builds the
+batches from the compiled policy — the plan causes the run rather than
+describing it — and what it produces carries the rows that make its claim
+checkable:
+
+```python
+class TrainingPopulation:
+    rows: XTYBatch                   # split, standardised, missingness applied
+    statistics: Mapping[str, Tensor] # what the preprocessing fitted
+    fitted_on_row_ids: Tensor        # [M] the rows it was fitted on
+```
+
+`fitted_on_row_ids` is a straight lift of `Checkpoint.trained_on_row_ids`.
+Standardisation fitted on the test split is the same shape of error as a
+checkpoint predicting rows it trained on, and it gets the same treatment: the
+claim carries the rows that make it checkable, the check runs at load, and the
+object is built only by the executor's factory. `statistics` is a plain mapping
+of tensors and deliberately not a service — ReMixMatch's distribution alignment
+keeps a running average of the *model's* predictions, which is a statistic of
+the run and belongs to whatever declares it.
+
+#### What a stage draws
+
+`Stage.sampler` is `REQUIRED`, for the reason `optimiser` and `steps` are: it
+owns two card keys and a default is the silent inheritance §9.1 exists to make
+impossible.
+
+```python
+UniformSampler(batch_size=128)                  # one fresh permutation per step
+QuotaSampler(quotas=(Quota("t_observed", 64),   # FixMatch's B
+                     Quota("t_missing", 448)))  # and its mu B
+ExternalBatches()                               # the caller supplies the rows
+```
+
+`Quota.rows` is the `Rows` vocabulary of §1.3, so "which rows" needs no new
+words and only "how many" does. `QuotaSampler`'s two card keys are **derived**
+from the quotas rather than passed beside them, so the plan prints the ratio
+the sampler runs and a recipe drawing 64 and 64 cannot claim `mu = 7`.
+`Quota.stratify` exists because PAWS draws a class-balanced support batch,
+which a two-field labelled/unlabelled sampler could not express.
+
+`UniformSampler` is *defined* as what every fixture in this repository already
+did by hand — one fresh permutation per step, first `batch_size` rows — and a
+Tier 0 test pins it to the pre-loader helper. That is what let this arrive
+without re-basing seven recipes onto an unexamined sampling scheme. The
+sampler's generator is seeded by **hashing** the stage seed rather than
+offsetting it, so it cannot collide with the per-step view keys walking upward
+from the same number, and it reads nothing about the model: two recipes
+differing only in an objective weight draw identical rows, which is what every
+paired ablation in this repository depends on.
+
+**`ExternalBatches` is explicit and it is barred where it would matter.** It
+says the caller supplies the rows; it prints in the plan; it is what four
+reviewed recipes declare, because `FIDELITY.md` §5.3 is clear that repaying a
+debt is not licence to churn cards that are not paying it, and because "the
+caller supplies batches" is the true answer for a stage whose card marks
+`optimisation.batch_size` as `n/a`. What stops it being an escape hatch is a
+compile-time bar: `Objective.batch_coupled` is a required member, and a stage
+declaring `ExternalBatches` may not hold a term that reads the rest of the
+batch. `InfoNCEContrastive` is the one `True` today; Barlow Twins and VICReg,
+whose losses are computed from a covariance over the batch axis, are next.
+
+A recipe declares `data` exactly when some stage samples, and not otherwise: a
+policy over batches the caller builds would print four values in the plan that
+nothing applies, which is the provenance failure §7.1 rejects.
+
+#### Views read it too
+
+`ViewTransform.apply` takes the population, because a transform sometimes needs
+a statistic of the training set rather than of the batch in hand: SCARF draws
+each corrupted cell from "the uniform distribution over the values that feature
+takes on across the training dataset", and a batch-local draw can never reach a
+value held by fewer than one row in `B`. `FeatureCorruption` **requires** it
+rather than falling back, so the deviation `scarf.md` §5.2 used to carry cannot
+return as a default nobody reads.
+
+#### What this is not
+
+No workers, prefetch or collate — v1 is tabular, in-memory and single-process.
+No epochs. No sampler that reads training state (`stateful-sampler`, §11.4):
+that would make the data stream a function of the model and destroy the
+paired-ablation property above, which is a cost the card that needs it should
+pay knowingly. And a sampler is accepted only on a `gradient` stage — an array
+or cross fit consumes one finite row-keyed table, and no card asks for a
+sampled one.
+
 ## 8. Compiler
 
 `compile(recipe) -> CompiledRun` is where the framework earns its keep. It:
@@ -907,7 +1040,9 @@ loader catches executions that are wrong in fact.
    that is empty by construction (§7.0);
 7. applies the **static** half of the leakage rule (§7.2), the runtime half
    being checked at artifact load;
-8. emits a **printable execution plan**.
+8. rejects `ExternalBatches` on a stage holding a batch-coupled objective, and
+   a policy no stage applies or a sampler no policy feeds (§7.3);
+9. emits a **printable execution plan**.
 
 That last point matters for agent accuracy: the plan is a human-readable
 artifact listing, per stage, the forward passes, the active objectives with
@@ -1025,11 +1160,11 @@ prevent.
 xty2/
   core/        batch.py schema.py ports.py distributions.py rows.py views.py
                graph.py card_keys.py loss.py schedules.py optimisation.py
-               recipe.py compile.py
+               data.py recipe.py compile.py
   components/  encoders/ outcome/ treatment/ posterior/ density/ energy/
   views/       masking.py perturbations.py
   objectives/  supervised.py marginal.py consistency.py generative.py causal.py
-  training/    program.py loss_mixer.py executors.py artifacts.py
+  training/    program.py loss_mixer.py executors.py artifacts.py loading.py
   recipes/     tarnet.py cnflow.py cycle_dual.py mean_teacher.py ssdml.py
   evaluation/  predictive.py causal.py calibration.py policy.py
   estimators/  cate.py dml.py policy.py
@@ -1208,13 +1343,14 @@ that renaming should trigger.
 | `config-surface` | Config-first surface | sweeps outgrow the Python API in practice | — |
 | `plugins` | Plugin / entry-point system | a consumer outside this repo exists | — |
 | `distributed` | Distributed training | a single recipe stops fitting in one process | — |
-| `loader` | A loader / sampler, and with it the `optimisation.batch_size` and `labelled_unlabelled_ratio` bindings | a recipe needs a fixed labelled/unlabelled quota per batch rather than whatever the data gives. The gradient executor takes an iterable of batches; a stage field for either key would be a card key nothing could check, which §7.1 rejects for provenance and §9.1 for hyperparameters | `fixmatch` §5.4; `scarf` §5.6; `tarnet` §5.5 |
+| `out-of-core-data` | Streaming or larger-than-memory sources: a `Dataset` is one in-memory row table (§7.3) | a card's dataset does not fit in one process. The loader takes the whole population and splits it, so the boundary is memory rather than API — a chunked source would change what `TrainingPopulation.fitted_on_row_ids` can even mean, since a statistic fitted over chunks is not fitted over rows anyone can name | — |
+| `stateful-sampler` | A sampler whose behaviour depends on training state: curriculum sampling, hard-negative mining, active-learning acquisition (`BACKLOG.md` §3.3, §13) | a card's §4 states a sampling rule that reads the model. Deliberately refused when the loader was built rather than left unconsidered: it would make the data stream a function of the model and destroy the property every paired ablation in this repository rests on — that two recipes differing only in an objective weight draw identical rows (`tests/invariants/test_loading.py`). That is a real cost and it should be paid by the card that needs it, knowingly | — |
+| `batch-row-repetition` | A batch holding one row more than once, and with it a labelled quota larger than its own population | a card's §4 states a labelled batch size exceeding the labelled rows available, which FixMatch's smallest CIFAR-10 setting does exactly — `B = 64` against 40 labels in total, filled by iterating the labelled set as a repeating shuffle. `XTYBatch.row_id` must be unique because artifacts and provenance are keyed by it (§7.1), so a repeated row is unrepresentable and the scarcest budget expressible is `B` itself. Load-bearing vocabulary under §11.2 — the batch contract is what every objective, artifact and row population is written against — so a named second consumer comes before the shape: PAWS's support set (`BACKLOG.md` §2.10) draws `k` rows per class from the same labelled pool and meets the same wall | `fixmatch` §5.12 |
 | `lr-schedules` | LR schedules beyond `Constant`, `Ramp`, `SigmoidRamp`, `CosineDecay`, `Step` and `ExponentialDecay` (one-cycle, warm restarts) | a card names one. The rate is a schedule multiplier, so a new type serves both loss weights and the LR; `ExponentialDecay` entered with TARNet, `SigmoidRamp` with Mean Teacher and `CosineDecay` with FixMatch, the first real cards that name them | — |
 | `augmentation-vocabulary` | A tabular augmentation vocabulary with tunable per-operation magnitudes, and any adaptive controller over it | a set of tabular operations exists whose magnitudes are worth learning over. `FeatureMask` has one scalar and `BoundedJitter` one more, so the controller has nothing to control; SCARF corruption, SubTab feature subsets and VIME masking were the `BACKLOG.md` candidates, and `scarf` has since built the first of the three — `FeatureCorruption`, which carries one scalar of its own. Three operations with one magnitude each is still not a vocabulary worth learning over, so the row stands and the prerequisite is now two thirds outstanding rather than three. Genuinely blocked on prerequisites rather than on consumer count | `fixmatch` §5.10 |
 | `staged-gate` | Confidence gating / soft labels on the staged `PseudoLabelAction` path | a reviewed card whose §4 names a `losses.confidence_threshold` on a *staged writeback*. The objective path has had a gate since `fixmatch`, and §11.3 records what asking the question here settled: `cycle_dual` §5.6 is a judgement, because neither of its papers states a gate and its §4 marks the key `n/a`. Nothing is paying for this one | — |
-| `repeated-cross-fitting` | Repeated sample splitting: a second, third, … fold assignment over the same rows, and an aggregation across them | the executor can carry more than one partition. Today an `XTYBatch` has a single `fold_id`, and the artifact contract, the fold-disjointness check (§7.1) and checkpoint provenance are each written against one assignment, so a second partition has nowhere to live. This is load-bearing vocabulary under §11.2, so it also wants a named second consumer before the shape is fixed; repeated-split DML and any nested cross-fitting recipe are the candidates, and neither has a card | `ssdml` §5.6 |
-| `view-population-statistics` | A view transform fitted on the training population rather than on the batch it transforms — an empirical marginal, a quantile grid, a column covariance — and the population object it would read | a card's §4 names a statistic of the *training set* that an augmentation must use. `scarf` is the first: SCARF draws each corrupted cell from "the uniform distribution over the values that feature takes on across the training dataset", and a `ViewSpec` transform is a pure function of `(batch, rng_key)` (§5) with no population to read. VIME's mask-and-impute and any quantile-based tabular augmentation are the `BACKLOG.md` candidates. This is load-bearing vocabulary under §11.2 — a transform contract every future view is written against — and it is entangled with `loader`, since a training population is the thing a loader would own. **That combination is the one §11.2's table has no waiting cell for**, and this row is deferred anyway rather than quietly: `scarf` §5.1 records the argument in full, including the two halves that pull apart here — no §4 card key names the marginal's source, so §11.2's Q1 test does not fire, while `FIDELITY.md` §5's "we would have implemented the paper" test does. A card review that lets this row stand is answering that question, not skipping it | `scarf` §5.2 |
-| `early-stopping` | A stage that ends on a monitored validation metric rather than after a fixed `steps` count, and the held-out split it would have to watch | a card's protocol cannot be stated as a fixed step budget without changing what the method does. `Stage.steps` binds `optimisation.total_steps_or_epochs` and is `REQUIRED` (§9.1), and there is nowhere for a validation split to live — the executor takes one iterable of batches per stage — so this would be the executor contract and load-bearing under §11.2. SimCLRv2-style staged pretraining and any early-stopped meta-learner are the `BACKLOG.md` candidates, and neither has a card. **Nothing is paying for this one**, and the way that came about is worth keeping: `scarf` §5.4 cited it as a debt in its first draft, because SCARF stops pretraining by "early stopping with patience 3 on the validation loss" and we fix 1,000 steps. Asking §11.2's questions properly turned that around — every card here fixes a project-local budget for attributability and would keep doing so with the capability in hand, which is `FIDELITY.md` §5's definition of a judgement, and `scarf` §6.2 measured four fine-tuning budgets and found its result did not turn on the choice. Same shape as `staged-gate`: the row survives because the question is real, not because a card is owed | — |
+| `repeated-cross-fitting` | Repeated sample splitting: a second, third, … fold assignment over the same rows, and an aggregation across them | the executor can carry more than one partition. `Dataset.assignments` is a mapping of named subsets rather than one `split` field precisely so that a second partition has somewhere to live, so that half of the obstacle is gone. What remains is the half that matters: the artifact contract, the fold-disjointness check (§7.1) and checkpoint provenance are each written against one assignment, and an `XTYBatch` still carries a single `fold_id`. This is load-bearing vocabulary under §11.2, so it also wants a named second consumer before the shape is fixed; repeated-split DML and any nested cross-fitting recipe are the candidates, and neither has a card | `ssdml` §5.6 |
+| `early-stopping` | A stage that ends on a monitored validation metric rather than after a fixed `steps` count, and the held-out split it would have to watch | a card's protocol cannot be stated as a fixed step budget without changing what the method does. `Stage.steps` binds `optimisation.total_steps_or_epochs` and is `REQUIRED` (§9.1), and half of what blocked this is gone: `Dataset.assignments` is where a validation split lives now, and `tarnet` declares one. What is left is the stopping rule — a stage that ends on a monitored metric rather than a `steps` count — which is still the executor contract and load-bearing under §11.2. SimCLRv2-style staged pretraining and any early-stopped meta-learner are the `BACKLOG.md` candidates, and neither has a card. **Nothing is paying for this one**, and the way that came about is worth keeping: `scarf` §5.4 cited it as a debt in its first draft, because SCARF stops pretraining by "early stopping with patience 3 on the validation loss" and we fix 1,000 steps. Asking §11.2's questions properly turned that around — every card here fixes a project-local budget for attributability and would keep doing so with the capability in hand, which is `FIDELITY.md` §5's definition of a judgement, and `scarf` §6.2 measured four fine-tuning budgets and found its result did not turn on the choice. Same shape as `staged-gate`: the row survives because the question is real, not because a card is owed | — |
 | `model-families` | The other ~35 XTYLearner families | one is actually needed for a result | — |
 
 One row that used to be here is **not** here, and its absence is the mechanism

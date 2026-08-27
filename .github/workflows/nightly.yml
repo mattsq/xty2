@@ -5,18 +5,66 @@ on:
   schedule:
     - cron: "0 3 * * *"
   workflow_dispatch:
+    inputs:
+      write_ledger:
+        description: >-
+          Record the result in the card: update its status and append a row to
+          the section 6.3 ledger. Off for scheduled runs, which *check* a
+          recorded status against a fresh one and must not rewrite the thing
+          they are checking. Turn it on for the run that first records a card,
+          or that re-measures one after a change invalidated its number — then
+          commit the card edit the run produces.
+        type: boolean
+        default: false
+      recipes:
+        description: >-
+          Space-separated recipes to run, or empty for all of them.
+        type: string
+        default: ""
 
 jobs:
+  select:
+    name: Select recipes
+    runs-on: ubuntu-latest
+    outputs:
+      recipes: ${{ steps.pick.outputs.recipes }}
+    steps:
+      - uses: actions/checkout@v4
+      # The matrix is *derived* from RECIPES rather than restated here.
+      # Two places for one list is how a card acquires a Tier 2 protocol and
+      # never gets measured: adding the recipe and forgetting the workflow
+      # looks exactly like success.
+      - id: pick
+        env:
+          REQUESTED: ${{ inputs.recipes }}
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
+          import json, os, re, pathlib
+
+          source = pathlib.Path("xty2/evaluation/benchmarks/__init__.py").read_text()
+          block = re.search(r"RECIPES = \(([^)]*)\)", source).group(1)
+          known = re.findall(r'"([a-z_]+)"', block)
+          requested = os.environ.get("REQUESTED", "").split()
+          unknown = sorted(set(requested) - set(known))
+          if unknown:
+              raise SystemExit(f"unknown recipe(s) {unknown}; known: {known}")
+          print("recipes=" + json.dumps(requested or known))
+          EOF
+
   benchmarks:
     name: Tier 2 — ${{ matrix.recipe }}
+    needs: select
     runs-on: ubuntu-latest
     timeout-minutes: 300
     strategy:
       fail-fast: false
       matrix:
-        recipe: [tarnet, cnflow, mean_teacher, cycle_dual, ssdml]
+        recipe: ${{ fromJSON(needs.select.outputs.recipes) }}
     env:
       XTY2_TIER2_WORKERS: "4"
+      # `inputs.write_ledger` is empty on a scheduled run, so this is off
+      # unless a dispatch turned it on.
+      XTY2_WRITE_TIER2_LEDGERS: ${{ inputs.write_ledger && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -30,6 +78,11 @@ jobs:
           uv run --no-sync pytest
           tests/benchmarks/test_${{ matrix.recipe }}.py
           --durations=0
+      - name: Card edit written by this run
+        if: ${{ always() && inputs.write_ledger }}
+        run: |
+          git diff -- docs/recipes/ > "card-${{ matrix.recipe }}.patch"
+          git diff --stat -- docs/recipes/
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
@@ -37,4 +90,5 @@ jobs:
           name: tier2-${{ matrix.recipe }}
           path: |
             runs/
+            card-${{ matrix.recipe }}.patch
           if-no-files-found: ignore

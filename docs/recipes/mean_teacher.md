@@ -423,6 +423,7 @@ reproduction:
 | Date | Commit | Metric | Value +/- stderr | Within tolerance? |
 |---|---|---|---|---|
 | 2026-08-24 | `d060df351f2fe8bac6d951c3757506c684d8b408` | consistency_MSE_ratio<br>paired_d_treatment_NLL<br>paired_d_sqrt_PEHE | 0.316756 +/- 0.0303<br>-0.00555395 +/- 0.00797 nat/row<br>0.054138 +/- 0.00626 outcome units | yes |
+| 2026-08-27 | `40265928e87a` | consistency_MSE_ratio<br>paired_d_treatment_NLL<br>paired_d_sqrt_PEHE | 0.316756 +/- 0.0303<br>-0.00555395 +/- 0.00797 nat/row<br>0.054138 +/- 0.00626 outcome units | yes |
 
 ### 6.4 P9 acceptance
 

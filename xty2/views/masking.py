@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import torch
 
 from xty2.core.batch import XTYBatch
+from xty2.core.data import TrainingPopulation
 from xty2.core.errors import ViewError
 from xty2.core.schema import FeatureSpec, Schema
 
@@ -59,8 +60,17 @@ class FeatureMask:
         )
 
     def apply(
-        self, batch: XTYBatch, schema: Schema, *, generator: torch.Generator
+        self,
+        batch: XTYBatch,
+        schema: Schema,
+        *,
+        generator: torch.Generator,
+        population: TrainingPopulation | None = None,
     ) -> XTYBatch:
+        # Batch-local by construction: a mask fills with a constant and a
+        # jitter is relative to the row's own value, so neither has anything
+        # to ask the training population.
+        del population
         self.validate(schema)
         names = self.affected_columns(schema)
         specs = tuple(spec for spec in schema.features if spec.name in names)

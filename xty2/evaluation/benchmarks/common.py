@@ -11,7 +11,14 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from xty2.core import FeatureSpec, OutcomeSpec, Schema, XTYBatch
+from xty2.core import (
+    Dataset,
+    FeatureSpec,
+    OutcomeSpec,
+    Schema,
+    TrainingPopulation,
+    XTYBatch,
+)
 
 Replicate = Mapping[str, float]
 ReplicateFunction = Callable[[int], dict[str, float]]
@@ -187,3 +194,88 @@ __all__ = [
     "standardise_outcome",
     "take",
 ]
+
+
+@dataclass(frozen=True)
+class ClusterPopulation:
+    """One draw of the two-cluster DGP, with its analytic treatment effect."""
+
+    batch: XTYBatch
+    true_effect: Tensor
+
+
+CLUSTER_FEATURES = 6
+CLUSTER_SIGNAL = 0.45
+SEPARATED = 0.02
+"""`p(t=1 | c=0)`; the assignment is 0.02/0.98 and a confident gate can open."""
+
+
+def two_cluster_population(
+    rows: int,
+    *,
+    seed: int,
+    row_offset: int,
+    low: float = SEPARATED,
+) -> ClusterPopulation:
+    """The DGP of `fixmatch.md` §6.1, which `scarf.md` §6.1 adopts unchanged.
+
+    One implementation for both cards, deliberately: `scarf.md` §6.1 says it is
+    "the DGP of `fixmatch.md` §6.1, unchanged, so that two cards' §6 numbers are
+    about the recipes rather than about two different worlds". Two transcriptions
+    of one specification is how those two worlds would quietly diverge.
+
+    The draw order — `u_c`, `eps_x`, `u_t`, `eps_y` — is part of the protocol,
+    and it matches `tests/smoke/test_fixmatch.py` so that Tier 1 and Tier 2 read
+    the same rows from the same seed.
+
+    Every treatment is observed. The label budget is the *recipe's* declaration
+    now (`data.missingness_mechanism`), so a benchmark that masked rows here
+    would be applying a policy twice.
+    """
+    generator = torch.Generator().manual_seed(seed)
+    u_c = torch.rand(rows, generator=generator)
+    epsilon_x = torch.randn(rows, CLUSTER_FEATURES, generator=generator)
+    u_t = torch.rand(rows, generator=generator)
+    epsilon_y = torch.randn(rows, generator=generator)
+
+    cluster = (u_c < 0.5).float()
+    sign = 2.0 * cluster - 1.0
+    x = epsilon_x.clone()
+    x[:, :4] = CLUSTER_SIGNAL * sign[:, None] + 0.6 * epsilon_x[:, :4]
+    propensity = low + (1.0 - 2.0 * low) * cluster
+    treatment = (u_t < propensity).long()
+    baseline = 0.5 * x[:, 0] - 0.3 * x[:, 1] + 0.2 * (x[:, 4].square() - 1.0)
+    true_effect = 1.0 + 0.5 * torch.tanh(x[:, 2])
+    y = baseline + treatment * true_effect + 0.5 * epsilon_y
+    return ClusterPopulation(
+        batch=XTYBatch(
+            x=x,
+            t=treatment,
+            y=y,
+            t_observed=torch.ones(rows, dtype=torch.bool),
+            y_observed=torch.ones(rows, dtype=torch.bool),
+            row_id=torch.arange(row_offset, row_offset + rows),
+        ),
+        true_effect=true_effect,
+    )
+
+
+def training_dataset(schema: Schema, train: XTYBatch) -> Dataset:
+    """The training rows under the assignment name both cards' policies use."""
+    return Dataset(
+        schema=schema,
+        rows=train,
+        assignments={"train": torch.arange(train.batch_size)},
+    )
+
+
+def on_the_training_scale(batch: XTYBatch, population: TrainingPopulation) -> XTYBatch:
+    """Apply the outcome scaling the run **fitted**, never one refitted here.
+
+    Refitting on the held-out rows is the leakage `FIDELITY.md` §2 names first,
+    and `StageResult.population` exists so that it is not the path of least
+    resistance.
+    """
+    location = population.statistics["y_location"]
+    scale = population.statistics["y_scale"]
+    return batch.replace(y=(batch.y - location) / scale)

@@ -11,15 +11,12 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from xty2.core import GaussianOutcome, Port, XTYBatch, compile
+from xty2.core import Dataset, GaussianOutcome, Port, XTYBatch, compile
 from xty2.evaluation.benchmarks.common import (
-    BatchStream,
-    batch_indices,
     column,
     configure_worker,
     continuous_schema,
     parallel_replicates,
-    take,
 )
 from xty2.evaluation.causal import (
     absolute_ate_error,
@@ -50,8 +47,10 @@ _FILES = {
     ),
 }
 _STEPS = 3_000
-_BATCH_SIZE = 100
 _VAL_FRACTION = 0.30
+# The batch size used to live here, beside the step count, because nothing in
+# the recipe could hold it. It is `tarnet.BATCH_SIZE` now, bound to
+# `optimisation.batch_size` and printed in the plan (card §5 deviation 5).
 _MODEL_SEED = 130_000
 
 
@@ -164,19 +163,21 @@ def _replicate(index: int, *, train_path: str) -> dict[str, float]:
         row_id=torch.arange(rows),
         weight=weights,
     )
-    fit = take(population, fit_rows)
-    batches = BatchStream(
-        fit,
-        batch_indices(
-            fit.batch_size,
-            steps=_STEPS,
-            batch_size=_BATCH_SIZE,
-            seed=seed + 1,
-        ),
+    # The recipe declares the split, the standardisation and the batch size
+    # now, so the runner supplies rows and the assignment its SplitSpec names
+    # and stops owning any of the three. The `fit` assignment is what
+    # `TrainingPopulation.fitted_on_row_ids` is checked against.
+    data = Dataset(
+        schema=continuous_schema(x.shape[1]),
+        rows=population,
+        assignments={
+            "fit": fit_rows,
+            "validation": permutation[rows - validation_rows :],
+        },
     )
     torch.manual_seed(seed + 2)
     compiled = compile(tarnet(continuous_schema(x.shape[1])))
-    run_stage(compiled, "joint_fit", batches, seed=seed + 3)
+    run_stage(compiled, "joint_fit", data, seed=seed + 3)
     with torch.no_grad():
         outcome_distribution = compiled.state("joint_fit", population).default[
             Port.Y_GIVEN_XT

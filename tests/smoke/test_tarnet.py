@@ -11,6 +11,7 @@ from torch.nn import functional as F
 from xty2.core import (
     CategoricalTreatment,
     CompiledRun,
+    Dataset,
     FeatureSpec,
     GaussianOutcome,
     OutcomeSpec,
@@ -27,7 +28,6 @@ from xty2.training import StageResult, run_stage
 FEATURES = 6
 TRAIN_ROWS = 192
 TEST_ROWS = 1_024
-BATCH_SIZE = 100
 STEPS = 3_000
 
 
@@ -93,27 +93,18 @@ def _population(
     return batch, true_effect
 
 
-def _take(batch: XTYBatch, rows: torch.Tensor) -> XTYBatch:
-    assert batch.weight is not None
-    return XTYBatch(
-        x=batch.x.index_select(0, rows),
-        t=batch.t.index_select(0, rows),
-        y=batch.y.index_select(0, rows),
-        t_observed=batch.t_observed.index_select(0, rows),
-        y_observed=batch.y_observed.index_select(0, rows),
-        row_id=batch.row_id.index_select(0, rows),
-        weight=batch.weight.index_select(0, rows),
-    )
+def _dataset(population: XTYBatch) -> Dataset:
+    """The train rows, under the assignment name the recipe's policy declares.
 
-
-def _batches(population: XTYBatch) -> tuple[XTYBatch, ...]:
-    generator = torch.Generator().manual_seed(99)
-    return tuple(
-        _take(
-            population,
-            torch.randperm(population.batch_size, generator=generator)[:BATCH_SIZE],
-        )
-        for _ in range(STEPS)
+    Tier 1 used to build the batch stream itself — one seeded permutation per
+    step, first `tarnet.BATCH_SIZE` rows. That is now `UniformSampler`'s definition
+    and the recipe owns it, so the fixture hands over rows and an assignment
+    and stops deciding what a step sees.
+    """
+    return Dataset(
+        schema=_schema(),
+        rows=population,
+        assignments={"fit": torch.arange(population.batch_size)},
     )
 
 
@@ -175,7 +166,7 @@ def paired_fit() -> tuple[_Metrics, _Metrics]:
         TEST_ROWS, seed=2, missing_fraction=0.0, row_offset=2_000
     )
     assert int(train.t_observed.sum()) == TRAIN_ROWS // 2
-    batches = _batches(train)
+    batches = _dataset(train)
 
     torch.manual_seed(17)
     marginal_recipe = tarnet(schema)

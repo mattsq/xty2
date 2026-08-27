@@ -26,11 +26,11 @@ This file is the short version of the rules those documents make binding.
 
 ```
 xty2/core/        batch, schema, ports, distributions, graph, views, loss,
-                  schedules, optimisation, recipe, compile
+                  schedules, optimisation, data, recipe, compile
 xty2/components/  parameterisations only
 xty2/views/       augmentation, separated from the losses that use it
 xty2/objectives/  losses as independent objects
-xty2/training/    loss mixer, executors, artifacts (program arrives with P8)
+xty2/training/    loss mixer, executors, artifacts, loading (data policy -> batches)
 xty2/recipes/     named methods, no logic
 xty2/evaluation/  predictive, causal, calibration metrics
 xty2/estimators/  cate, dml, policy front-ends

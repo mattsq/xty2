@@ -46,12 +46,14 @@ from torch import Tensor
 
 from xty2.core.batch import XTYBatch
 from xty2.core.compile import CompiledRun, CompiledStage
+from xty2.core.data import Dataset, ExternalBatches, TrainingPopulation
 from xty2.core.errors import ArtifactError, TrainingError
 from xty2.core.graph import ComponentGraph
 from xty2.core.loss import TrainContext, treatment_distribution
 from xty2.core.recipe import ArrayFitAction, PseudoLabelAction
 from xty2.core.rows import resolve_rows
 from xty2.training.artifacts import Checkpoint, PseudoLabels, RunDirectory
+from xty2.training.loading import build_population, check_fitted_on, iterate
 from xty2.training.loss_mixer import (
     GradientProbe,
     GradientReport,
@@ -90,7 +92,18 @@ loader exists yet and a half-built one here would own card keys it could not
 check (`FIDELITY.md` §2, `optimisation.batch_size`).
 """
 
-BatchSources = Mapping[str, BatchSource]
+StageData = "BatchSource | Dataset"
+"""What a caller hands a stage: a `Dataset` where the stage declares a sampler,
+an iterable of batches where it declares `ExternalBatches`.
+
+Which one is not a runtime preference. The stage's declaration decides, and
+handing over the other kind is an error rather than a silent reinterpretation:
+a `Dataset` fed to an `ExternalBatches` stage would be a policy nothing
+applied, and an iterable fed to a sampling stage would be the batch composition
+the card pins down, quietly replaced by whatever arrived.
+"""
+
+BatchSources = Mapping[str, "BatchSource | Dataset"]
 """One explicitly named source per stage in an ordered program."""
 
 
@@ -178,6 +191,13 @@ class StageResult:
         teacher: The stage-local EMA parameter set, when one was declared.
             It is a live model for inspection or inference, not the immutable
             student checkpoint written as the stage artifact.
+        population: The training population the declared policy produced, and
+            `None` for a stage that took the caller's batches. It carries the
+            statistics the standardisation fitted and the rows they were fitted
+            on, which is how a caller applies the *same* transform to held-out
+            rows: refitting them on the evaluation split is the leakage
+            `FIDELITY.md` §2 names first, and a run that could not hand back
+            what it fitted would make refitting the path of least resistance.
     """
 
     stage: str
@@ -188,6 +208,7 @@ class StageResult:
     fold_checkpoints: Mapping[int, Checkpoint] = field(default_factory=dict)
     pseudo_labels: PseudoLabels | None = None
     teacher: EMATeacher | None = None
+    population: TrainingPopulation | None = None
     paths: Mapping[str, str] = field(default_factory=dict)
     """Where the artifacts were written, when a run directory was given."""
 
@@ -483,6 +504,54 @@ def _emit_pseudo_labels(
 
 
 # ---------------------------------------------------------------------------
+# What feeds a stage
+# ---------------------------------------------------------------------------
+
+
+def _feed(
+    run: CompiledRun,
+    compiled: CompiledStage,
+    data: BatchSource | Dataset,
+    *,
+    seed: int,
+) -> tuple[BatchSource, TrainingPopulation | None]:
+    """Resolve what the caller supplied against what the stage declared.
+
+    Where the stage samples, this is the whole of the loader: the declared
+    policy is applied to the supplied rows, the fitted statistics are checked
+    against the training assignment they claim to come from, and the stream is
+    drawn from the result. The plan therefore *causes* the batches rather than
+    describing them, which is the difference between a compiled policy and a
+    caller-supplied loader that reports on itself (`DESIGN.md` §7.1).
+    """
+    sampler = compiled.stage.sampler
+    if isinstance(sampler, ExternalBatches):
+        if isinstance(data, Dataset):
+            raise TrainingError(
+                f"stage {compiled.name!r} declares ExternalBatches — the caller "
+                "supplies its batches — but was handed a Dataset. Nothing would "
+                "apply a policy to it. Declare a sampler on the stage, or pass "
+                "the batches."
+            )
+        return data, None
+    if not isinstance(data, Dataset):
+        raise TrainingError(
+            f"stage {compiled.name!r} declares {type(sampler).__name__} and "
+            f"draws its own batches, but was handed {type(data).__name__}. Pass "
+            "a Dataset: accepting an iterable here would silently replace the "
+            "batch composition the card pins down."
+        )
+    spec = run.recipe.data
+    if spec is None:  # pragma: no cover - compile() rejects this pairing
+        raise TrainingError(
+            f"recipe {run.recipe.name!r} has a sampling stage and no data policy"
+        )
+    population = build_population(data, spec, seed=seed)
+    check_fitted_on(population, data, spec)
+    return iterate(population, sampler, steps=compiled.steps, seed=seed), population
+
+
+# ---------------------------------------------------------------------------
 # The loop
 # ---------------------------------------------------------------------------
 
@@ -490,7 +559,7 @@ def _emit_pseudo_labels(
 def run_stage(
     run: CompiledRun,
     stage: str | CompiledStage,
-    batches: BatchSource,
+    batches: BatchSource | Dataset,
     *,
     seed: int,
     run_dir: RunDirectory | None = None,
@@ -505,7 +574,9 @@ def run_stage(
         run: The compiled recipe. It decided the forward passes, the eligible
             rows and the trainable set; nothing here chooses any of them.
         stage: The stage to run, by name or compiled.
-        batches: Where the rows come from. Must supply at least `stage.steps`
+        batches: Where the rows come from — a `Dataset` where the stage
+            declares a sampler, an iterable where it declares
+            `ExternalBatches`. An iterable must supply at least `stage.steps`
             batches; running dry is an error rather than a short run, because
             a stage that silently trained for fewer steps than its card says
             is the kind of difference nothing downstream would show.
@@ -538,11 +609,12 @@ def run_stage(
             "run_program so its source checkpoint and artifact edge are "
             "resolved before prediction."
         )
+    source, population = _feed(run, compiled, batches, seed=seed)
     prediction_batches: list[XTYBatch] | None = None
-    fit_batches: BatchSource = batches
+    fit_batches: BatchSource = source
     if isinstance(compiled.action, PseudoLabelAction):
         prediction_batches = []
-        fit_batches = _capture_step_batches(batches, compiled, prediction_batches)
+        fit_batches = _capture_step_batches(source, compiled, prediction_batches)
     _restore_initial_state(
         run,
         parameters=run.initial_parameters(),
@@ -555,9 +627,10 @@ def run_stage(
         seed=seed,
         run_dir=run_dir,
         probe=probe,
+        population=population,
     )
     if prediction_batches is None:
-        return result
+        return replace(result, population=population)
     labels = _predict_pseudo_labels(
         run,
         compiled,
@@ -570,13 +643,13 @@ def run_stage(
     paths = dict(result.paths)
     if run_dir is not None:
         paths["pseudo_labels"] = str(run_dir.write_pseudo_labels(labels))
-    return replace(result, pseudo_labels=labels, paths=paths)
+    return replace(result, pseudo_labels=labels, paths=paths, population=population)
 
 
 def run_array_fit(
     run: CompiledRun,
     stage: str | CompiledStage,
-    batches: BatchSource,
+    batches: BatchSource | Dataset,
     *,
     seed: int,
     run_dir: RunDirectory | None = None,
@@ -593,19 +666,23 @@ def run_array_fit(
         parameters=run.initial_parameters(),
         buffers=run.initial_buffers(),
     )
-    return _run_array_fit(
-        run,
-        compiled,
-        _materialise_batches(batches, compiled),
-        seed=seed,
-        run_dir=run_dir,
+    source, population = _feed(run, compiled, batches, seed=seed)
+    return replace(
+        _run_array_fit(
+            run,
+            compiled,
+            _materialise_batches(source, compiled),
+            seed=seed,
+            run_dir=run_dir,
+        ),
+        population=population,
     )
 
 
 def run_cross_fit(
     run: CompiledRun,
     stage: str | CompiledStage,
-    batches: BatchSource,
+    batches: BatchSource | Dataset,
     *,
     seed: int,
     run_dir: RunDirectory | None = None,
@@ -624,14 +701,18 @@ def run_cross_fit(
             f"{compiled.initialise_from!r}. Run it through run_program so the "
             "named checkpoint can be restored independently for every fold."
         )
-    return _run_cross_fit(
-        run,
-        compiled,
-        _materialise_batches(batches, compiled),
-        seed=seed,
-        run_dir=run_dir,
-        probe=probe,
-        initialise_from=None,
+    source, population = _feed(run, compiled, batches, seed=seed)
+    return replace(
+        _run_cross_fit(
+            run,
+            compiled,
+            _materialise_batches(source, compiled),
+            seed=seed,
+            run_dir=run_dir,
+            probe=probe,
+            initialise_from=None,
+        ),
+        population=population,
     )
 
 
@@ -713,12 +794,19 @@ def run_program(
                 ) from error
             inputs.append(labels)
 
+        stage_seed = seed + index * STREAM_STRIDE
+        drawn, population = _feed(
+            run, compiled, sources[compiled.name], seed=stage_seed
+        )
+        # Artifact joins wrap the resolved stream rather than the caller's
+        # source: a pseudo-label side table replaces the treatment placeholder
+        # of rows the policy has already made missing, which is the order
+        # §7.1 describes and the only one under which the join is meaningful.
         stage_batches: BatchSource = _apply_inputs(
-            sources[compiled.name],
+            drawn,
             inputs,
             treatment_cardinality=run.recipe.schema.treatment_cardinality,
         )
-        stage_seed = seed + index * STREAM_STRIDE
         if compiled.executor == "gradient":
             result = _run_gradient_or_action(
                 run,
@@ -728,6 +816,7 @@ def run_program(
                 run_dir=run_dir,
                 probe=probe_map.get(compiled.name),
                 source_checkpoint=source_checkpoint,
+                population=population,
             )
         elif compiled.executor == "array_fit":
             result = _run_array_fit(
@@ -747,6 +836,7 @@ def run_program(
                 probe=probe_map.get(compiled.name),
                 initialise_from=source_checkpoint,
             )
+        result = replace(result, population=population)
         results.append(result)
         by_name[compiled.name] = result
 
@@ -762,6 +852,7 @@ def _run_gradient_or_action(
     run_dir: RunDirectory | None,
     probe: GradientProbe | None,
     source_checkpoint: Checkpoint | None,
+    population: TrainingPopulation | None = None,
 ) -> StageResult:
     """Execute a normal fit, optionally followed by a pseudo-label action."""
     materialised: list[XTYBatch] | None = None
@@ -780,6 +871,7 @@ def _run_gradient_or_action(
             seed=seed,
             run_dir=run_dir,
             probe=probe,
+            population=population,
         )
         if materialised is None:
             return result
@@ -1194,6 +1286,7 @@ def _run_stage(
     run_dir: RunDirectory | None,
     probe: GradientProbe | None,
     fold: int | None = None,
+    population: TrainingPopulation | None = None,
 ) -> StageResult:
     """Execute one already-resolved stage for `run_stage` or `run_program`."""
     if compiled.steps > MAX_STAGE_STEPS:
@@ -1250,6 +1343,7 @@ def _run_stage(
                     # silently ran a different reviewed protocol.
                     rng_key=seed + step,
                     teacher=teacher,
+                    population=population,
                 )
                 records.append(
                     StepRecord(
@@ -1327,6 +1421,7 @@ def _step(
     *,
     rng_key: int,
     teacher: EMATeacher | None,
+    population: TrainingPopulation | None = None,
 ) -> _Stepped:
     """Forward, mix, backward, clip, step — in that order and no other."""
     state = run.state(
@@ -1334,6 +1429,7 @@ def _step(
         batch,
         rng_key=rng_key,
         teacher_graph=teacher.graph if teacher is not None else None,
+        population=population,
     )
     ctx = TrainContext(global_step=step, schema=run.recipe.schema, stage=compiled.name)
     mixed = mixer.mix(state, batch, ctx, parameters=tensors)
