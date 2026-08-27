@@ -397,6 +397,9 @@ class Objective(Protocol):
     def compute(self, state: State, batch: XTYBatch,
                 rows: RowIndex, ctx: TrainContext) -> LossTerm: ...
 
+class StatefulObjective(Objective, Protocol):         # opt-in; see the rules
+    def initial_state(self, population: TrainingPopulation | None) -> object: ...
+
 @dataclass(frozen=True)
 class LossTerm:
     value: Tensor          # scalar, UNWEIGHTED, mean over eligible rows
@@ -409,8 +412,26 @@ Rules:
 - An objective returns its **unweighted** value. Weighting is the mixer's job
   (§6). An objective that applies its own weight is a bug, because it makes the
   logged raw value incomparable across runs.
-- An objective never calls `.backward()`, never mutates state, never touches
-  parameters directly.
+- An objective never calls `.backward()`, never mutates `State`, the batch or
+  parameters, and never touches parameters directly.
+- **An objective may declare one piece of state of its own, and the framework
+  owns its lifecycle.** Most cannot: a likelihood is a function of this batch.
+  A few published mechanics are functions of the training *history* — FlexMatch's
+  per-class threshold is computed from marks accumulated over every step so far
+  (`docs/recipes/flexmatch.md` §3.1, algorithm 1) — and no arrangement of ports,
+  realisations or row populations computes one of those from a single batch. So
+  an objective may implement `StatefulObjective.initial_state(population)`; the
+  executor calls it **once per stage execution** and hands the result back
+  through `TrainContext.objective_states`, which `compute` reads via
+  `ctx.objective_state(name, kind)` and may mutate. Three consequences are the
+  reason it is shaped this way rather than as a mutable field on the objective:
+  a recipe stays an immutable declaration, two runs of one compiled recipe are
+  identical, and a paired ablation whose two arms share an objective instance
+  cannot leak one arm's history into the other. The state is not an artifact —
+  nothing checkpoints, restores or keys provenance by it (§7.1), which
+  `BACKLOG.md` §11.3 asks for explicitly until two recipes need the same
+  lifecycle. `population` is `None` for a stage fed by `ExternalBatches`, and it
+  is the objective that decides whether it can run without one.
 - An objective with an arithmetic choice that is not already visible through
   its ports, realisations, rows, reduction, schedule or card keys emits that
   choice through stable `plan_details()`. Those lines are part of the execution
@@ -480,6 +501,15 @@ stage transition: FixMatch's artificial label is a per-batch detached target,
 where §7's `PseudoLabelAction` emits an immutable side table between stages.
 Both exist because those are two different mechanisms, not two spellings of
 one.
+
+`CurriculumPseudoLabelTreatmentNLL` — FixMatch's gate with FlexMatch's
+per-class curriculum threshold in place of the constant — arrived with
+`docs/recipes/flexmatch.md`, and is a *separate* objective rather than a policy
+field on `PseudoLabelTreatmentNLL` because `BACKLOG.md` §15.2 asks for the first
+two consumers of a mechanism to be local and explicit. It is also the only
+objective so far that declares `StatefulObjective`: `T_t(c)` is a function of
+marks accumulated over every step, which no arrangement of ports, realisations
+or row populations computes from one batch.
 
 `InfoNCEContrastive` is the second, and arrived with `docs/recipes/scarf.md`.
 It is the first objective whose per-row value depends on the *other* rows of

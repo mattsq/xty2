@@ -3,9 +3,13 @@
 **Status:** `draft`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
-> Written card-first, before any code, per `CLAUDE.md` rule 1. §8 is unsigned:
-> nothing here has been reviewed, and the status line moves when a reviewer
-> moves it.
+> Written card-first, before any code, per `CLAUDE.md` rule 1. The recipe, the
+> objective and the Tier 0/Tier 1 tests now exist and pass, so the *code* is at
+> what `FIDELITY.md` §1.1 calls `smoke-passing`. The status stays `draft`
+> because §8 is unsigned and because §6.2 records a result the card should be
+> re-reviewed in the light of: on this fixture the published procedure does not
+> leave its own warm-up, and §2's claim was amended after the measurement — the
+> amendment is marked where it is.
 
 ---
 
@@ -42,11 +46,22 @@ cites a reference implementation, and no row should be read as though it did.
   substitution alone — "without introducing additional parameters or
   computations" — with the largest gains where labels are scarcest and the
   classes hardest, and convergence to a better result in roughly a fifth of
-  FixMatch's training time (§4.3). This card claims only that the mechanism is
-  faithfully assembled around `p(t | x)` in xty2, that the per-class thresholds
-  move over training in the way Algorithm 1 prescribes, and that on the fixed
-  project-local targets in §6 it improves held-out treatment prediction against
-  an otherwise identical `fixmatch` without damaging the outcome stack.
+  FixMatch's training time (§4.3).
+
+  **This card's own claim was amended after §6.2 was measured, and the original
+  is struck through rather than deleted, because the difference between the two
+  is the result.** ~~That on the fixed project-local targets in §6 it improves
+  held-out treatment prediction against an otherwise identical `fixmatch`
+  without damaging the outcome stack.~~ What it claims now is two things. First,
+  that the mechanism is faithfully assembled around `p(t | x)`: Tier 0 asserts
+  the arithmetic against `PseudoLabelTreatmentNLL` at `beta(c) = 1`, and every
+  part of the curriculum is measured doing what §3 says it does — marks
+  accumulating, `sigma` rising, `T(c)` reaching `tau` for the best-learned class
+  and staying below it for the other — in the `lambda = 0` arm of §6.2. Second,
+  that on this fixture the *descended* term never lets that start: the recipe
+  ends worse than the `fixmatch` it is paired against and worse than the
+  marginal frequencies of its own labelled rows. §6.2 is the measurement and the
+  first limitation below is the mechanism.
 - **Not claimed:** No image number is claimed. Four limitations are structural
   and are stated here rather than left to be discovered:
   1. **Every threshold is zero at initialisation, and eq. (8) therefore accepts
@@ -76,8 +91,8 @@ cites a reference implementation, and no row should be read as though it did.
      `T_t(c)` collapses back to `tau` for both. What survives on such a fixture
      is the warm-up trajectory of (1), not the per-class differentiation the
      paper's CIFAR-100 and STL-10 gains come from. §6.1 therefore declares a
-     second, deliberately **class-imbalanced** fixture, because a card that
-     measured only the balanced one would be reporting on the half of the
+     deliberately **class-imbalanced** diagnostic variant, because a card that
+     measured only the balanced fixture would be reporting on the half of the
      method that is inert.
   4. **A pseudo-label on `t` is not a label on `y`.** As in `fixmatch`: the
      pseudo-labelled rows train `p(t | x)` only, never `ObservedOutcomeNLL`, so
@@ -239,7 +254,7 @@ Three readings that the mapping depends on:
 | Alg. 1 line 14 | mark update, at the fixed `tau` | — | `CurriculumThreshold.tau`, applied by `CurriculumStatus.mark()` |
 | eq. (8) `L_u,t` | per-class-gated pseudo-label cross-entropy | `T_GIVEN_X` at both views | `CurriculumPseudoLabelTreatmentNLL`, rows `all`, `reduction="mean"` |
 | eq. (9) `lambda` | unlabelled loss weight | — | `Weighted(..., weight=1.0)`, `Constant` |
-| `N` | size of the unlabelled set | — | `TrainingPopulation.rows.batch_size`, read once at stage start |
+| `N` | size of the unlabelled set | — | the rows of `TrainingPopulation` this objective is entitled to, counted once at stage start — every training row, since `rows` is `all` |
 | `mu`, `B` | batch composition | — | `QuotaSampler(Quota("t_observed", 64), Quota("t_missing", 448))`, imported from `fixmatch` |
 | `eta cos(7 pi k / 16 K)` | rate schedule (FixMatch §2.4) | — | `CosineDecay(steps=3000, phase=7/16)` |
 | EMA of parameters | the model §4 reports from | — | `TeacherSpec(decay=0.999, role="evaluation")`; no objective reads it |
@@ -397,7 +412,7 @@ passes the same explicit rules to both, as `fixmatch` does.
 | 6 | `judgement` | — | Adopt FixMatch's optimiser (SGD, `eta = 0.03`, `beta = 0.9`, Nesterov, cosine decay) rather than P5's Adam stack. | §4 states FlexMatch adopts FixMatch's settings, and `fixmatch.md` deviation 9 already made this choice for the recipe this one is paired against. Retaining Adam would break the pair as well as the paper. | Comparisons to `tarnet`'s or `mean_teacher`'s recorded numbers do not hold; the comparison to `fixmatch` does, which is the one §6 makes. |
 | 7 | `framework-limitation` | `augmentation-vocabulary` | No adaptive augmentation: the strong view's strength is fixed, where FixMatch's own reference runs CTAugment and FlexMatch inherits the framework. | The argument is `fixmatch.md` deviation 10's and is not restated: learning per-operation magnitudes presupposes a set of tabular operations with magnitudes worth learning over, and `FeatureMask`, `BoundedJitter` and `FeatureCorruption` are three operations with one scalar each. FlexMatch adds nothing to the case either way — its contribution is the threshold, not the augmentation. | Removes whatever adaptivity buys, equally from both arms of §6's pair, so it is a limit on what the numbers describe rather than a confound within them. |
 | 8 | `framework-limitation` | `batch-row-repetition` | Set the §6 label budget to 64 rather than a scarcer regime, holding `B = 64` and `mu = 7` at the paper's values. | `XTYBatch.row_id` must be unique (`DESIGN.md` §7.1), so a labelled quota of `B` cannot be drawn from a population smaller than `B` without repeating a row, and the scarcest budget expressible is `B` itself. The alternative — lowering `B` — would deviate from a number the paper states. | Slightly more supervision than the label-scarce regime where §4.1 reports FlexMatch's largest gains, which is the regime this card would most like to be in. It moves both arms of the pair equally. |
-| 9 | `judgement` | — | Report the §6.2 imbalanced fixture as a Tier 1 measurement rather than adding a second Tier 2 target. | §2's third limitation says a two-class balanced fixture leaves CPL's per-class differentiation inert, and the imbalanced fixture exists to exercise it. Making it a second reproduction target would double the nightly cost of a recipe whose primary claim is the paired one, and `FIDELITY.md` §3 is explicit that a Tier 1 number is not a result. | None on the §6 metric. It is what §6.2 is allowed to claim that changes: a direction on one seed, not a target. |
+| 9 | `judgement` | — | Record §6.1's two diagnostic variants as one-off single-seed runs in §6.2, rather than adding a second Tier 2 target or a second Tier 1 arm. | Each exists to rule out one explanation of §6.2's result — that the balanced two-class regime leaves CPL inert (§2's third limitation), and that the fixture is simply too hard for the model to reach `tau`. Making either a reproduction target would multiply the nightly cost of a recipe whose declared claim is the paired one; making either a Tier 1 arm would add minutes of CI for a number `FIDELITY.md` §3 says is not a result anyway. | None on the §6 metric. It is what §6.2 is allowed to claim that changes: a direction on one seed, not a target. |
 
 ### 5.1 Framework additions made for this card
 
@@ -412,6 +427,19 @@ unchanged; no existing objective declares `initial_state`, so the executor
 builds an empty mapping for every existing stage and no plan, digest or recorded
 result moves. Tier 0 asserts the second half of that directly rather than
 claiming it.
+
+**§6.2 found the mechanism self-defeating on this fixture, and that does not
+retract either addition.** The question §11.2 Q1 asks is whether the absence of
+an abstraction forces a deviation from a mechanic a card's §4 names, not whether
+the mechanic turns out to help: without objective state, `T_t(c)` is not
+computable at all and §4's `losses.confidence_threshold` degenerates to
+FixMatch's constant, which would not have been a *deviation from* FlexMatch so
+much as a failure to implement it — and the null result would have been
+unobtainable rather than merely negative. The lifecycle is also what made the
+result legible: §6.2's `lambda = 0` arm is only a control because the state is
+per stage execution, so the two arms cannot contaminate one another, and Tier 0
+asserts exactly that. FreeMatch remains the named second consumer, and
+`BACKLOG.md` §2.5 now records what this card learned that it should measure.
 
 Two things this card was expected to need and did not:
 
@@ -460,6 +488,16 @@ card's name; a `T(c)` stuck at 0 is unfiltered self-training. The pair of
 bounds asserts the trajectory Algorithm 1 describes — start at 0, rise with the
 marks — rather than the endpoint alone.
 
+**Everything above was written before the run, and none of it is being
+retuned.** §6.2 measured a single-seed ratio of 2.9 against a declared
+tolerance of "below 1.0 by at least one standard error", and the mechanism
+guardrail's `max_c T(c) >= 0.9 tau` is not met either: `T(c)` never leaves zero.
+So the expected Tier 2 outcome for this card is `deviating`, with §6.2 as the
+written explanation `FIDELITY.md` §1.1 asks for. `FIDELITY.md` §3 is explicit
+that a tolerance widened after seeing the result is itself a deviation, and a
+target rewritten to the number that came out would destroy the only thing this
+section is for. It stays as declared; the status line moves, not the target.
+
 ### 6.1 Fixed DGPs
 
 **Primary.** `fixmatch.md` §6.1's DGP in full and without modification, so that
@@ -469,32 +507,118 @@ standardisation fitted on the training rows, and the replicate seeds
 `s_r = 90000 + 100 r` for `r in {0..9}`. Restating it here would be a second
 thing to keep true.
 
-**Imbalanced (§6.2 only).** The same mechanism with the cluster prior moved off
-a half:
+**Two diagnostic variants, §6.2 only.** Each changes exactly one constant of
+the primary DGP and nothing else. Neither is a target and neither is asserted by
+a test — they are one-off runs, recorded because each rules out one explanation
+of §6.2's result that the primary fixture alone cannot.
 
 ```text
-cluster   c = 1[u_c < 0.15]                          # was 0.5
+imbalanced     cluster c = 1[u_c < 0.15]        # was 0.5
+separable      x[:, 0:4] = 2.0 * (2c - 1) + ... # was 0.45
 ```
 
-and everything else unchanged, so `p(t = 1)` falls to about 0.16 and one class
-is roughly five times scarcer than the other. This is the regime §2's third
-limitation is about: with `K = 2` and a balanced assignment both classes reach
-`beta = 1` together and `T_t(c)` collapses to `tau`, so a card measuring only
-the primary fixture would be reporting on the half of CPL that is inert. It is
-a Tier 1 measurement and deviation 9 says why it is not a second Tier 2 target.
+*Imbalanced* moves `p(t = 1)` to about 0.16 so that one class is roughly five
+times scarcer than the other. This is the regime §2's third limitation is
+about: with `K = 2` and a balanced assignment both classes reach `beta = 1`
+together and `T_t(c)` collapses to `tau`, so a card measuring only the primary
+fixture would be reporting on the half of CPL that is inert. Deviation 9 says
+why it is not a second Tier 2 target.
+
+*Separable* quadruples the cluster signal, which makes `p(t | x)` close to
+trivial — `fixmatch` reaches a mask rate of 1.0 and a held-out NLL of 0.099 on
+it in 1,500 steps. It exists to answer "is the fixture simply too hard for the
+curriculum to get started on", and it answers no.
 
 ### 6.2 What the Tier 1 fixture shows
 
-To be filled in from `tests/smoke/test_flexmatch.py` when the implementation
-lands. Single-seed numbers, recorded because §2's first limitation is a
-prediction this fixture can falsify and because the imbalanced fixture is the
-only place the per-class half of the method does anything.
+Tier 1 is not Tier 2 and these are single-seed numbers from
+`tests/smoke/test_flexmatch.py`, not a result (`FIDELITY.md` §3). They are
+recorded because §2's first limitation was a prediction this fixture could
+falsify, and it did not.
+
+Three columns, one initialisation, one batch stream, 3,000 steps on the primary
+fixture. The middle one is what makes this a measurement rather than a story:
+it is **this recipe**, with eq. (8) computed and logged on every step and
+descended on none. The first two are the arms
+`tests/smoke/test_flexmatch.py` runs and asserts on every PR; the `fixmatch`
+column is a one-off run of that recipe on the same fixture and the same seeds,
+kept out of this module's Tier 1 because it duplicates a fit
+`tests/smoke/test_fixmatch.py` already performs on both.
+
+| | `flexmatch` (declared) | `flexmatch`, `lambda = 0` | `fixmatch` |
+|---|---|---|---|
+| held-out `p(t\|x)` NLL — EMA / trained | 0.883 / 0.900 | 0.355 / 0.372 | 0.307 / 0.358 |
+| marginal-frequency baseline | 0.693 | 0.693 | 0.693 |
+| eq. (10) labelled CE — first 100 → last 100 steps | 0.805 → **0.801** | 0.421 → 0.149 | 0.421 → 0.098 |
+| gate coverage — step 0 / last 100 | 1.000 / 1.000 | 1.000 / 0.890 | 0.000 / 0.717 |
+| first step at which a row clears `tau` | **never** | 97 | n/a |
+| terminal marked fraction, `sum_c sigma / N` | **0.000** | 0.847 | n/a |
+| terminal `T(c)` — min / max | 0.000 / 0.000 | 0.427 / 0.950 | constant 0.950 |
+| step at which `max_c T(c)` reaches `tau` | **never** | 412 | n/a |
+| mask rate at `tau`, trained network | 0.000 | 0.610 | 0.757 |
+| impurity of retained labels | n/a — none retained | 0.045 | 0.055 |
+| held-out outcome NLL | 1.230 | 1.180 | 1.180 |
+
+**The curriculum has an absorbing state at zero, and this fixture is in it.**
+CPL raises a class's threshold only after rows clear the *fixed* `tau`
+(Alg. 1 line 14), and until one does, `T(c) = 0` and eq. (8) trains `p(t | x)`
+on the hard arg max of every row in the batch. On this fixture that term — a
+mean over 512 rows against eq. (10)'s 64, at the same weight — pins the
+propensity below `tau` for all 3,000 steps, so no mark is ever laid, so the
+threshold never leaves zero. Positive feedback with a fixed point at the bottom
+of its own range.
+
+The `lambda = 0` column is what makes that a claim about the mechanism rather
+than about the wiring. The same objective, the same state, the same diagnostics,
+descended by nothing: rows start clearing `tau` at step 97, `sigma` rises
+monotonically to 85% of the population, the better-learned class reaches
+`T(c) = tau` at step 412 while the other sits at 0.43, and coverage falls from
+1.00 to 0.89 as the gate closes on the difference. Every part of §3 does exactly
+what it says. Tier 0 makes the other half of the same point without training
+anything: at `beta(c) = 1` the objective's value, `n` and coverage equal
+`PseudoLabelTreatmentNLL`'s on the same batch, to the bit.
+
+The lock is not confined to the unlabelled term, which is the detail that says
+how strong it is. Eq. (10)'s labelled cross-entropy in the declared arm goes
+0.805 → 0.801 over 3,000 steps and stays **above `log 2 = 0.693`**: the
+propensity ends confidently wrong on the very rows whose treatment it was
+given. Both other arms take the same term to under 0.15 from the same
+initialisation and the same batches.
+
+Two one-off diagnostics rule out the two obvious alternative explanations. On
+the **imbalanced** variant (3,000 steps) the lock is identical — no mark, no
+threshold, held-out NLL 0.911 against a 0.445 baseline, where `fixmatch` reaches
+0.252 — so it is not an artefact of the balanced two-class regime that §2's
+third limitation warned would leave CPL inert. On the **separable** variant
+(1,500 steps), where the propensity is close to trivial and `fixmatch` reaches
+0.099 with a mask rate of 1.0, FlexMatch still marks nothing and still ends at
+0.828. So it is not that the task is too hard for the model to reach `tau`; it
+is that this term, undescended by a gate, prevents it.
+
+**What this is and is not evidence about.** It is evidence about CPL composed
+with a 3×200 MLP, two classes, a 64/448 quota and `lambda = 1` — a regime where
+the unfiltered term outweighs the labelled one by construction. It is not
+evidence against the paper, whose gains are reported on 10- and 100-class image
+benchmarks with a Wide ResNet, where the same first steps spread the same
+damage over ten times as many classes and the supervised term is far stronger
+relative to it. The honest summary is that FlexMatch's warm-up trades FixMatch's
+"the gate is the curriculum" (§2.2 of that paper) for a curriculum that has to
+be started by the very confidence the gate was protecting, and that this
+project's backbone cannot pay the entry price.
 
 ### 6.3 Result ledger
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
 | — | — | — | — | Not run |
+
+**No Tier 2 runner exists for this card yet**, and that is stated here rather
+than left to be inferred from an empty table. `xty2/evaluation/benchmarks/` has
+one module per recipe that has been Tier 2'd and none for this one, so §6's
+target is declared and unmeasured — the same position `doublematch` shipped in.
+Writing that runner is what turns §6.2's single seed into the ten-seed result
+§6 asks for, and it is the next thing this card needs; the status line stays
+`draft` until it has one and a reviewer has signed §8.
 
 ## 7. Unknowns
 

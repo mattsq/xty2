@@ -1,0 +1,557 @@
+"""Tier 0 — the FlexMatch recipe, its card-plan boundary and its state lifecycle.
+
+Two things are asserted here that no other recipe's Tier 0 file has had to
+assert. The first is that swapping eq. (8)'s gate back for FixMatch's leaves a
+plan identical to `fixmatch`'s in every line but the recipe's own identity — so
+the §6 pair really does differ in the gate and in nothing else. The second is
+the lifecycle of `docs/recipes/flexmatch.md` §5.1's framework addition: the
+curriculum's marks are built per stage *execution*, so two runs of one compiled
+recipe are identical and a paired ablation sharing an objective instance cannot
+leak one arm's history into the other.
+"""
+
+from __future__ import annotations
+
+import ast
+import difflib
+import math
+import re
+from collections.abc import Mapping
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+import torch
+from xty2.core import (
+    CosineDecay,
+    Dataset,
+    FeatureSpec,
+    OutcomeSpec,
+    Port,
+    Program,
+    Recipe,
+    Schema,
+    StatefulObjective,
+    Weighted,
+    XTYBatch,
+    compile,
+)
+from xty2.objectives import (
+    CurriculumPseudoLabelTreatmentNLL,
+    CurriculumStatus,
+    CurriculumThreshold,
+    PseudoLabelTreatmentNLL,
+)
+from xty2.recipes import fixmatch, flexmatch
+from xty2.recipes.fixmatch import STRONG_X, WEAK_X, WEAK_X_LABELLED
+from xty2.recipes.flexmatch import CURRICULUM, FLEXMATCH_STEPS, TAU
+from xty2.training import run_stage
+from xty2.training.executors import _objective_states
+
+ROOT = Path(__file__).resolve().parents[2]
+CARD = ROOT / "docs" / "recipes" / "flexmatch.md"
+RECIPE_SOURCE = ROOT / "xty2" / "recipes" / "flexmatch.py"
+CURRICULUM_TERM = "curriculum_pseudo_label_treatment_nll"
+TRAIN_ROWS = 64
+STEPS = 6
+
+
+def _schema() -> Schema:
+    return Schema(
+        features=(
+            FeatureSpec("mass", "continuous"),
+            FeatureSpec("speed", "continuous"),
+            FeatureSpec("momentum", "continuous"),
+            FeatureSpec("site", "categorical", mutable=False),
+        ),
+        treatment_cardinality=3,
+        outcome=OutcomeSpec(),
+    )
+
+
+def _gate(recipe: Recipe) -> CurriculumPseudoLabelTreatmentNLL:
+    objective = recipe.program[0].objectives[2].objective
+    assert isinstance(objective, CurriculumPseudoLabelTreatmentNLL)
+    return objective
+
+
+# ---------------------------------------------------------------------------
+# The assembly
+# ---------------------------------------------------------------------------
+
+
+def test_the_recipe_file_contains_declarations_and_no_conditionals() -> None:
+    tree = ast.parse(RECIPE_SOURCE.read_text(encoding="utf-8"))
+    conditionals = (ast.If, ast.IfExp, ast.Match)
+    assert not any(isinstance(node, conditionals) for node in ast.walk(tree))
+
+
+def test_the_stage_has_exactly_the_four_reviewed_objectives() -> None:
+    stage = compile(flexmatch(_schema())).stage("joint_fit")
+    assert [objective.name for objective in stage.objectives] == [
+        "observed_outcome_nll",
+        "observed_treatment_nll",
+        CURRICULUM_TERM,
+        "missing_treatment_marginal_nll",
+    ]
+    # `all` for eq. (8) is FixMatch's footnote 2, inherited — and it is also the
+    # population `N` is counted over, so it is two claims in one value.
+    assert [objective.rows for objective in stage.objectives] == [
+        ("t_observed",),
+        ("t_observed",),
+        ("all",),
+        ("t_missing",),
+    ]
+    assert [objective.reduction for objective in stage.objectives] == [
+        "population",
+        "mean",
+        "mean",
+        "population",
+    ]
+    assert [objective.weight.nominal for objective in stage.objectives] == [
+        1.0,
+        1.0,
+        1.0,
+        0.5,
+    ]
+
+
+def test_the_gate_is_the_papers_own() -> None:
+    """Eq. (8)'s two sides, its stop-gradient, its population and its rule."""
+    objective = _gate(flexmatch(_schema()))
+    assert objective.port is Port.T_GIVEN_X
+    assert objective.target == WEAK_X
+    assert objective.prediction == STRONG_X
+    assert objective.sharpening == "hard"
+    assert objective.stop_grad == "target"
+    assert objective.rows == "all"
+    assert objective.detaches == frozenset({(Port.T_GIVEN_X, WEAK_X)})
+    assert objective.threshold == CURRICULUM
+    assert (objective.threshold.tau, objective.threshold.warm_up) == (TAU, True)
+    assert objective.threshold.mapping == "convex"
+
+
+def test_the_curriculum_weight_is_constant_and_the_papers() -> None:
+    """Eq. (9) states `lambda` as a fixed scalar; the curriculum is the gate."""
+    stage = compile(flexmatch(_schema())).stage("joint_fit")
+    weight = stage.objectives[2].weight
+    assert weight.describe() == "constant 1.0"
+    assert [weight(step) for step in (0, 1, 1_000, FLEXMATCH_STEPS)] == [1.0] * 4
+
+
+def test_the_labelled_term_reads_the_second_weak_draw() -> None:
+    """Eq. (10) on its own draw of `omega`, per FixMatch's footnote 2."""
+    stage = compile(flexmatch(_schema())).stage("joint_fit")
+    assert (Port.T_GIVEN_X, WEAK_X_LABELLED) in stage.objectives[1].objective.requires
+    assert WEAK_X.draw == 0 and WEAK_X_LABELLED.draw == 1
+
+
+def test_the_rate_schedule_is_fixmatchs_at_our_budget() -> None:
+    run = compile(flexmatch(_schema()))
+    schedule = run.stage("joint_fit").stage.optimiser.lr_schedule
+    assert isinstance(schedule, CosineDecay)
+    assert schedule.steps == run.stage("joint_fit").steps == FLEXMATCH_STEPS
+    for step in (0, 750, 1_500, FLEXMATCH_STEPS):
+        assert schedule(step) == pytest.approx(
+            math.cos((7.0 / 16.0) * math.pi * step / FLEXMATCH_STEPS)
+        )
+
+
+# ---------------------------------------------------------------------------
+# "CPL is a threshold and nothing else"
+# ---------------------------------------------------------------------------
+
+
+def _with_fixmatchs_gate(recipe: Recipe) -> Recipe:
+    """Eq. (8) replaced by eq. (3): the same term at a constant `tau`."""
+    stage = recipe.program[0]
+    swapped = Weighted(
+        PseudoLabelTreatmentNLL(
+            port=Port.T_GIVEN_X,
+            target=WEAK_X,
+            prediction=STRONG_X,
+            threshold=TAU,
+            sharpening="hard",
+            stop_grad="target",
+            rows="all",
+        ),
+        weight=1.0,
+        reduction="mean",
+    )
+    objectives = (*stage.objectives[:2], swapped, *stage.objectives[3:])
+    return replace(recipe, program=Program((replace(stage, objectives=objectives),)))
+
+
+def test_swapping_the_gate_back_leaves_exactly_the_fixmatch_plan() -> None:
+    """The §6 pair, as a property of the plan rather than of the prose.
+
+    Every component, view, forward pass, row population, reduction, weight,
+    schedule, optimiser setting and sampler quota is the same value, so a
+    difference between the two runs is attributable to the gate. The three
+    lines that do differ are the recipe's identity: its name, its card, and one
+    word of the split protocol — FlexMatch reports on STL-10 and FixMatch's
+    card does not name it.
+    """
+    schema = _schema()
+    torch.manual_seed(4)
+    ours = compile(_with_fixmatchs_gate(flexmatch(schema))).plan.render().splitlines()
+    torch.manual_seed(4)
+    theirs = compile(fixmatch(schema)).plan.render().splitlines()
+
+    assert len(ours) == len(theirs)
+    differing = [
+        (mine, yours) for mine, yours in zip(ours, theirs, strict=True) if mine != yours
+    ]
+    assert len(differing) == 4, "\n".join(
+        difflib.unified_diff(theirs, ours, "fixmatch", "flexmatch", lineterm="", n=0)
+    )
+    assert differing[0][0].startswith("recipe:")
+    assert differing[1][0].startswith("card:")
+    assert differing[2][0].strip().startswith("split ")
+    assert differing[3][0].strip().startswith("data.split_protocol")
+    for mine, yours in differing:
+        assert mine.replace("flexmatch", "fixmatch").replace("/STL", "") == yours
+
+
+def test_the_curriculum_term_is_the_only_line_the_gate_adds_to_the_plan() -> None:
+    """What the reviewer diffs: eight `setting` lines, all about the gate."""
+    stage = compile(flexmatch(_schema())).stage("joint_fit")
+    details = stage.objectives[2].plan_details
+    assert details == (
+        "label = arg max of the target realisation",
+        "gate = max prob > T(label), the per-class threshold (eq. 8)",
+        "beta(c) = sigma(c) / max(max_c sigma, N - sum_c sigma) (eq. 11)",
+        "T(c) = M(beta(c)) * tau, M(x) = x / (2 - x) (eq. 12)",
+        "sigma(c) = rows ever marked class c (Alg. 1 line 5)",
+        "marks are set at the fixed tau, not at T(c) (Alg. 1 line 14)",
+        "marks are per-stage state keyed by row_id, and are never cleared",
+        "denominator = every eligible row; rejected rows contribute 0",
+    )
+
+
+def test_the_views_are_fixmatchs_and_are_not_quietly_redeclared() -> None:
+    schema = _schema()
+    ours = compile(flexmatch(schema)).plan.views
+    theirs = compile(fixmatch(schema)).plan.views
+    assert [view.name for view in ours] == ["weak_x", "strong_x"]
+    assert [(v.name, v.transforms, v.preserves) for v in ours] == [
+        (v.name, v.transforms, v.preserves) for v in theirs
+    ]
+
+
+# ---------------------------------------------------------------------------
+# The state lifecycle (`flexmatch.md` §5.1)
+# ---------------------------------------------------------------------------
+
+
+def _batch(rows: int = TRAIN_ROWS) -> XTYBatch:
+    generator = torch.Generator().manual_seed(7)
+    x = torch.randn(rows, 4, generator=generator)
+    x[:, 3] = (torch.arange(rows) % 2).float()
+    return XTYBatch(
+        x=x,
+        t=torch.arange(rows) % 3,
+        y=torch.randn(rows, generator=generator),
+        t_observed=torch.ones(rows, dtype=torch.bool),
+        y_observed=torch.ones(rows, dtype=torch.bool),
+        row_id=torch.arange(rows),
+    )
+
+
+def _dataset() -> Dataset:
+    rows = _batch()
+    return Dataset(
+        schema=_schema(),
+        rows=rows,
+        assignments={"train": torch.arange(rows.batch_size)},
+    )
+
+
+def _short(recipe: Recipe) -> Recipe:
+    """A handful of steps, with a quota this fixture can actually fill."""
+    from xty2.core import Quota, QuotaSampler
+
+    data = recipe.data
+    assert data is not None
+    stage = recipe.program[0]
+    schedule = stage.optimiser.lr_schedule
+    assert isinstance(schedule, CosineDecay)
+    return replace(
+        recipe,
+        program=Program(
+            (
+                replace(
+                    stage,
+                    steps=STEPS,
+                    optimiser=replace(
+                        stage.optimiser, lr_schedule=replace(schedule, steps=STEPS)
+                    ),
+                    sampler=QuotaSampler(
+                        quotas=(
+                            Quota(rows="t_observed", size=4),
+                            Quota(rows="t_missing", size=28),
+                        )
+                    ),
+                ),
+            )
+        ),
+        data=replace(
+            data,
+            missingness=replace(data.missingness, observed=16),
+        ),
+    )
+
+
+def test_only_the_curriculum_term_declares_state() -> None:
+    """Opt-in: no existing recipe grows a code path (`DESIGN.md` §4)."""
+    flex = compile(flexmatch(_schema())).stage("joint_fit")
+    fix = compile(fixmatch(_schema())).stage("joint_fit")
+    assert _objective_states(fix, None) == {}
+    stateful = [
+        objective.name
+        for objective in flex.objectives
+        if isinstance(objective.objective, StatefulObjective)
+    ]
+    assert stateful == [CURRICULUM_TERM]
+
+
+def _recipe() -> Recipe:
+    """A fresh recipe under a fixed seed — fresh parameters, fresh everything.
+
+    Rebuilt rather than shared, because `run_stage` trains `recipe.system` in
+    place: two runs of one recipe *object* start from different parameters and
+    would prove nothing about the state.
+
+    `tau` is dropped to 0.05 so that a six-step run actually lays marks down.
+    The lifecycle is what is under test here and it is only observable once the
+    state has been written to; at the recipe's own 0.95 an untrained network
+    marks nothing and every assertion below would hold of a state nobody
+    touched. What the curriculum does at the *declared* `tau` is `flexmatch.md`
+    §6.2's subject, and Tier 1 is where it is measured.
+    """
+    torch.manual_seed(11)
+    recipe = _short(flexmatch(_schema()))
+    stage = recipe.program[0]
+    gate = stage.objectives[2].objective
+    assert isinstance(gate, CurriculumPseudoLabelTreatmentNLL)
+    eager = replace(
+        stage.objectives[2],
+        objective=replace(gate, threshold=replace(CURRICULUM, tau=0.05)),
+    )
+    return replace(
+        recipe,
+        program=Program(
+            (
+                replace(
+                    stage,
+                    objectives=(
+                        *stage.objectives[:2],
+                        eager,
+                        *stage.objectives[3:],
+                    ),
+                ),
+            )
+        ),
+    )
+
+
+def _marked(result: object) -> list[float]:
+    return [
+        term.diagnostics["marked_fraction"]
+        for record in result.records  # type: ignore[attr-defined]
+        for term in record.terms
+        if term.name == CURRICULUM_TERM
+    ]
+
+
+def test_the_state_is_built_per_stage_execution_and_not_per_recipe() -> None:
+    """The property the whole shape exists for.
+
+    A recipe is an immutable declaration, so two runs from equal declarations
+    must give equal traces. If the marks lived on the objective instance the
+    second run would start from the first run's curriculum and diverge at the
+    first step the thresholds mattered.
+    """
+    first = run_stage(compile(_recipe()), "joint_fit", _dataset(), seed=5)
+    second = run_stage(compile(_recipe()), "joint_fit", _dataset(), seed=5)
+    assert first.trace == second.trace
+    assert _marked(first) == _marked(second)
+    # The curriculum has to have *moved* for that equality to mean anything: a
+    # state that was never written would be equal between two runs trivially.
+    assert max(_marked(first)) > 0.0
+
+
+def test_two_arms_sharing_one_objective_instance_do_not_share_a_curriculum() -> None:
+    """The paired-ablation footgun the lifecycle closes.
+
+    `dataclasses.replace` on a `Weighted` keeps the *same* objective instance,
+    which is how every paired ablation in this repository is built. The second
+    arm below is a fresh recipe whose gate is literally the first arm's object,
+    so state held on the objective would carry the first arm's marks into it.
+    """
+    alone = run_stage(compile(_recipe()), "joint_fit", _dataset(), seed=5)
+
+    first = _recipe()
+    shared = first.program[0].objectives[2].objective
+    second = _recipe()
+    stage = second.program[0]
+    second = replace(
+        second,
+        program=Program(
+            (
+                replace(
+                    stage,
+                    objectives=(
+                        *stage.objectives[:2],
+                        replace(stage.objectives[2], objective=shared),
+                        *stage.objectives[3:],
+                    ),
+                ),
+            )
+        ),
+    )
+    assert second.program[0].objectives[2].objective is shared
+    run_stage(compile(first), "joint_fit", _dataset(), seed=5)
+    after = run_stage(compile(second), "joint_fit", _dataset(), seed=5)
+    assert alone.trace == after.trace
+    assert _marked(alone) == _marked(after)
+
+
+def test_the_marks_start_unused_and_cover_the_whole_training_population() -> None:
+    """Algorithm 1 line 2, over the rows the run will actually draw from."""
+    recipe = _short(flexmatch(_schema()))
+    compiled = compile(recipe).stage("joint_fit")
+    from xty2.training.loading import build_population
+
+    policy = recipe.data
+    assert policy is not None
+    population = build_population(_dataset(), policy, seed=5)
+    states = _objective_states(compiled, population)
+    status = states[CURRICULUM_TERM]
+    assert isinstance(status, CurriculumStatus)
+    assert status.size == TRAIN_ROWS
+    assert status.unused() == TRAIN_ROWS
+    assert float(status.thresholds(3).max()) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Card §4 against the plan (`FIDELITY.md` §1.2)
+# ---------------------------------------------------------------------------
+
+
+def _card_section_four() -> dict[str, str | dict[str, str]]:
+    """Card §4 as data: `{canonical_key: value}` or `{key: {scope: value}}`."""
+    text = CARD.read_text(encoding="utf-8")
+    section = text.split("## 4. Mechanics checklist", 1)[1].split(
+        "## 5. Deviations from the paper", 1
+    )[0]
+    match = re.search(r"```yaml\n(.*?)```", section, re.DOTALL)
+    assert match is not None
+    answered: dict[str, str | dict[str, str]] = {}
+    current = ""
+    key = ""
+    for line in match.group(1).splitlines():
+        statement = line.split("#", 1)[0].rstrip()
+        if not statement:
+            continue
+        indent = len(statement) - len(statement.lstrip())
+        name, _, value = statement.strip().partition(":")
+        if indent == 0:
+            current = name
+        elif indent == 2:
+            key = f"{current}.{name}"
+            if value.strip() == "n/a":
+                key = ""
+                continue
+            answered[key] = value.strip()
+        elif indent == 4 and key:
+            nested = answered.get(key)
+            if not isinstance(nested, dict):
+                nested = {}
+                answered[key] = nested
+            nested[name] = value.strip()
+    return answered
+
+
+def _rendered(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, tuple):
+        return "[" + ", ".join(str(item) for item in value) + "]"
+    return str(value)
+
+
+def test_every_answered_card_key_reaches_the_plan() -> None:
+    plan = compile(flexmatch(_schema())).plan
+    answered = set(_card_section_four())
+    missing = sorted(answered - set(plan.hyperparameters))
+    assert not missing, "card keys missing from plan: " + ", ".join(missing)
+    assert "losses.confidence_threshold" in answered
+    assert plan.hyperparameters["losses.confidence_threshold"] == CURRICULUM
+
+
+def test_the_gate_rule_is_one_card_key_holding_the_whole_policy() -> None:
+    """§4's reading of the closed vocabulary, asserted rather than asserted at.
+
+    `card_keys.py` refuses two fields bound to one key and tells the author to
+    bind one holding a tuple. This is that: `tau`, the warm-up and the mapping
+    reach the card through a single `losses.confidence_threshold`, and the
+    vocabulary in `FIDELITY.md` §2 is unchanged.
+    """
+    keys: Mapping[str, str] = CurriculumPseudoLabelTreatmentNLL.CARD_KEYS
+    assert sorted(keys.values()) == [
+        "gradients.detached_targets",
+        "losses.confidence_threshold",
+        "losses.sharpening",
+    ]
+    plan = compile(flexmatch(_schema())).plan
+    assert repr(plan.hyperparameters["losses.confidence_threshold"]) == (
+        "curriculum(tau=0.95, warm_up=true, mapping=convex)"
+    )
+
+
+def test_the_card_and_the_plan_agree_on_every_value_section_four_states() -> None:
+    """Key presence is not the cross-check; the values are."""
+    hyperparameters = compile(flexmatch(_schema())).plan.hyperparameters
+    mismatched: list[str] = []
+    symbolic = {"architecture.widths_depths": {"K": "3", "X_REPR": "200"}}
+    checked = 0
+    for key, stated in _card_section_four().items():
+        planned = hyperparameters.get(key)
+        if planned is None:
+            mismatched.append(f"{key}: absent from the plan")
+            continue
+        if isinstance(stated, str):
+            if not isinstance(planned, dict) and _rendered(planned) != stated:
+                mismatched.append(f"{key}: card {stated!r} vs plan {planned!r}")
+            checked += 1
+            continue
+        assert isinstance(planned, dict), f"{key} is scoped in the card only"
+        for scope, value in stated.items():
+            if scope not in planned:
+                mismatched.append(f"{key}[{scope}]: absent from the plan")
+                continue
+            resolved = value
+            for symbol, concrete in symbolic.get(key, {}).items():
+                resolved = resolved.replace(symbol, concrete)
+            if _rendered(planned[scope]) != resolved:
+                mismatched.append(
+                    f"{key}[{scope}]: card {resolved!r} vs plan {planned[scope]!r}"
+                )
+            checked += 1
+    assert not mismatched, "card and plan disagree: " + "; ".join(mismatched)
+    assert checked >= 25
+
+
+def test_the_card_declares_the_gate_rule_the_recipe_runs() -> None:
+    stated = _card_section_four()["losses.confidence_threshold"]
+    assert stated == repr(CURRICULUM)
+    assert CurriculumThreshold(tau=0.95, warm_up=True, mapping="convex") == CURRICULUM
+
+
+def test_the_card_status_is_not_ahead_of_the_evidence() -> None:
+    """`FIDELITY.md` §1.1: `reproduced` is a Tier 2 claim, and Tier 2 has not run."""
+    header = CARD.read_text(encoding="utf-8").split("\n", 4)
+    assert any("**Status:**" in line for line in header)
+    status = next(line for line in header if "**Status:**" in line)
+    assert "`reproduced`" not in status

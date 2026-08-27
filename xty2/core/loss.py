@@ -28,12 +28,13 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Literal, cast, get_args
+from typing import Literal, Protocol, TypeVar, cast, get_args, runtime_checkable
 
 import torch
 from torch import Tensor
 
 from xty2.core.batch import XTYBatch
+from xty2.core.data import TrainingPopulation
 from xty2.core.distributions import OutcomeDistribution, TreatmentDistribution
 from xty2.core.errors import LossError, PortContractError
 from xty2.core.graph import Realisation, State
@@ -57,6 +58,55 @@ term differently from the paper.
 """
 
 REDUCTIONS: tuple[Reduction, ...] = get_args(Reduction)
+
+
+StateT = TypeVar("StateT")
+
+
+@runtime_checkable
+class StatefulObjective(Protocol):
+    """An objective whose value depends on the steps that came before it.
+
+    `DESIGN.md` §4 says an objective never mutates state, and that sentence is
+    about `State` — the planned forward passes — parameters and the batch, all
+    of which stay off limits. What it did not have a way to say is that a
+    handful of published mechanics are *functions of the training history*:
+    FlexMatch's per-class threshold is computed from marks accumulated over
+    every step so far (`docs/recipes/flexmatch.md` §3.1, Alg. 1 lines 2, 5 and
+    15), and no arrangement of ports, realisations or row populations computes
+    it from one batch.
+
+    So an objective may declare one piece of state of its own. Three properties
+    make that safe rather than a hole in the contract:
+
+    * **The framework owns the lifecycle.** The executor calls `initial_state`
+      once per stage *execution* and hands the result back through
+      `TrainContext.objective_states`. State never lives on the objective
+      instance, so a recipe stays an immutable declaration, two runs of one
+      compiled recipe are identical, and a paired ablation whose two arms share
+      an objective instance cannot leak one arm's history into the other.
+    * **It is not an artifact.** Nothing checkpoints it, restores it or keys
+      provenance by it (`BACKLOG.md` §11.3 asks for explicit objective state
+      first, and a first-class stateful artifact only once two recipes need the
+      same lifecycle).
+    * **It is opt-in and invisible to everything else.** An objective that does
+      not declare `initial_state` is unaffected, and a stage holding none gets
+      an empty mapping.
+
+    A stateful objective is still not *batch*-coupled unless its per-row value
+    depends on the other rows of its own batch — see `Objective.batch_coupled`,
+    which asks a different question and gets a different answer here.
+    """
+
+    def initial_state(self, population: TrainingPopulation | None) -> object:
+        """Fresh state for a stage about to run.
+
+        `population` is `None` when the caller supplies batches directly
+        (`ExternalBatches`), and it is the objective rather than the framework
+        that decides whether it can run without one: FlexMatch needs `N` and
+        the row identities and raises, where an objective carrying only a
+        running average over batches needs neither.
+        """
 
 
 @dataclass(frozen=True)
@@ -83,17 +133,53 @@ class TrainContext:
             stage — made the distinction load-bearing.
         schema: The resolved schema. `K`, `D` and `Dy` come from here.
         stage: The stage being executed; it labels the log, nothing else.
+        objective_states: `{objective name: its state}` for the stateful
+            objectives of this stage, built once per stage execution by the
+            executor (`StatefulObjective`). Empty for every stage whose
+            objectives are all stateless, which is every stage but
+            `flexmatch`'s today. Read it through `objective_state`, never by
+            indexing: the accessor is what turns "this objective declared no
+            state" and "the executor handed me somebody else's" into errors
+            that name the objective rather than a `KeyError` inside a loss.
     """
 
     global_step: int
     schema: Schema
     stage: str = ""
+    objective_states: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.global_step < 0:
             raise LossError(
                 f"TrainContext.global_step must be non-negative, got {self.global_step}"
             )
+        object.__setattr__(
+            self, "objective_states", MappingProxyType(dict(self.objective_states))
+        )
+
+    def objective_state(self, name: str, kind: type[StateT]) -> StateT:
+        """This objective's own state, narrowed to the type it created.
+
+        `kind` is checked rather than cast. An objective asks for the state it
+        built in `initial_state`, so a mismatch means the executor and the
+        objective disagree about which stage is running — which is worth an
+        error naming both, not an `AttributeError` three lines later.
+        """
+        state = self.objective_states.get(name)
+        if state is None:
+            raise LossError(
+                f"objective {name!r} asked for per-stage state and the stage "
+                f"{self.stage or '<unnamed>'!r} has none for it. State is built "
+                "by the executor from `initial_state` (DESIGN.md §4), so an "
+                "objective computed outside a stage run — or one whose "
+                "`initial_state` returned None — reaches here."
+            )
+        if not isinstance(state, kind):
+            raise LossError(
+                f"objective {name!r} expected {kind.__name__} state and the "
+                f"stage holds {type(state).__name__}"
+            )
+        return state
 
 
 @dataclass(frozen=True, eq=False)
@@ -324,6 +410,7 @@ __all__ = [
     "REDUCTIONS",
     "LossTerm",
     "Reduction",
+    "StatefulObjective",
     "TrainContext",
     "apply_reduction",
     "candidate_treatments",

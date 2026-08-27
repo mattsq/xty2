@@ -157,6 +157,17 @@ whole batch to one direction inside ten steps at every `w_s` from 0.5 to 0.01
 only the normalisation does not, which is what the first version of that card
 got wrong and an adversarial review caught.
 
+**Step 4's neighbourhood has now been visited too, out of order and
+deliberately.** `flexmatch` is not step 4 — ReMixMatch is — but it is the
+cheapest available test of the same architectural claim the sequence was built
+to probe, because Curriculum Pseudo Labeling changes exactly one thing about
+`fixmatch` and that one thing needs a mechanic the framework did not have: a
+quantity accumulated across steps. §2.5 records what it cost (one objective, one
+framework concept, no new card key) and what it found, which was a null result
+of an unusually clean kind — the mechanism is faithfully assembled, provably so
+against `PseudoLabelTreatmentNLL`, and it defeats itself on this backbone. The
+generalisable half is in §2.5 and it bears directly on FreeMatch and SoftMatch.
+
 Two things follow for §5.1's cosine-shaped methods (SimMatch's instance
 similarity, PAWS's soft assignments, BYOL, SimSiam, and Barlow Twins by the
 same argument about its cross-correlation). Any of them meets this the moment
@@ -286,6 +297,45 @@ cross-entropy. Its descendants then modify or add mechanisms around that core:
 
 - **FlexMatch** — class-specific curriculum thresholds based on learning
   progress.
+
+  > **Implemented.** `docs/recipes/flexmatch.md` and
+  > `xty2/recipes/flexmatch.py`. It cost **one objective**
+  > (`CurriculumPseudoLabelTreatmentNLL`, with its `CurriculumThreshold` policy
+  > and `CurriculumStatus` state) and **one framework concept**: objective state
+  > with a stage lifecycle (`StatefulObjective`,
+  > `TrainContext.objective_states`), taken in the load-bearing quadrant with
+  > FreeMatch named as the second consumer and its shape checked against it
+  > (card §5.1). No new card key — the gate rule is one value bound to
+  > `losses.confidence_threshold` — no new port, view, schedule, row population
+  > or executor. §15.2's instruction was followed to the letter: the mechanism
+  > is local and explicit, a *separate* objective rather than a policy union on
+  > `PseudoLabelTreatmentNLL`, and the duplicated arg-max/mask/mean arithmetic
+  > is the price §15.2 asks for until FreeMatch shows the shape.
+  >
+  > **And it did not work, in a way worth reading before picking up FreeMatch
+  > or SoftMatch.** Curriculum Pseudo Labeling has an absorbing state at zero.
+  > Algorithm 1 starts every threshold at 0 (nothing marked ⇒ `beta = 0`), and
+  > raises one only once a row clears the *fixed* `tau` — so the first steps
+  > train `p(t|x)` on the hard arg max of an untrained network over the whole
+  > batch. On this project's fixture that term, a mean over 512 rows against the
+  > labelled term's 64 at the same weight, pins the propensity below `tau` for
+  > all 3,000 steps: no mark is ever laid, `T(c)` never leaves zero, and even
+  > the *labelled* cross-entropy stays flat above `log 2`. The same objective at
+  > `lambda = 0` — computed, logged, not descended — does everything §3 of the
+  > paper says: marks from step 97, `sigma` monotone to 85% of the population,
+  > `T(c)` at `tau` by step 412 for one class and 0.43 for the other. So the
+  > wiring is right and the trap is the mechanism's (`flexmatch.md` §6.2).
+  >
+  > Two things follow. **FixMatch §2.2's "the gate is the curriculum" is
+  > load-bearing on a small backbone**, and any descendant that opens the gate
+  > early — SoftMatch's continuous weights at low confidence, Dash's decaying
+  > threshold, and FreeMatch's self-adaptive `tau` in its own warm-up — should
+  > measure the labelled cross-entropy, not just the unlabelled one, before it
+  > believes a number. And the cheap diagnostic that caught it is *the term's
+  > own ablation*: a pseudo-label objective computed and logged at weight zero
+  > costs one forward pass already planned and separates "the mechanism is
+  > mis-wired" from "the mechanism is self-defeating here", which no
+  > single-arm run can.
 - **FreeMatch** — self-adaptive global and class-specific thresholds plus
   fairness/class-balancing regularisation.
 - **SoftMatch** — continuous confidence weighting rather than a binary gate,

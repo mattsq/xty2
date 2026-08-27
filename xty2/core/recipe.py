@@ -243,7 +243,15 @@ class Objective(Protocol):
         distribution objects that are not generally sliceable.
 
         An objective never weights its own value, never calls `.backward()`,
-        never mutates state and never touches parameters directly.
+        never mutates `state`, the batch or parameters, and never touches
+        parameters directly.
+
+        The one thing it *may* mutate is state of its own: an objective that
+        implements `StatefulObjective.initial_state` is handed the result back
+        through `ctx.objective_states` and may write to it (`DESIGN.md` §4).
+        That state is built once per stage execution by the executor, so it is
+        a property of the run rather than of the recipe, and it is not an
+        artifact.
         """
 
 
