@@ -1,34 +1,33 @@
-"""Tier 1 — FlexMatch on `fixmatch.md` §6.1's fixture, against its own ablation.
+"""Tier 1 — FlexMatch on `fixmatch.md` §6.1's fixture, against a constant gate.
 
 The DGP, the label budget, the quota and the seeds are `fixmatch`'s, and they
 are **imported** rather than restated: `flexmatch.md` §6.1 says the fixture is
 that one "in full and without modification", and a copy would be a second thing
 to keep true.
 
-What is new here is that the mechanism under test has a state, and the state has
-a fixed point. Curriculum Pseudo Labeling starts every threshold at zero
-(algorithm 1 lines 2, 5-7), so eq. (8) opens on the whole batch; it raises a
-class's threshold only once rows clear the *fixed* `tau`; and on this fixture no
-row ever does, because the term it is gating trains the propensity on its own
-arg max from step 0 and pins it below `tau` for the rest of the run. That is
-`flexmatch.md` §2's first limitation, and §6.2 records it.
+Two arms, one initialisation, one batch stream:
 
-Two arms are therefore run, and the second is what makes the reading a
-measurement rather than a story:
+* **`flexmatch` as declared**;
+* **the constant-gate arm** — the same recipe with eq. (8) replaced by
+  FixMatch's eq. (3) at `tau`, which under deviation 2's shared views is the §6
+  pair exactly. Tier 0 proves the two plans differ in the gate and in nothing
+  else.
 
-* **`flexmatch` as declared**, where none of the curriculum happens;
-* **`flexmatch` at `lambda = 0`** — the same objective, the same state and the
-  same diagnostics, *computed and logged on every step and descended on none*.
-  Its marks accumulate, its thresholds climb to `tau` and its per-class spread
-  opens up, which is the evidence that the wiring is right and the lock is a
-  property of the mechanism rather than of this port.
+What is asserted is the *mechanism*: that the thresholds start at zero, rise
+with the marks and reach `tau`, that a per-class spread opens up, and that both
+arms learn a propensity worth having. What is **not** asserted is a direction on
+held-out NLL between them — `FIDELITY.md` §3 makes that a Tier 2 claim and §6
+owns it, and an earlier version of this file got into trouble by treating a
+single-seed trajectory as a property of the method.
 
-The §6 comparison against `fixmatch` is deliberately **not** a third arm here.
-It is a Tier 2 claim (`FIDELITY.md` §3), running it would duplicate a fit
-`tests/smoke/test_fixmatch.py` already performs on this exact fixture and these
-exact seeds on every PR, and eighty seconds of CI is a real price for a column
-§6.2 records from a one-off run. What is asserted here is the mechanism, in both
-the state where it works and the state where it does not.
+That trouble is worth stating, because one test here exists because of it. The
+first draft of this recipe inherited `fixmatch`'s strong view, which is not
+label-preserving (`flexmatch.md` §5.2), and on three initialisation seeds of
+five the curriculum then never left its warm-up: nothing cleared `tau`, no mark
+was laid, and `T(c)` stayed at zero for the whole run. The draft asserted that
+outcome from one seed, which would have frozen an artefact into CI.
+`test_the_curriculum_leaves_its_warm_up` is the assertion that would have failed
+on those seeds, and it is the one guarding deviation 2 now.
 """
 
 from __future__ import annotations
@@ -42,15 +41,17 @@ from torch.nn import functional as F
 from xty2.core import (
     CategoricalTreatment,
     CompiledRun,
-    Constant,
     GaussianOutcome,
     Port,
     Program,
     Recipe,
+    Weighted,
     XTYBatch,
     compile,
 )
+from xty2.objectives import PseudoLabelTreatmentNLL
 from xty2.recipes import flexmatch
+from xty2.recipes.fixmatch import STRONG_X, WEAK_X
 from xty2.recipes.flexmatch import TAU
 from xty2.training import StageResult, run_stage
 
@@ -66,6 +67,7 @@ from tests.smoke.test_fixmatch import (
 )
 
 CURRICULUM = "curriculum_pseudo_label_treatment_nll"
+CONSTANT = "pseudo_label_treatment_nll"
 BATCH_ROWS = 512
 """`B + mu B`, the quota the imported fixture's recipe declares."""
 
@@ -78,11 +80,29 @@ def _one_cpu_thread() -> Iterator[None]:
     torch.set_num_threads(previous)
 
 
-def _zero_weight(recipe: Recipe) -> Recipe:
-    """`lambda = 0`: eq. (8) computed and logged, and not descended."""
+def _constant_gate(recipe: Recipe) -> Recipe:
+    """Eq. (8) replaced by eq. (3): the same term at a fixed `tau`.
+
+    The §6 pair, and it is taken *within* this recipe rather than against
+    `fixmatch` because deviation 2 gives the two recipes different strong views.
+    Everything else — components, passes, rows, reductions, weights, schedules,
+    optimiser, quota — is shared by construction.
+    """
     stage = recipe.program[0]
-    ablated = replace(stage.objectives[2], weight=Constant(0.0))
-    objectives = (*stage.objectives[:2], ablated, *stage.objectives[3:])
+    gated = Weighted(
+        PseudoLabelTreatmentNLL(
+            port=Port.T_GIVEN_X,
+            target=WEAK_X,
+            prediction=STRONG_X,
+            threshold=TAU,
+            sharpening="hard",
+            stop_grad="target",
+            rows="all",
+        ),
+        weight=1.0,
+        reduction="mean",
+    )
+    objectives = (*stage.objectives[:2], gated, *stage.objectives[3:])
     return replace(recipe, program=Program((replace(stage, objectives=objectives),)))
 
 
@@ -159,8 +179,8 @@ def _run(recipe: Recipe, train: XTYBatch, test: _Population, steps: int) -> _Met
 
 @dataclass(frozen=True)
 class _Arms:
-    declared: _Metrics
-    ablated: _Metrics
+    curriculum: _Metrics
+    constant: _Metrics
 
 
 @pytest.fixture(scope="module")
@@ -170,20 +190,20 @@ def arms() -> _Arms:
     train, test = _populations(SEPARATED, seed=90_001)
 
     torch.manual_seed(90_006)
-    declared_recipe = flexmatch(schema)
+    curriculum = flexmatch(schema)
     torch.manual_seed(90_006)
-    ablated_recipe = _zero_weight(flexmatch(schema))
-    for name, value in declared_recipe.system.state_dict().items():
-        assert torch.equal(value, ablated_recipe.system.state_dict()[name])
+    constant = _constant_gate(flexmatch(schema))
+    for name, value in curriculum.system.state_dict().items():
+        assert torch.equal(value, constant.system.state_dict()[name])
 
     return _Arms(
-        declared=_run(declared_recipe, train, test, STEPS),
-        ablated=_run(ablated_recipe, train, test, STEPS),
+        curriculum=_run(curriculum, train, test, STEPS),
+        constant=_run(constant, train, test, STEPS),
     )
 
 
 # ---------------------------------------------------------------------------
-# The mechanism, where it works
+# The curriculum
 # ---------------------------------------------------------------------------
 
 
@@ -194,139 +214,103 @@ def test_every_threshold_starts_at_zero_and_the_gate_starts_open(
 
     With no mark laid down, `beta = 0`, `M(0) = 0` and every row clears a
     threshold of zero — where eq. (3)'s constant `tau` admits nothing at all
-    until the model has sharpened, which
-    `test_fixmatch.py::test_the_gate_opens_as_the_model_sharpens` asserts of the
-    other half of the contrast on the same fixture.
+    until the model has sharpened, which the constant-gate arm shows on the
+    same batch.
     """
-    for arm in (arms.declared, arms.ablated):
-        first = _term(arm.result, 0, CURRICULUM)
-        assert first.diagnostics["threshold_max"] == 0.0  # type: ignore[attr-defined]
-        assert first.diagnostics["marked_fraction"] == 0.0  # type: ignore[attr-defined]
-        assert first.diagnostics["coverage"] == 1.0  # type: ignore[attr-defined]
+    first = _term(arms.curriculum.result, 0, CURRICULUM)
+    assert first.diagnostics["threshold_max"] == 0.0  # type: ignore[attr-defined]
+    assert first.diagnostics["marked_fraction"] == 0.0  # type: ignore[attr-defined]
+    assert first.diagnostics["coverage"] == 1.0  # type: ignore[attr-defined]
+    assert _term(arms.constant.result, 0, CONSTANT).diagnostics["coverage"] == 0.0  # type: ignore[attr-defined]
 
 
-def test_the_curriculum_climbs_when_the_model_is_allowed_to_sharpen(
-    arms: _Arms,
-) -> None:
-    """The wiring evidence, and the control the next test is read against.
+def test_the_curriculum_leaves_its_warm_up(arms: _Arms) -> None:
+    """Deviation 2's guardrail, and the assertion an earlier draft lacked.
 
-    At `lambda = 0` the term is computed and logged on every step and descended
-    on none, so the model sharpens under eqs. (10) and the marginal term alone.
-    Every part of CPL then does what §3 says: rows clear `tau`, `sigma` rises,
-    the best-learned class reaches `T(c) = tau`, the least-learned one stays
-    below it, and the gate closes on the difference.
+    CPL can only start once a row clears the fixed `tau` (algorithm 1 line 14),
+    and until then eq. (8) is ungated. Under a strong view that is not
+    label-preserving that is a fixed point: the term pins the propensity below
+    `tau`, no mark is laid, and `T(c)` never leaves zero — which is what
+    `fixmatch`'s 0.5 strong view did on three initialisation seeds of five
+    (`flexmatch.md` §5.2, §6.2). At the 0.2 deviation 2 derives from the
+    Bayes-optimal label-flip rate it does not happen on any of them.
+
+    A failure here means the strong view has stopped being label-preserving, and
+    §5.2's table is where to look before this assertion is touched.
     """
-    marked = _diagnostic(arms.ablated.result, CURRICULUM, "marked_fraction")
-    highest = _diagnostic(arms.ablated.result, CURRICULUM, "threshold_max")
-    lowest = _diagnostic(arms.ablated.result, CURRICULUM, "threshold_min")
-    coverage = _diagnostic(arms.ablated.result, CURRICULUM, "coverage")
+    marked = _diagnostic(arms.curriculum.result, CURRICULUM, "marked_fraction")
+    highest = _diagnostic(arms.curriculum.result, CURRICULUM, "threshold_max")
+    lowest = _diagnostic(arms.curriculum.result, CURRICULUM, "threshold_min")
+    coverage = _diagnostic(arms.curriculum.result, CURRICULUM, "coverage")
 
     assert marked[0] == 0.0
     assert marked[-1] > 0.5
     assert marked == sorted(marked), "marks are sticky, so sigma cannot fall"
     assert max(highest) == pytest.approx(TAU)
-    # A per-class spread, which is the whole of what CPL adds: one class at the
-    # ceiling while another is still being let through more cheaply.
-    assert lowest[-1] < highest[-1]
+    # A per-class spread at some point in the run, which is the whole of what
+    # CPL adds over a constant: one class at the ceiling while another is still
+    # being let through more cheaply. Over the trajectory rather than at the
+    # end, because with K = 2 and a near-balanced fixture both classes reach
+    # `beta = 1` eventually and the spread closes (card §2, third limitation).
+    assert min(high - low for high, low in zip(highest, lowest, strict=True)) >= 0.0
+    assert max(high - low for high, low in zip(highest, lowest, strict=True)) > 0.1
     assert coverage[0] == 1.0
     assert min(coverage) < 0.95
 
 
-# ---------------------------------------------------------------------------
-# The mechanism, where it does not
-# ---------------------------------------------------------------------------
-
-
-def test_the_declared_arm_never_leaves_the_warm_up(arms: _Arms) -> None:
-    """`flexmatch.md` §2's first limitation, and §6.2's finding.
-
-    CPL needs a row to clear `tau` before any threshold can rise, and the term
-    it is gating — unfiltered, because the threshold is zero — trains the
-    propensity on its own arg max from step 0 and holds it below `tau` for the
-    whole run. The zero threshold is an absorbing state of the mechanism on this
-    fixture, and the arm above is what says it is the *descended* term that puts
-    it there rather than anything about the wiring.
-
-    A failure here is not a broken test: it means the finding has changed, and
-    the card's §2 and §6.2 have to be rewritten before this assertion is.
-    """
-    marked = _diagnostic(arms.declared.result, CURRICULUM, "marked_fraction")
-    highest = _diagnostic(arms.declared.result, CURRICULUM, "threshold_max")
-    coverage = _diagnostic(arms.declared.result, CURRICULUM, "coverage")
-    assert max(marked) == 0.0
-    assert max(highest) == 0.0
-    assert min(coverage) == 1.0
-    # And the propensity pays for it: it does not beat the frequencies of its
-    # own labelled rows, which the `lambda = 0` arm comfortably does.
-    assert arms.declared.treatment_nll > 0.9 * arms.declared.frequency_nll
-    assert arms.ablated.treatment_nll < 0.75 * arms.ablated.frequency_nll
-
-
-def test_the_term_is_charged_on_every_row_in_both_arms(arms: _Arms) -> None:
+def test_the_term_is_charged_on_every_row(arms: _Arms) -> None:
     """Eq. (8)'s population is `all` (FixMatch's footnote 2, inherited).
 
     The wiring floor: a term that had quietly stopped seeing rows would satisfy
     the trajectory assertions above by seeing nothing.
     """
-    for arm in (arms.declared, arms.ablated):
-        for step in (0, STEPS // 2, STEPS - 1):
-            assert _term(arm.result, step, CURRICULUM).n == BATCH_ROWS  # type: ignore[attr-defined]
+    for step in (0, STEPS // 2, STEPS - 1):
+        assert _term(arms.curriculum.result, step, CURRICULUM).n == BATCH_ROWS  # type: ignore[attr-defined]
 
 
-def _labelled(arm: _Metrics) -> tuple[float, float]:
-    """Eq. (10)'s cross-entropy, averaged over the first and last 100 steps."""
-    values = [
-        float(_term(arm.result, step, "observed_treatment_nll").value)  # type: ignore[attr-defined]
-        for step in range(len(arm.result.records))
-    ]
-    return sum(values[:100]) / 100.0, sum(values[-100:]) / 100.0
+# ---------------------------------------------------------------------------
+# The fit
+# ---------------------------------------------------------------------------
 
 
-def test_the_supervised_term_decreases_when_the_gate_is_not_descended(
-    arms: _Arms,
-) -> None:
+def test_the_supervised_term_decreases_in_both_arms(arms: _Arms) -> None:
     """Tier 1's actual question — is the fit connected to the data at all.
 
     Eq. (8)'s contribution moves with the gate, so the mixed total says nothing
     here; eq. (10)'s cross-entropy on the labelled rows is the term that must
-    come down. It does in the arm whose unlabelled term is not applied, which is
-    what makes the next test a statement about that term.
+    come down, and it is also the term that stayed flat above `log 2` in the
+    runs deviation 2 was written about.
     """
-    early, late = _labelled(arms.ablated)
-    assert late < 0.5 * early
+    for arm in (arms.curriculum, arms.constant):
+        values = [
+            float(_term(arm.result, step, "observed_treatment_nll").value)  # type: ignore[attr-defined]
+            for step in range(len(arm.result.records))
+        ]
+        early = sum(values[:100]) / 100.0
+        late = sum(values[-100:]) / 100.0
+        assert late < 0.5 * early
+        assert late < 0.693, "log 2 — the labelled cross-entropy of a coin flip"
 
 
-def test_the_locked_arm_never_fits_its_labelled_rows_either(arms: _Arms) -> None:
-    """The finding is not confined to the unlabelled term, and §6.2 says so.
+def test_both_arms_learn_a_propensity_worth_having(arms: _Arms) -> None:
+    """The floor, asserted before anything is compared.
 
-    Eq. (8) at a zero threshold averages over 512 rows against eq. (10)'s 64, at
-    the same weight, and its targets are the model's own arg max. On this
-    fixture it does not merely fail to help: eq. (10) stays flat for 3,000 steps
-    and above `log K`, so the propensity is confidently wrong on the very rows
-    whose treatment it was given.
-
-    Asserted rather than described, and asserted against the arm that does fit,
-    so that "FlexMatch trains badly here" cannot be confused with "this fixture
-    is unfittable". A failure means the finding has changed and the card's §2
-    and §6.2 have to be rewritten before this assertion is.
+    A paired ratio between two models that have both learned nothing is a number
+    with no content, and §6.2's first draft was exactly that failure.
     """
-    early, late = _labelled(arms.declared)
-    assert late > 0.9 * early
-    assert late > 0.693, "log 2 — the labelled cross-entropy of a coin flip"
-    assert _labelled(arms.ablated)[1] < 0.5
+    for arm in (arms.curriculum, arms.constant):
+        assert arm.treatment_nll < 0.75 * arm.frequency_nll
+        assert arm.student_treatment_nll < 0.75 * arm.frequency_nll
 
 
-def test_the_outcome_stack_survives_the_locked_curriculum(arms: _Arms) -> None:
+def test_the_outcome_stack_is_not_damaged(arms: _Arms) -> None:
     """Eq. (8) trains the encoder the outcome head reads, so this is not free.
 
-    Recorded as a guardrail rather than as a claim: card §6's tolerance is
-    non-inferiority within 5%, and the point of asserting it on a locked run is
-    that a mechanism which has stopped helping must still not be actively
-    damaging the half of the model it shares. Taken against the `lambda = 0`
-    arm, which is a tighter control than `fixmatch` would be — same recipe, same
-    optimiser, same batches, one weight apart.
+    Card §6's tolerance is non-inferiority within 5% against this exact arm.
+    Directional treatment-NLL claims stay in §6 — this one is a guardrail, and
+    a guardrail is allowed to be one-sided.
     """
-    assert arms.declared.outcome_nll < 1.05 * arms.ablated.outcome_nll
+    assert arms.curriculum.outcome_nll < 1.05 * arms.constant.outcome_nll
 
 
 def test_the_two_arms_saw_the_same_rows(arms: _Arms) -> None:
@@ -338,6 +322,6 @@ def test_the_two_arms_saw_the_same_rows(arms: _Arms) -> None:
     reads the model to decide which rows *train*, never which rows are *drawn*.
     """
     assert torch.equal(
-        arms.declared.result.checkpoint.trained_on_row_ids,
-        arms.ablated.result.checkpoint.trained_on_row_ids,
+        arms.curriculum.result.checkpoint.trained_on_row_ids,
+        arms.constant.result.checkpoint.trained_on_row_ids,
     )

@@ -43,8 +43,18 @@ from xty2.objectives import (
     PseudoLabelTreatmentNLL,
 )
 from xty2.recipes import fixmatch, flexmatch
-from xty2.recipes.fixmatch import STRONG_X, WEAK_X, WEAK_X_LABELLED
-from xty2.recipes.flexmatch import CURRICULUM, FLEXMATCH_STEPS, TAU
+from xty2.recipes.fixmatch import (
+    STRONG_X,
+    WEAK_MASK_RATE,
+    WEAK_X,
+    WEAK_X_LABELLED,
+)
+from xty2.recipes.flexmatch import (
+    CURRICULUM,
+    FLEXMATCH_STEPS,
+    STRONG_MASK_RATE,
+    TAU,
+)
 from xty2.training import run_stage
 from xty2.training.executors import _objective_states
 
@@ -182,15 +192,21 @@ def _with_fixmatchs_gate(recipe: Recipe) -> Recipe:
     return replace(recipe, program=Program((replace(stage, objectives=objectives),)))
 
 
-def test_swapping_the_gate_back_leaves_exactly_the_fixmatch_plan() -> None:
+def test_swapping_the_gate_back_leaves_the_fixmatch_plan_bar_deviation_two() -> None:
     """The §6 pair, as a property of the plan rather than of the prose.
 
-    Every component, view, forward pass, row population, reduction, weight,
-    schedule, optimiser setting and sampler quota is the same value, so a
-    difference between the two runs is attributable to the gate. The three
-    lines that do differ are the recipe's identity: its name, its card, and one
-    word of the split protocol — FlexMatch reports on STL-10 and FixMatch's
-    card does not name it.
+    Every component, forward pass, row population, reduction, weight, schedule,
+    optimiser setting and sampler quota is the same value as `fixmatch`'s, so a
+    difference between the two runs is attributable to two enumerable things and
+    no others. Three of the five differing lines are the recipe's identity — its
+    name, its card, and one word of the split protocol, which the plan prints
+    twice because FlexMatch reports on STL-10 and FixMatch's card does not name
+    it. The other two are **deviation 2**: the strong view's extra corruption is
+    0.2 here and 0.5 there, which card §5.2 measures rather than inherits.
+
+    That the list is exhaustive is the assertion. `flexmatch`'s §6 pair is
+    therefore taken *within* this recipe — the same views, the gate swapped —
+    and this test is what says why that is necessary rather than tidy.
     """
     schema = _schema()
     torch.manual_seed(4)
@@ -202,14 +218,19 @@ def test_swapping_the_gate_back_leaves_exactly_the_fixmatch_plan() -> None:
     differing = [
         (mine, yours) for mine, yours in zip(ours, theirs, strict=True) if mine != yours
     ]
-    assert len(differing) == 4, "\n".join(
+    assert len(differing) == 5, "\n".join(
         difflib.unified_diff(theirs, ours, "fixmatch", "flexmatch", lineterm="", n=0)
     )
     assert differing[0][0].startswith("recipe:")
     assert differing[1][0].startswith("card:")
     assert differing[2][0].strip().startswith("split ")
-    assert differing[3][0].strip().startswith("data.split_protocol")
-    for mine, yours in differing:
+    assert differing[4][0].strip().startswith("data.split_protocol")
+    # Deviation 2, and the only computational difference of the five.
+    assert differing[3] == (
+        "    transform  FeatureMask(p=0.2, columns=all, value=0.0)",
+        "    transform  FeatureMask(p=0.5, columns=all, value=0.0)",
+    )
+    for mine, yours in differing[:3] + differing[4:]:
         assert mine.replace("flexmatch", "fixmatch").replace("/STL", "") == yours
 
 
@@ -229,14 +250,83 @@ def test_the_curriculum_term_is_the_only_line_the_gate_adds_to_the_plan() -> Non
     )
 
 
-def test_the_views_are_fixmatchs_and_are_not_quietly_redeclared() -> None:
+def test_the_weak_view_is_fixmatchs_and_the_strong_one_is_measured() -> None:
+    """Deviation 2, as the one declared difference between the two recipes.
+
+    The weak view is `fixmatch`'s to the byte — same transform, same rate, same
+    two draws, same preserved fields — because eq. (5), eq. (8) and algorithm 1
+    line 14 all read it and the §6 pair must not differ there. The strong one
+    keeps its *shape* (the weak transform with more corruption layered on, as
+    the reference does) at a rate card §5.2 measured: 0.2 rather than 0.5.
+    """
     schema = _schema()
     ours = compile(flexmatch(schema)).plan.views
     theirs = compile(fixmatch(schema)).plan.views
     assert [view.name for view in ours] == ["weak_x", "strong_x"]
-    assert [(v.name, v.transforms, v.preserves) for v in ours] == [
-        (v.name, v.transforms, v.preserves) for v in theirs
-    ]
+    weak, strong = ours
+    their_weak, their_strong = theirs
+    assert (weak.name, weak.transforms, weak.preserves, weak.draws) == (
+        their_weak.name,
+        their_weak.transforms,
+        their_weak.preserves,
+        their_weak.draws,
+    )
+    assert strong.preserves == their_strong.preserves
+    assert strong.transforms == (
+        f"FeatureMask(p={WEAK_MASK_RATE}, columns=all, value=0.0)",
+        f"FeatureMask(p={STRONG_MASK_RATE}, columns=all, value=0.0)",
+    )
+    assert STRONG_MASK_RATE == 0.2
+    assert their_strong.transforms[1] == "FeatureMask(p=0.5, columns=all, value=0.0)"
+
+
+def test_the_strong_view_keeps_the_bayes_optimal_label() -> None:
+    """Card §5.2's criterion, recomputed rather than quoted.
+
+    FixMatch §2.3 asks a strong augmentation to be severe *and* label-preserving.
+    On the §6.1 DGP the Bayes-optimal rule is closed form — a two-component
+    Gaussian mixture in the four signal columns — so "label-preserving" is a
+    number this test can check without training anything, which is what makes
+    §5.2 a measurement rather than a preference. The declared 0.2 keeps the
+    label on more than 90% of rows at more than twice the weak view's
+    corruption; `fixmatch`'s 0.5 does not clear the first bar, which is the
+    whole of deviation 2.
+    """
+    flips = {
+        rate: _bayes_label_flip_rate(1.0 - (1.0 - WEAK_MASK_RATE) * (1.0 - rate))
+        for rate in (STRONG_MASK_RATE, 0.5)
+    }
+    assert flips[STRONG_MASK_RATE] < 0.10
+    assert flips[0.5] > 0.15
+    effective = 1.0 - (1.0 - WEAK_MASK_RATE) * (1.0 - STRONG_MASK_RATE)
+    assert effective >= 2.0 * WEAK_MASK_RATE
+
+
+def _bayes_label_flip_rate(mask_rate: float, rows: int = 40_000) -> float:
+    """`P(arg max p(t | strong view) != arg max p(t | x))` on the §6.1 DGP.
+
+    Closed form up to the Monte Carlo draw: `x_j | c ~ N(0.45 (2c - 1), 0.6^2)`
+    for the four signal columns, `c ~ Bern(0.5)`, and `FeatureMask` replaces a
+    masked column with a constant that carries no information about `c`, so the
+    Bayes rule conditions on the visible signal columns alone.
+    """
+    signal, sd, columns = 0.45, 0.6, 4
+    generator = torch.Generator().manual_seed(90_001)
+    cluster = (torch.rand(rows, generator=generator) < 0.5).float()
+    x = signal * (2 * cluster - 1)[:, None] + sd * torch.randn(
+        rows, columns, generator=generator
+    )
+    visible = torch.rand(rows, columns, generator=generator) >= mask_rate
+
+    def posterior(mask: torch.Tensor) -> torch.Tensor:
+        def loglik(mu: float) -> torch.Tensor:
+            return (-((x - mu) ** 2) / (2 * sd**2) * mask).sum(dim=1)
+
+        return torch.sigmoid(loglik(signal) - loglik(-signal))
+
+    clean = posterior(torch.ones_like(visible)) >= 0.5
+    masked = posterior(visible) >= 0.5
+    return float((clean != masked).float().mean())
 
 
 # ---------------------------------------------------------------------------

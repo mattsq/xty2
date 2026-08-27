@@ -36,7 +36,6 @@ from xty2.recipes.fixmatch import (
     FIXMATCH_STEPS,
     OBSERVED_TREATMENTS,
     PRESERVED_FIELDS,
-    STRONG_MASK_RATE,
     STRONG_X,
     WEAK_MASK_RATE,
     WEAK_X,
@@ -44,6 +43,27 @@ from xty2.recipes.fixmatch import (
 )
 from xty2.recipes.tarnet import ENCODER_WIDTHS, OUTCOME_WIDTHS
 from xty2.views import FeatureMask
+
+STRONG_MASK_RATE = 0.2
+"""The extra corruption the strong view adds on top of the weak one.
+
+**Not `fixmatch`'s 0.5, and the difference is deviation 2's** — the one place
+this recipe departs from that one outside the gate itself. FixMatch §2.3 asks a
+strong augmentation to be severe *and label-preserving*; RandAugment and
+CTAugment are chosen so that a rotated, sheared, colour-jittered image is still
+unambiguously its class. Layering a 50% mask on a 10% one gives an effective
+rate of `1 - 0.9 * 0.5 = 0.55` over six columns of which four carry the signal,
+and card §5.2 measures what that does to the *Bayes-optimal* classifier —
+training-free, on the §6.1 DGP: it flips the label on 16.8% of rows, and on the
+rows the gate retains it leaves eq. (8)'s one-hot target attainable on 38%.
+
+Card §5.2's criterion picks this value: keep the Bayes-optimal label on at least
+90% of rows, be at least twice the weak view's corruption, and be as severe as
+possible subject to both. At `0.2` the effective rate is 0.28, the flip rate
+0.074 and the gap 2.8x. `fixmatch` keeps 0.5 and is not changed here; its
+constant gate holds eq. (4) inert until the model is already confident, which is
+what made the difference invisible on that card and visible on this one.
+"""
 
 TAU = 0.95
 """`tau`, §4. FixMatch's value, which §4 says FlexMatch adopts along with the rest.
@@ -202,11 +222,14 @@ def flexmatch(
         data=DATA_POLICY,
         views=(
             # §2 restates FixMatch's framework unchanged and §4 adopts its
-            # settings, so the two views are `fixmatch`'s. The two rates and
-            # the preserved-field set are imported so that those have one home;
-            # the two `ViewSpec` constructions are restated, which is a second
-            # place to edit one reviewed decision (card §4). Tier 0's plan
-            # comparison against `fixmatch` is what catches a divergence.
+            # settings, so the weak view is `fixmatch`'s exactly and the strong
+            # one is its shape at a corruption this card measured rather than
+            # inherited (deviation 2, `STRONG_MASK_RATE` above). The weak rate
+            # and the preserved-field set are imported so that those have one
+            # home; the two `ViewSpec` constructions are restated, which is a
+            # second place to edit one reviewed decision (card §4). Tier 0's
+            # plan comparison against `fixmatch` enumerates every line the two
+            # recipes differ in, so a divergence beyond these cannot appear.
             ViewSpec(
                 name="weak_x",
                 transforms=(FeatureMask(p=WEAK_MASK_RATE, columns=None, value=0.0),),
@@ -231,6 +254,7 @@ __all__ = [
     "CURRICULUM",
     "DATA_POLICY",
     "FLEXMATCH_STEPS",
+    "STRONG_MASK_RATE",
     "TAU",
     "flexmatch",
 ]

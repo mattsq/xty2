@@ -321,6 +321,24 @@ waiting for a profile that says the extra pass matters.
 | 12 | `framework-limitation` | `batch-row-repetition` | Set the section 6 label budget to 64 rather than the paper's smallest regime of 40, holding `B` and `mu` at the paper's values. | Section 4's smallest CIFAR-10 setting is 40 labels *in total* against `B = 64` per step: the reference iterates the labelled set as an endlessly repeating shuffle, so one step sees some labelled rows twice. `XTYBatch.row_id` must be unique because artifacts and provenance are keyed by it (`DESIGN.md` section 7.1), so a repeated row cannot go in a batch and the scarcest budget expressible here is `B` itself. The alternative — lowering `B` to fit the budget — would deviate from a number the paper reports rather than from a number this card chose. | Slightly more supervision than the paper's scarcest regime, on a fixture whose numbers were never comparable to CIFAR-10 anyway (deviation 1). It moves the section 6 paired comparison, and it moves both arms equally: the ablation shares the budget. What it does not touch is the mechanism under test, since the gate reads the model's confidence rather than the label count. |
 | 11 | `judgement` | — | Four separate forward passes (identity, two draws of weak, strong) rather than one concatenated and interleaved pass. | The reference fuses the three streams into a single call and interleaves them first, so that each device's BatchNorm population sees a mixture rather than one stream. That is a BatchNorm/multi-GPU device trick, not part of the objective. xty2 plans one pass per realisation, which is arithmetically identical **only while no component holds batch-coupled state**. | None for the declared architecture: `row_l2` normalises each row on its own and the graph carries no buffers at all, which `tests/invariants/test_fixmatch.py` asserts rather than assumes. A component that later grows a running statistic would silently make the two schemes differ, and that test is what would fail first. |
 
+**One question about deviation 2 was asked later, on another card, and the
+answer belongs here rather than only there.** `flexmatch.md` §5.2 checks this
+card's strong view against the requirement FixMatch §2.3 states for one — severe
+*and* label-preserving — and it fails: on the section 6 DGP an effective
+corruption of 0.55 over six columns, four of which carry the signal, flips the
+**Bayes-optimal** label on 16.8% of rows. That is not a defect this recipe can
+feel. Eq. (4)'s constant gate holds the term inert until the model is confident
+on the weak view anyway, and across five shared seeds this recipe scores
+0.259 ± 0.011 at 0.5 against 0.264 ± 0.011 at 0.2 — a difference smaller than the
+seed spread. A curriculum whose thresholds start at zero has no such protection,
+which is why `flexmatch` declares 0.2 and this card does not change.
+
+Deviation 2 is therefore still a `judgement`, and now a narrower one: the weak
+and strong *relation* it was written to preserve is preserved, and the strength
+it happened to pick is not defensible as label-preserving and is not load-bearing
+here. Its section 6.3 numbers were measured under 0.5 and stand as measured;
+re-running them to move a number that does not move is not this card's packet.
+
 ### 5.1 Framework additions made for this card
 
 Two framework concepts were added while implementing this recipe, and both were
