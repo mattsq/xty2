@@ -237,6 +237,14 @@ def test_the_curriculum_leaves_its_warm_up(arms: _Arms) -> None:
 
     A failure here means the strong view has stopped being label-preserving, and
     §5.2's table is where to look before this assertion is touched.
+
+    **The seed matters and is not arbitrary.** This module's initialisation seed
+    is 90_006, which is §6.2's replicate `r = 0` — one of the three seeds of five
+    that *did* lock under the 0.5 view. So this guardrail demonstrably catches
+    the regression it is written for, on the one seed it can afford to run.
+    Changing the seed without checking it against §6.2's per-seed table would
+    silently drop that: `r = 3` and `r = 4` did not lock, and the same assertion
+    on either of them would pass through the bug.
     """
     marked = _diagnostic(arms.curriculum.result, CURRICULUM, "marked_fraction")
     highest = _diagnostic(arms.curriculum.result, CURRICULUM, "threshold_max")
@@ -245,14 +253,14 @@ def test_the_curriculum_leaves_its_warm_up(arms: _Arms) -> None:
 
     assert marked[0] == 0.0
     assert marked[-1] > 0.5
-    assert marked == sorted(marked), "marks are sticky, so sigma cannot fall"
     assert max(highest) == pytest.approx(TAU)
     # A per-class spread at some point in the run, which is the whole of what
     # CPL adds over a constant: one class at the ceiling while another is still
     # being let through more cheaply. Over the trajectory rather than at the
     # end, because with K = 2 and a near-balanced fixture both classes reach
     # `beta = 1` eventually and the spread closes (card §2, third limitation).
-    assert min(high - low for high, low in zip(highest, lowest, strict=True)) >= 0.0
+    # `min(...) >= 0` was here too and an adversarial review removed it: `max`
+    # and `min` of one dict cannot cross, so it could not fail.
     assert max(high - low for high, low in zip(highest, lowest, strict=True)) > 0.1
     assert coverage[0] == 1.0
     assert min(coverage) < 0.95

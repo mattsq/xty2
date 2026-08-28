@@ -58,12 +58,25 @@ cites a reference implementation, and no row should be read as though it did.
   at `tau` and eq. (8) becomes eq. (3) — that the per-class thresholds move over
   training the way algorithm 1 prescribes, and that on the fixed project-local
   target in §6 it improves held-out treatment prediction against an otherwise
-  identical constant-gate arm without damaging the outcome stack. §6.2 measures
-  the last of those on five replicate seeds and finds it inside the declared
-  tolerance, ahead on four of five. It does **not** claim that CPL's per-class
-  differentiation is what earns that: with `K = 2` both classes reach
-  `beta = 1` together, the imbalanced probe in §6.3 is a null with wide error
-  bars, and limitation 3 below says why no seed count would settle it here.
+  identical constant-gate arm without damaging the outcome stack.
+
+  **How much of that §6.2 actually measures is stated rather than rounded up.**
+  §6's tolerance is five conjunctive clauses. §6.2 reports **one** of them — the
+  EMA ratio, 0.977 ± 0.014, ahead on four seeds of five — at **five** of the
+  declared ten seeds, from a script rather than a Tier 2 runner. The
+  trained-parameter ratio, the impurity of retained labels and the outcome-NLL
+  ratio are **not measured**; the terminal marked fraction §6.2 does report is a
+  different quantity from the mask rate the tolerance names; and the
+  `min_c T(c) < 0.5 tau at step 0` clause is true by construction for every
+  possible run, so it is not a guardrail at all and should not have been written
+  as one. An adversarial review caught a sentence here that said the result
+  "lands inside the declared tolerance", which is a claim about all five. It is
+  not made.
+
+  It also does **not** claim that CPL's per-class differentiation is what earns
+  the ratio: with `K = 2` both classes reach `beta = 1` together, the imbalanced
+  probe in §6.3 is a null with wide error bars, and limitation 3 below says why
+  no seed count would settle it here.
 
   **An earlier version of this card claimed the opposite, and §5.2 and §6.2
   record why, because the error is more instructive than the result.** The
@@ -269,7 +282,7 @@ Three readings that the mapping depends on:
 |---|---|---|---|
 | `p_m(y \| x)` | model's class distribution | `T_GIVEN_X` | `CategoricalPropensity` over `MLPEncoder` |
 | `omega(.)` | weak augmentation | — | `ViewSpec("weak_x")`, `FeatureMask(p=0.1)`, two draws |
-| `Omega(.)` | strong augmentation | — | `ViewSpec("strong_x")`, `FeatureMask(p=0.1)` then `FeatureMask(p=0.5)` |
+| `Omega(.)` | strong augmentation | — | `ViewSpec("strong_x")`, `FeatureMask(p=0.1)` then `FeatureMask(p=0.2)` — **not** `fixmatch`'s 0.5; deviation 2 and §5.2 |
 | eq. (10) `L_s` | supervised cross-entropy on weak views | `T_GIVEN_X @ weak_x draw=1` | `ObservedTreatmentNLL(realisation=Realisation("weak_x", draw=1))`, rows `t_observed`, `reduction="mean"` |
 | `q_b` | artificial label distribution | `T_GIVEN_X @ weak_x draw=0` | `CurriculumPseudoLabelTreatmentNLL.target` |
 | `\hat q_b` | hard pseudo-label | — | `sharpening="hard"` inside that objective |
@@ -422,11 +435,19 @@ alternative — widening `FIDELITY.md` §2 with a `losses.threshold_policy` key 
 would be a framework change made to avoid writing a value object, and it would
 leave `confidence_threshold` naming a number this recipe does not have.
 
-The views are `fixmatch`'s, unchanged and imported: `weak_x` is
-`FeatureMask(p=0.1)` with two draws, `strong_x` is that transform followed by
-`FeatureMask(p=0.5)`, both preserving `t`, `y`, `t_observed`, `y_observed`,
-`row_id`, `fold_id` and `weight`. `flexmatch(schema, recompute_rules=(...))`
-passes the same explicit rules to both, as `fixmatch` does.
+The **weak** view is `fixmatch`'s, unchanged and imported: `FeatureMask(p=0.1)`
+with two draws. The **strong** one keeps that shape — the weak transform with
+more corruption layered on — at `FeatureMask(p=0.2)` rather than `fixmatch`'s
+`FeatureMask(p=0.5)`, which is deviation 2 and the only place this recipe
+departs from that one outside the gate. §5.2 is the measurement that picks it.
+Both views preserve `t`, `y`, `t_observed`, `y_observed`, `row_id`, `fold_id`
+and `weight`, and `flexmatch(schema, recompute_rules=(...))` passes the same
+explicit rules to both, as `fixmatch` does.
+
+§4's YAML has no key for a view, so nothing above is covered by the card-key
+cross-check; `tests/invariants/test_flexmatch.py` compares this paragraph's two
+transforms against the compiled plan instead, because this is exactly the line
+that went stale once already.
 
 ## 5. Deviations from the paper
 
@@ -453,8 +474,17 @@ Neither addition changes what an existing recipe computes. `TrainContext` gains
 one field with an empty default, so every existing construction of it is
 unchanged; no existing objective declares `initial_state`, so the executor
 builds an empty mapping for every existing stage and no plan, digest or recorded
-result moves. Tier 0 asserts the second half of that directly rather than
-claiming it.
+result moves. Tier 0 checks that on **every** shipped recipe — an adversarial
+review pointed out that it used to check `fixmatch` alone and then claim the
+property of all nine.
+
+One shape question the named second consumer could not have raised, and an
+adversarial review did: `run_cross_fit` slices a fresh training batch per fold
+and has no `TrainingPopulation`, so a stateful objective in such a stage would
+have raised at the first step of the first fold. FreeMatch needs no population
+and would never have found it. It is now a compile error naming the reason,
+because the question underneath — should a curriculum reset per fold or persist
+across them? — belongs to the first card that wants both, not to a default.
 
 **Neither addition is what §6.2's first draft blamed, and both survive that
 draft being wrong.** §11.2 Q1 asks whether the absence of an abstraction forces
@@ -512,27 +542,55 @@ can satisfy it on the other 62%. The residual pressure reaches the weak view
 through the shared encoder, and since algorithm 1 line 14 marks on the *weak*
 view at `tau`, a run that never gets there never starts its curriculum.
 
-**The criterion, stated before the value.** The strong view must (a) keep the
-Bayes-optimal label on at least 90% of rows, (b) corrupt at least twice as much
-as the weak view, and (c) be as severe as possible subject to both. Only
-`0.1 then 0.2` and `0.1 then 0.1` clear (a); `0.1 then 0.2` is the severer, at
-an effective 0.28 against the weak view's 0.10. Hence 20%.
+**The criterion, and its one free constant.** The strong view must (a) keep the
+Bayes-optimal label on at least **90%** of rows, and (b) subject to (a), be as
+severe as possible — which is FixMatch §2.3's two requirements in the order it
+states them. `0.1 then 0.2` and `0.1 then 0.1` clear (a); the first is the
+severer, at an effective 0.28 against 0.19. Hence 20%.
 
-The 90% budget is a choice and §7 records it as one. What is not a choice is
-that 0.55 fails any reading of "label-preserving" — it flips one row in six —
-and that the value was picked from a training-free property of the view rather
-than from a score. The candidate range was found by a diagnostic training run,
-which §7 also records; the *value* comes from the table above.
+**An earlier version of this section stated a third clause** — "corrupt at least
+twice as much as the weak view" — **and a false sentence about it in §7**, which
+said `0.1 then 0.1` cleared the criterion and lost on severity. It does not
+clear it: its effective rate is 0.19 against a 0.20 bar, so the clause decided
+the outcome by 0.01 while the prose credited the tie-break. An adversarial
+review caught that. The clause is gone; it was doing the work of clause (b)
+badly, and two constants each excluding their nearest rival by a hair is a
+criterion fitted to its answer.
 
-**`fixmatch` is not changed here, and that is a judgement rather than an
-oversight.** Its recorded Tier 2 numbers were measured under the 0.5 view, and
-re-measuring them is not this card's packet. It also would not move: the
-constant gate holds eq. (4) inert until the model is confident on the weak view
-anyway, and across the same five seeds the constant-gate arm scores
-0.259 ± 0.011 at 0.5 against 0.264 ± 0.011 at 0.2 (1,500 steps, the budget the
-sweep was run at) — a difference well inside the seed spread.
-`fixmatch.md` §5 now carries a pointer to this section, so the card does not go
-on reading as though the question had never been asked.
+**The 90% is the one number left doing work, and here is its sensitivity.** It
+selects `0.1 then 0.2` for any budget in **(89.9%, 92.6%]** — above that it
+selects `0.1 then 0.1`, below it `0.1 then 0.3`. (Over two million draws the
+three candidates keep 89.89%, 92.60% and 95.07% of Bayes labels.) That is a
+window of about two and a half points, and a reader who thinks 88% is the right
+budget gets a different recipe. So the criterion is not robust to its own constant, and §7
+records that both the constant and the candidate range were fixed *after* the
+diagnostic training run and after this table existed.
+
+What does not depend on the constant: `0.55` fails at any budget a reasonable
+person would set, since it flips one row in six, and both surviving candidates
+are label-preserving by any reading. The choice between 0.19 and 0.28 is a
+judgement about severity within a safe band, not a threshold effect.
+
+**`fixmatch` is not changed here, and the reason is scope — not that its
+numbers would hold.** An earlier version of this paragraph claimed the latter,
+on two overlapping *unpaired* standard errors (0.259 ± 0.011 at 0.5 against
+0.264 ± 0.011 at 0.2, five seeds, 1,500 steps). An adversarial review pointed
+out that the design is paired and that the paired analysis is the sensitive
+one. It is also the one that disagrees: the per-seed differences are
+`+0.001, −0.006, −0.013, −0.005, 0.000`, a mean of **−0.0046 ± 0.0025**
+(t = −1.84 at 4 df), with 0.5 ahead on three seeds of five. Weak, but pointing
+the wrong way for the claim it was offered against — `fixmatch` may be very
+slightly *better* at the view this card rejects, which is not surprising, since
+a harder strong view is a stronger consistency target for a method whose gate
+already protects it from the noise.
+
+So the honest statement is: **not re-measured.** `fixmatch.md` §6.3 records five
+metrics at 3,000 steps and ten seeds, and the evidence above is one metric at
+half the budget and half the seeds. Two of those five — mask rate and impurity —
+are weak-view statistics of the trained model, and §5.2's own mechanism story
+predicts they would move; neither was measured. Re-running that ledger is its
+own packet. What this card owes is that the question is visible on the card that
+would have to answer it, and `fixmatch.md` §5 now carries the pointer.
 
 ## 6. Reproduction target
 
@@ -571,19 +629,29 @@ bounds asserts the trajectory Algorithm 1 describes — start at 0, rise with th
 marks — rather than the endpoint alone.
 
 **The target above was written before any of it was run, and it has not been
-retuned.** §6.2 measures the primary metric at five seeds and it lands inside
-the declared tolerance; that is Tier 1 evidence at the declared budget, not a
-Tier 2 result, and the status line does not move on it. `FIDELITY.md` §3 is
-explicit that a tolerance adjusted after seeing a result is itself a deviation,
-and that cuts both ways: it must not be loosened to admit a number and it must
-not be tightened to flatter one.
+retuned.** `FIDELITY.md` §3 is explicit that a tolerance adjusted after seeing a
+result is itself a deviation, and that cuts both ways: it must not be loosened
+to admit a number and it must not be tightened to flatter one.
 
-One clause of it is worth reading twice, because it is the clause that caught
-this card's own error. `max_c T(c) >= 0.9 tau by the end of the run` is a
-*mechanism* guardrail, not a performance one: a `T(c)` stuck at `tau` is
-FixMatch wearing this card's name, and a `T(c)` stuck at 0 is unfiltered
-self-training. The first implementation of this recipe failed it — silently,
-because nothing was checking — and §6.2 records what that turned out to be.
+**How much of it has been measured, plainly.** Of the six clauses above, §6.2
+reports **two**: the EMA ratio and the `max_c T(c)` trajectory. Four are not
+reported — the trained-parameter ratio, the terminal mask rate, the impurity of
+retained labels, and the outcome-NLL ratio, the last of which is asserted at
+Tier 1 on a single seed rather than measured across five. And one clause,
+`min_c T(c) < 0.5 tau at step 0`, is **vacuous as written**: algorithm 1 makes
+every `T(c)` exactly zero at step 0, so it holds for every possible run
+including one where the mechanism is dead. It is kept as written because
+retuning a declared target is what §3 forbids, and flagged here because a
+guardrail that cannot fail is worse than no guardrail — a reader counting
+clauses would credit it. The Tier 2 runner §6.3 asks for is what turns the
+other four into numbers.
+
+One clause is worth reading twice, because it is the clause that caught this
+card's own error. `max_c T(c) >= 0.9 tau by the end of the run` is a *mechanism*
+guardrail, not a performance one: a `T(c)` stuck at `tau` is FixMatch wearing
+this card's name, and a `T(c)` stuck at 0 is unfiltered self-training. The first
+implementation of this recipe failed it — silently, because nothing was
+checking — and §6.2 records what that turned out to be.
 
 ### 6.1 Fixed DGPs
 
@@ -661,11 +729,43 @@ threshold's own range, and §5.2 is why it exists: at that strength eq. (8)'s
 one-hot target is unattainable on 62% of the rows the gate retains, so the term
 pins the weak-view confidence below the bar its own marks need.
 
-The constant-gate arm is *unaffected* by the same change — 0.259 ± 0.011 at 0.5
-against 0.264 ± 0.011 at 0.2 across the same five seeds — because eq. (3) holds
-the term inert until the model is confident anyway. That asymmetry is the whole
-of deviation 2: a view that a gated method cannot feel, and an ungated warm-up
-can.
+The constant-gate arm barely moves under the same change — the paired
+difference across those five seeds is `-0.0046 ± 0.0025` at 1,500 steps, in
+0.5's favour — because eq. (3) holds the term inert until the model is confident
+anyway. That asymmetry is the whole of deviation 2: a view a gated method
+scarcely feels, and an ungated warm-up cannot survive.
+
+**The isolating ablation, because one knob varied is not a cause.** An
+adversarial review pointed out that the paragraph above had varied the strong
+view and watched the outcome change, and then written a causal mechanism into
+three documents. A competing explanation it did not exclude: an *ungated* eq. (8)
+at weight 1 over 512 rows with hard arg-max targets simply overwhelms the 64-row
+labelled term, and 0.2 works for some other reason. The experiment that
+separates them uses only declared fields — `tau = 1.0` makes `conf > tau`
+unsatisfiable, so no mark is ever laid, `beta` stays 0 and the term is
+**permanently ungated** for the whole run at whichever view it is given.
+
+| `tau = 1.0`, permanently ungated, 5 seeds, 1,500 steps | strong 0.2 | strong 0.5 |
+|---|---|---|
+| held-out `p(t\|x)` NLL, EMA | 0.225 / 0.268 / 0.275 / 0.255 / 0.253 | 0.838 / 0.803 / 0.789 / 0.298 / 0.270 |
+| mean weak-view confidence, trained network | 0.94 – 0.96 | **0.76 – 0.79** on the three that lock, 0.94 on the two that do not |
+| fraction of training rows above `tau = 0.95` | 0.62 – 0.81 | **0.000** on those three |
+
+**That refutes the alternative.** A permanently ungated hard-self-training term
+at weight 1 over every row does no harm at all at the label-preserving view —
+all five seeds learn, and the weak-view confidence sits comfortably above `tau`
+on most rows, which is precisely the state the curriculum needs to start. The
+same term at 0.55 pins that confidence at 0.76–0.79 with *no* row above `tau`,
+on the same three seeds that lock in the declared recipe. Ungated-ness is not
+the cause; the view is. And the pinned-confidence column is the mechanism claim
+measured directly rather than inferred: the strong view's unattainable target
+does reach the weak view through the shared encoder.
+
+Two honest limits on that. The lock is **seed-dependent even at 0.55** — two of
+five are fine — so the bad view is what makes the basin reachable, not what
+makes it inevitable; and this says nothing about how either quantity behaves on
+an architecture without `row_l2`, which caps attainable confidence in a way
+`doublematch.md` §6.2 has already shown matters on this backbone.
 
 **What the first version of this section said, and why it is worth keeping.**
 It reported the lock as a property of the method, from **one** initialisation
@@ -730,8 +830,8 @@ more treatment levels, which is a card amendment rather than a longer run.
 | What `M` is in the *reported* results — §3.3 proposes `x/(2-x)` "for our experiments" and Alg. 1 line 11 cites eq. (7), the identity mapping | The convex `x/(2-x)` of eq. (12) | The paper's own words: §3.3 chooses it for its experiments, and §4.4's ablation reports the convex function best and the concave worst. Algorithm 1's citation of eq. (7) is read as the general form eq. (12) specialises, since §3.3 says eq. (7) "can be seen as a special case by setting `M` to the identity function" |
 | Whether the threshold warm-up is on in the reported results | On | Algorithm 1 lines 6–9 make it part of the procedure rather than an option, and §3.2 introduces it as a correction to eq. (6) rather than as an alternative to it |
 | Whether a mark is ever cleared — a row that clears `tau` once and later stops clearing it | It is not. Marks are sticky and only ever overwritten by another class (Alg. 1 line 15) | The paper's own procedure: line 15 is the only write, and there is no line that restores `-1`. It also matters, because sticky marks make `sigma` monotone in aggregate and therefore make the thresholds' rise monotone-ish, which is the curriculum the method is named for |
-| The tabular analogue of "label-preserving" (FixMatch §2.3) — the paper states the property, not a budget for it | Keep the Bayes-optimal label on at least 90% of rows, corrupt at least twice as much as the weak view, and be as severe as possible subject to both. §5.2 computes the table; the rule picks `0.1 then 0.2` | Convention, and an explicitly chosen budget. The 90% is ours: the paper's image augmentations flip a class essentially never, so any threshold in that neighbourhood is a tabular concession, and this one is stated so a reviewer can move it. What is not a choice is that `fixmatch`'s 0.55 fails at 16.8% |
-| Which candidate strong-view strengths to tabulate at all | The `0.1 then p` family for `p` in 0.1 to 0.5 | The range was found by a diagnostic *training* run — the first implementation locked, and weakening the strong view unlocked it — and this is recorded rather than smoothed over, because a criterion invented after seeing which values work is worth less than one invented before. What the criterion then does is independent of that run: §5.2's columns are properties of the DGP and the view, computed without training anything, and `0.1 then 0.1` clears the criterion too and is rejected by clause (c) rather than by any score |
+| The tabular analogue of "label-preserving" (FixMatch §2.3) — the paper states the property, not a budget for it | Keep the Bayes-optimal label on at least 90% of rows, and subject to that be as severe as possible. §5.2 computes the table; the rule picks `0.1 then 0.2` | Convention, and an explicitly chosen budget. The paper's image augmentations flip a class essentially never, so any tabular threshold is a concession and this one is ours. **It is not robust to itself**: §5.2 reports that the rule selects a different strength outside (89.9%, 92.6%], a window two and a half points wide. What does not turn on it is that `fixmatch`'s 0.55 fails at 16.8%, and that both surviving candidates are safe by any reading |
+| Which candidate strong-view strengths to tabulate at all, and when the 90% was fixed | The `0.1 then p` family for `p` in 0.1 to 0.5; the budget was set after the table | Recorded rather than smoothed over, because it is the weakest joint in §5.2. The range came from a diagnostic *training* run — the first implementation locked and weakening the strong view unlocked it — and the 90% was chosen with the table already in hand. So "training-free" describes the *measurement*, which is a property of the DGP and the view and recomputed by Tier 0, and **not** the provenance of the constant applied to it. A reviewer who wants the constant defended independently is asking the right question and this card does not answer it |
 | Whether Nesterov momentum is used | Yes | §4 gives "SGD with a momentum of 0.9" and states that FlexMatch adopts FixMatch's hyperparameters; FixMatch's table 4 states Nesterov. Guess where the two documents leave a gap, and the same guess `fixmatch` already runs, which is what keeps §6's pair a pair |
 | The strict vs non-strict comparison at the gate: eqs. (5) and (8) and Alg. 1 line 14 all write `>`, where FixMatch's eq. (4) writes `>=` | `>`, as FlexMatch writes it | The paper. It differs from `fixmatch`'s objective in a set of measure zero — the exact tie `max(q) == T` — and is recorded only so that a reader comparing the two objectives' source does not read it as a transcription error |
 | What happens when every class has been marked and `max_c sigma_t = 0` cannot occur, versus the degenerate `N = 0` | `N = 0` is rejected at stage start rather than divided by | Convention. A training population with no rows is a fixture error and the objective says so, rather than producing `0/0` thresholds that would silently admit everything |

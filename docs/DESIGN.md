@@ -397,7 +397,8 @@ class Objective(Protocol):
     def compute(self, state: State, batch: XTYBatch,
                 rows: RowIndex, ctx: TrainContext) -> LossTerm: ...
 
-class StatefulObjective(Objective, Protocol):         # opt-in; see the rules
+@runtime_checkable                                    # opt-in; see the rules
+class StatefulObjective(Protocol):
     def initial_state(self, population: TrainingPopulation | None) -> object: ...
 
 @dataclass(frozen=True)
@@ -431,7 +432,14 @@ Rules:
   nothing checkpoints, restores or keys provenance by it (§7.1), which
   `BACKLOG.md` §11.3 asks for explicitly until two recipes need the same
   lifecycle. `population` is `None` for a stage fed by `ExternalBatches`, and it
-  is the objective that decides whether it can run without one.
+  is the objective that decides whether it can run without one. The protocol is
+  `@runtime_checkable` and declares `initial_state` alone, so `isinstance`
+  against it tests for that one member — the executor only ever asks it of
+  already-compiled objectives, which have the rest by construction. A stateful
+  objective in a `cross_fit` stage is a **compile error**: that executor slices
+  a fresh training batch per fold and has no population to build state from, and
+  whether a curriculum should reset per fold or persist across them is a
+  question for the first card that needs both.
 - An objective with an arithmetic choice that is not already visible through
   its ports, realisations, rows, reduction, schedule or card keys emits that
   choice through stable `plan_details()`. Those lines are part of the execution

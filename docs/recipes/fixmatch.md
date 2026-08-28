@@ -309,7 +309,7 @@ waiting for a profile that says the extra pass matters.
 | # | Kind | Blocked on | What we do differently | Why | Expected effect on the section 6 metric |
 |---|---|---|---|---|---|
 | 1 | `judgement` | — | Apply FixMatch to categorical treatment assignment `p(t \| x)` and compose it with a causal outcome likelihood (`ObservedOutcomeNLL`) and exact marginalisation (`MissingTreatmentMarginalNLL`). | The paper studies image classes. The project-local question is whether a missing *treatment* label can be recovered by the same mechanism, and whether it composes with the reviewed P5 stack rather than replacing it. | No comparison to a published image error rate is valid. The marginal term also trains `p(t \| x)` on exactly the rows the gate is deciding about, so the two mechanisms interact; section 6 measures the pair against a `lambda_u = 0` ablation of the same fit. |
-| 2 | `judgement` | — | Replace flip-and-shift (weak) and RandAugment/CTAugment + Cutout (strong) with schema-aware feature masking: 10% weak, and 10% followed by 50% strong. | There is no image structure in a tabular XTY batch. `FeatureMask` is the already-validated tabular perturbation, and masking at two strengths preserves the paper's weak/strong *relation*, which section 5 of the paper shows is what matters. The layering mirrors the reference, where the strong branch is an independently sampled ordinary augmentation with CTAugment and Cutout added on top rather than substituted in. | Directly defines the invariance being learned. A strong view that destroys the treatment-predictive columns would make eq. (4) train the model toward its own errors; the paired ablation and the impurity guardrail are what would show it. |
+| 2 | `judgement` | — | Replace flip-and-shift (weak) and RandAugment/CTAugment + Cutout (strong) with schema-aware feature masking: 10% weak, and 10% followed by 50% strong. | There is no image structure in a tabular XTY batch. `FeatureMask` is the already-validated tabular perturbation, and masking at two strengths preserves the paper's weak/strong *relation*, which section 5 of the paper shows is what matters. The layering mirrors the reference, where the strong branch is an independently sampled ordinary augmentation with CTAugment and Cutout added on top rather than substituted in. | Directly defines the invariance being learned. A strong view that destroys the treatment-predictive columns would make eq. (4) train the model toward its own errors; the paired ablation and the impurity guardrail are what would show it. **The 50% is not defensible as label-preserving** — `flexmatch.md` §5.2 measures it flipping the Bayes-optimal label on 16.8% of rows, and the prose after this table records that section 6.3's ledger was produced under it and has not been re-measured under a view that is. The weak/strong *relation* this row was written to preserve is preserved; the strength it picked is not. |
 | 3 | `judgement` | — | Train for 3,000 optimiser steps rather than `K = 2^20`. | The reviewed project-local budget, shared with every other xty2 recipe so that a difference is attributable to the recipe. The cosine schedule's `K` is set to the same 3,000, so the *shape* of section 2.4's decay is exact even though its length is not. | The paper's mask rate reaches 98% only after a very long run (table 5). At 3,000 steps we should expect a lower terminal mask rate; the section 6 target is stated in those terms and not in the paper's. |
 | 4 | `withdrawn` | — | ~~No labelled/unlabelled batch quota: `mu = 7` is not enforced.~~ **Withdrawn.** The stage declares `QuotaSampler(Quota(t_observed, 64), Quota(t_missing, 448))`, so every step mixes eq. (3)'s `B` rows with eq. (4)'s `mu B` exactly as the paper states. | xty2 has a loader. Both card keys are *derived* from the quotas rather than declared beside them, so the plan prints the ratio the sampler runs — a recipe drawing 64 and 64 cannot claim `mu = 7`. The old row's reasoning about `mean` reduction was right about the gradient and wrong about the variance, which is the half this repays. | The per-step variance of eq. (3) now matches the paper's, where before it moved with whatever the caller's batch happened to contain. The section 6 numbers below were measured without the quota and are **invalidated**: this is new arithmetic, not a rewiring, and the paired ablation has to be re-measured rather than re-labelled. |
 | 5 | `withdrawn` | — | ~~No EMA of model parameters.~~ **Withdrawn.** The stage now maintains the paper's EMA at decay 0.999 and section 6 evaluates it. | The original entry was a framework limitation, not a judgement: `compile()` rejected a `TeacherSpec` no objective reads, on the reasoning that an unused EMA copy is a silent no-op. For FixMatch it is the model the paper reports. `TeacherSpec.role` now distinguishes the two, and the recipe declares `role="evaluation"` — see section 5.1, which records that this was built with one consumer and why. | Section 6 now evaluates the EMA, which is what the paper reports; the paired ablation is EMA-to-EMA, so the comparison stays internally consistent. The training signal is unchanged either way: eq. (4)'s label comes from the current network, which is the difference between this method and Mean Teacher. |
@@ -326,18 +326,28 @@ answer belongs here rather than only there.** `flexmatch.md` §5.2 checks this
 card's strong view against the requirement FixMatch §2.3 states for one — severe
 *and* label-preserving — and it fails: on the section 6 DGP an effective
 corruption of 0.55 over six columns, four of which carry the signal, flips the
-**Bayes-optimal** label on 16.8% of rows. That is not a defect this recipe can
-feel. Eq. (4)'s constant gate holds the term inert until the model is confident
-on the weak view anyway, and across five shared seeds this recipe scores
-0.259 ± 0.011 at 0.5 against 0.264 ± 0.011 at 0.2 — a difference smaller than the
-seed spread. A curriculum whose thresholds start at zero has no such protection,
-which is why `flexmatch` declares 0.2 and this card does not change.
+**Bayes-optimal** label on 16.8% of rows. A curriculum whose thresholds start at
+zero has no protection against that — `flexmatch` locks on three initialisation
+seeds of five at this strength and none at 0.2 — which is why that card declares
+0.2 and this one does not change.
 
-Deviation 2 is therefore still a `judgement`, and now a narrower one: the weak
-and strong *relation* it was written to preserve is preserved, and the strength
-it happened to pick is not defensible as label-preserving and is not load-bearing
-here. Its section 6.3 numbers were measured under 0.5 and stand as measured;
-re-running them to move a number that does not move is not this card's packet.
+**What this card cannot say is that its own numbers would be unaffected.** A
+first version of this paragraph said so, on two overlapping unpaired standard
+errors. The paired analysis of the same five seeds at 1,500 steps says the
+opposite direction: per-seed differences `+0.001, -0.006, -0.013, -0.005, 0.000`,
+mean **-0.0046 +/- 0.0025** (t = -1.84 at 4 df), 0.5 ahead on three of five.
+Weak, and only one of the five metrics in section 6.3, at half the budget and
+half the seeds. Two of the other four — mask rate and impurity — are weak-view
+statistics of the trained model that `flexmatch.md` section 5.2's mechanism story
+predicts would move, and neither was measured.
+
+So: **section 6.3's ledger was produced under a strong view this repository now
+considers not label-preserving, and it has not been re-measured under one that
+is.** That is a debt against this card's `reproduced` status rather than a
+defect in it — eq. (4)'s constant gate is what makes the strength close to
+inert here, which is why the flaw was invisible for three recipes — but it is
+recorded rather than argued away. Deviation 2's row now names it, and re-running
+the ledger at a label-preserving view is the packet that discharges it.
 
 ### 5.1 Framework additions made for this card
 

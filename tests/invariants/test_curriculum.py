@@ -13,16 +13,22 @@ trajectory:
   nothing else.
 """
 
+import math
+
 import pytest
 import torch
 from xty2.core import (
     CardKeyError,
     CategoricalTreatment,
+    CompileError,
     LossError,
+    LossTerm,
     Port,
+    PseudoLabelAction,
     Realisation,
     State,
     TrainContext,
+    Weighted,
 )
 from xty2.objectives import (
     UNUSED,
@@ -37,6 +43,7 @@ from tests.invariants.conftest import (
     NUM_TREATMENTS,
     make_batch,
     make_schema,
+    stage,
 )
 
 TARGET = Realisation(view="weak_x")
@@ -232,13 +239,26 @@ def test_a_mark_is_set_at_tau_and_not_at_the_per_class_threshold() -> None:
 
 
 def test_a_mark_is_overwritten_but_never_cleared() -> None:
-    """§7: line 15 is the only write and nothing restores `-1`."""
+    """§7: line 15 is the only write and nothing restores `-1`.
+
+    Three claims, and the third needs a *different* row: a `mark` that cleared
+    the table before writing would still leave the row it just wrote set, so
+    re-marking one row cannot see it. An adversarial mutation sweep found that
+    gap — the step that matters is that marking row B leaves row A alone, which
+    is what makes `sigma` a count over the whole run rather than over one batch.
+    """
     status = _fresh()
     status.mark(POPULATION[:1], torch.tensor([0]), torch.ones(1))
     status.mark(POPULATION[:1], torch.tensor([2]), torch.ones(1))
-    assert int(status.marks[0]) == 2
+    assert int(status.marks[0]) == 2, "a later class overwrites an earlier one"
     status.mark(POPULATION[:1], torch.tensor([1]), torch.zeros(1))
-    assert int(status.marks[0]) == 2
+    assert int(status.marks[0]) == 2, "a row below tau does not clear its mark"
+
+    status.mark(POPULATION[3:4], torch.tensor([1]), torch.ones(1))
+    assert int(status.marks[3]) == 1
+    assert int(status.marks[0]) == 2, "marking another row leaves this one marked"
+    assert status.unused() == POPULATION.numel() - 2
+    assert torch.equal(status.learning_effect(NUM_TREATMENTS), torch.tensor([0, 1, 1]))
 
 
 def test_a_row_outside_the_population_is_an_error_rather_than_a_silent_write() -> None:
@@ -318,30 +338,47 @@ def test_a_zero_threshold_keeps_every_row_and_fixmatchs_gate_keeps_fewer() -> No
 
 
 def test_the_threshold_is_read_before_this_steps_marks_are_written() -> None:
-    """Algorithm 1's ordering, which is what keeps the term batch-uncoupled.
+    """Algorithm 1's ordering — lines 4-12, then 13-17, then the loss at 18.
 
-    Running the same step twice from a fresh state must give the same value:
-    if `compute` marked before it gated, the second call would see the first
-    call's marks and gate differently.
+    The first step must gate on the state it was *handed*, not on the state its
+    own marks create. So the first call runs against a fresh status, where every
+    `T(c)` is zero and therefore every row is kept, and the second call runs
+    against the status the first one left behind, where some `T(c)` has risen
+    and fewer rows are kept. A `compute` that marked before it gated would make
+    the first call behave like the second.
+
+    An earlier version of this test handed *both* calls a fresh status and
+    asserted the two values were equal, which compares two identical
+    computations from identical state — it tested determinism, and an
+    adversarial review showed a mark-before-gate mutant passed it.
     """
     target, prediction = _inputs()
     rows = torch.arange(BATCH_SIZE)
     batch = make_batch()
     objective = _objective()
-    status = _fresh(objective.threshold)
+    # The population is the batch's own rows, so one step marks enough of it to
+    # lift a threshold materially. Over `POPULATION`'s 4B rows the unused count
+    # still dominates eq. (11) after one step and every `T(c)` stays near zero,
+    # which would make the second call indistinguishable from the first.
+    status = CurriculumStatus(POPULATION[:BATCH_SIZE], objective.threshold)
+
     first = objective.compute(
         _state(target, prediction), batch, rows, _context(status, objective.name)
     )
-    assert status.unused() < status.size, "the step must have marked something"
-    second = objective.compute(
-        _state(target, prediction),
-        batch,
-        rows,
-        _context(_fresh(objective.threshold), objective.name),
+    assert first.diagnostics["threshold_max"] == 0.0
+    assert first.diagnostics["coverage"] == 1.0, (
+        "at a zero threshold the first step keeps every row; if it kept fewer, "
+        "it gated on marks it had already written"
     )
-    assert torch.equal(first.value, second.value)
-    # And the state it left behind is what a *following* step would gate on.
+
+    assert status.unused() < status.size, "the step must have marked something"
     assert float(status.thresholds(NUM_TREATMENTS).max()) > 0.0
+    second = objective.compute(
+        _state(target, prediction), batch, rows, _context(status, objective.name)
+    )
+    assert second.diagnostics["threshold_max"] > 0.0
+    assert second.diagnostics["coverage"] < 1.0
+    assert not torch.equal(first.value, second.value)
 
 
 def test_the_denominator_counts_the_rows_the_gate_rejected() -> None:
@@ -365,26 +402,17 @@ def test_the_denominator_counts_the_rows_the_gate_rejected() -> None:
     assert not torch.allclose(term.value, per_row[accepted].mean())
 
 
-def test_the_gate_is_strict_where_fixmatchs_is_not() -> None:
-    """Eqs. (5), (8) and Alg. 1 line 14 all write `>` (card §7).
-
-    A set of measure zero in a real run, and asserted anyway: it is the one
-    place the two objectives' source differs for a reason a reader might
-    otherwise take for a transcription slip.
-    """
-    exact = torch.tensor([[0.0, 0.0]]).log()  # p = 0.5 = tau on both classes
-    prediction = torch.zeros(1, 2)
+def _one_row(logits: torch.Tensor, status: CurriculumStatus) -> LossTerm:
+    """One row through `compute`, at the given target logits."""
     objective = CurriculumPseudoLabelTreatmentNLL(
         port=Port.T_GIVEN_X,
         target=TARGET,
         prediction=PREDICTION,
-        threshold=_policy(),
+        threshold=status_policy(status),
         sharpening="hard",
         stop_grad="target",
         rows="all",
     )
-    status = CurriculumStatus(torch.tensor([100]), objective.threshold)
-    status.mark(torch.tensor([100]), torch.tensor([0]), torch.ones(1))
     batch = make_batch(
         x=torch.randn(1, 4),
         t=torch.zeros(1, dtype=torch.long),
@@ -393,19 +421,99 @@ def test_the_gate_is_strict_where_fixmatchs_is_not() -> None:
         y_observed=torch.ones(1, dtype=torch.bool),
         row_id=torch.tensor([100]),
     )
-    term = objective.compute(
+    return objective.compute(
         State(
             {
-                TARGET: {Port.T_GIVEN_X: CategoricalTreatment(exact)},
-                PREDICTION: {Port.T_GIVEN_X: CategoricalTreatment(prediction)},
+                TARGET: {Port.T_GIVEN_X: CategoricalTreatment(logits)},
+                PREDICTION: {Port.T_GIVEN_X: CategoricalTreatment(torch.zeros(1, 2))},
             }
         ),
         batch,
         torch.tensor([0]),
         _context(status, objective.name),
     )
-    assert float(status.thresholds(2).max()) == pytest.approx(TAU)
-    assert term.diagnostics["coverage"] == 0.0
+
+
+def status_policy(status: CurriculumStatus) -> CurriculumThreshold:
+    """The policy a status was built with. Kept explicit for `_one_row`."""
+    return status._policy
+
+
+def _fully_learned_single(policy: CurriculumThreshold) -> CurriculumStatus:
+    """A one-row population, marked, so every `T(c)` sits at `tau`."""
+    status = CurriculumStatus(torch.tensor([100]), policy)
+    status.mark(torch.tensor([100]), torch.tensor([0]), torch.ones(1))
+    return status
+
+
+def test_the_gate_is_strict_where_fixmatchs_is_not() -> None:
+    """Eqs. (5), (8) and Alg. 1 line 14 all write `>` (card §7).
+
+    A set of measure zero in a real run, and asserted anyway: it is the one
+    place the two objectives' source differs for a reason a reader might
+    otherwise take for a transcription slip.
+
+    Both sides of the boundary, because one side alone cannot tell `>` from
+    `>=`. An earlier version passed `torch.tensor([[0.0, 0.0]]).log()` as
+    *logits* — negative infinity, whose softmax is `NaN` — so its
+    `coverage == 0.0` held because `NaN > 0.5` is false, and an adversarial
+    review showed a `>=` mutant passed the whole suite.
+    """
+    policy = _policy()
+    # Logits, not probabilities: equal logits give p = 0.5 = tau exactly.
+    at_tau = torch.zeros(1, 2)
+    # A hair above: softmax([e, 0])[0] > 0.5 for any e > 0.
+    above_tau = torch.tensor([[0.01, 0.0]])
+
+    exact = _one_row(at_tau, _fully_learned_single(policy))
+    assert exact.diagnostics["threshold_max"] == pytest.approx(TAU)
+    assert exact.diagnostics["coverage"] == 0.0, "`> tau` rejects the exact tie"
+
+    over = _one_row(above_tau, _fully_learned_single(policy))
+    assert over.diagnostics["coverage"] == 1.0, "and keeps anything above it"
+
+    # The *mark* gate is `>` too (Alg. 1 line 14), and it is a different
+    # comparison in a different method, so it needs its own tie.
+    status = _fresh()
+    status.mark(POPULATION[:1], torch.tensor([0]), torch.tensor([TAU]))
+    assert status.unused() == POPULATION.numel(), "`> tau` does not mark the tie"
+    status.mark(POPULATION[:1], torch.tensor([0]), torch.tensor([TAU + 1e-6]))
+    assert status.unused() == POPULATION.numel() - 1, "and marks just above it"
+
+
+def test_the_mark_gate_and_the_loss_gate_are_not_collapsed_in_compute() -> None:
+    """Card §3.2's "two gates", at the level where a wiring error would live.
+
+    `test_a_mark_is_set_at_tau_and_not_at_the_per_class_threshold` exercises
+    `CurriculumStatus.mark`, which hard-codes `tau` and therefore cannot see a
+    `compute` that passed it `T(c)` instead. An adversarial review made exactly
+    that mutation and the whole Tier 0 suite passed.
+
+    The fixture is one row whose confidence sits *between* the two gates: above
+    `T(c)`, which a single mark has lifted only slightly off zero, and below
+    `tau`. Eq. (8) must keep it; algorithm 1 line 14 must not mark it. A
+    `compute` that marked at `T(c)` would mark it, and one that gated at `tau`
+    would drop it.
+    """
+    policy = _policy()
+    status = CurriculumStatus(POPULATION, policy)
+    status.mark(POPULATION[:1], torch.tensor([0]), torch.ones(1))
+    thresholds = status.thresholds(NUM_TREATMENTS)
+    lowest = float(thresholds[0])
+    assert 0.0 < lowest < TAU, "the fixture needs the two gates far apart"
+
+    # p(class 0) strictly between T(0) and tau.
+    target = float((lowest + TAU) / 2.0)
+    logit = math.log(target / (1.0 - target))
+    marked_before = status.unused()
+    term = _one_row(torch.tensor([[logit, 0.0]]), status)
+
+    assert term.diagnostics["coverage"] == 1.0, (
+        "eq. (8) gates at T(c), which this row clears"
+    )
+    assert status.unused() == marked_before, (
+        "algorithm 1 line 14 marks at tau, which this row does not clear"
+    )
 
 
 def test_the_target_side_is_detached_and_the_prediction_side_is_not() -> None:
@@ -467,6 +575,49 @@ def test_the_state_is_built_over_the_rows_the_objective_is_entitled_to() -> None
 def test_a_stage_with_no_population_is_refused_rather_than_guessed_at() -> None:
     with pytest.raises(LossError, match="needs the stage's training population"):
         _objective().initial_state(None)
+
+
+def test_a_stateful_objective_in_a_cross_fit_stage_is_a_compile_error() -> None:
+    """The executor gap an adversarial review found, closed at declaration time.
+
+    `_run_cross_fit` slices a fresh training batch per fold and calls
+    `_run_stage` without a `TrainingPopulation`, so this objective would have
+    raised at the first step of the first fold with an error about `N` rather
+    than about the pairing. `Stage` declares its executor, so the compiler can
+    see the conflict; `DESIGN.md` §8 wants this class of failure there.
+    """
+    with pytest.raises(CompileError, match="uses cross_fit and holds the stateful"):
+        stage(
+            name="folded",
+            executor="cross_fit",
+            objectives=(Weighted(_objective(), weight=1.0, reduction="mean"),),
+            action=PseudoLabelAction(port=Port.T_GIVEN_X),
+        )
+
+
+def test_a_stateless_objective_in_a_cross_fit_stage_still_compiles() -> None:
+    """The rejection is about state, not about cross-fitting — `ssdml` uses it."""
+    folded = stage(
+        name="folded",
+        executor="cross_fit",
+        objectives=(
+            Weighted(
+                PseudoLabelTreatmentNLL(
+                    port=Port.T_GIVEN_X,
+                    target=TARGET,
+                    prediction=PREDICTION,
+                    threshold=TAU,
+                    sharpening="hard",
+                    stop_grad="target",
+                    rows="all",
+                ),
+                weight=1.0,
+                reduction="mean",
+            ),
+        ),
+        action=PseudoLabelAction(port=Port.T_GIVEN_X),
+    )
+    assert folded.executor == "cross_fit"
 
 
 def test_the_objective_is_not_batch_coupled() -> None:

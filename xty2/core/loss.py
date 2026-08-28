@@ -101,11 +101,20 @@ class StatefulObjective(Protocol):
     def initial_state(self, population: TrainingPopulation | None) -> object:
         """Fresh state for a stage about to run.
 
-        `population` is `None` when the caller supplies batches directly
-        (`ExternalBatches`), and it is the objective rather than the framework
-        that decides whether it can run without one: FlexMatch needs `N` and
-        the row identities and raises, where an objective carrying only a
-        running average over batches needs neither.
+        `population` is `None` whenever the executor has no
+        `TrainingPopulation` to hand — today that is a stage fed by
+        `ExternalBatches`, and it *was* also every fold of `run_cross_fit`,
+        which slices its own per-fold batch. The second case is now refused at
+        compile time (`Stage.__post_init__`) rather than left to raise at the
+        first step, because the question it really poses — should a curriculum
+        reset per fold or persist across them? — is a card's to answer, not a
+        default's.
+
+        It is the objective rather than the framework that decides whether it
+        can run without a population: FlexMatch needs `N` and the row
+        identities and raises, where an objective carrying only a running
+        average over batches needs neither. That is why this takes
+        `TrainingPopulation | None` and not a required population.
         """
 
 

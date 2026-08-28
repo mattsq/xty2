@@ -318,16 +318,23 @@ cross-entropy. Its descendants then modify or add mechanisms around that core:
   > `PseudoLabelTreatmentNLL`, and the duplicated arg-max/mask/mean arithmetic
   > is the price §15.2 asks for until FreeMatch shows the shape.
   >
-  > **It reproduces, and the way it first did not is the more useful half.**
-  > `flexmatch.md` §6.2 measures a paired ratio of 0.977 +/- 0.014 against a
-  > constant-gate arm over five seeds at the declared budget, ahead on four of
-  > five, with the curriculum engaging on all five - first mark between steps 32
-  > and 76, `T(c)` reaching `tau`. What it does *not* establish is that the
-  > per-class half of CPL earns that: with `K = 2` both classes reach `beta = 1`
-  > together, and the class-imbalanced probe in §6.3 is a null with error bars
-  > an order of magnitude wider. Anyone wanting that question answered needs a
-  > fixture with more treatment levels, which is the one thing this section's
-  > K = 2 project DGP cannot supply at any seed count.
+  > **Not reproduced — `draft`, no Tier 2 runner — and the way it first failed
+  > is the more useful half anyway.** Be precise about the evidence, because
+  > this entry is what the next agent reads to decide what is settled.
+  > `flexmatch.md` §6.2 measures **one** of §6's five tolerance clauses, at
+  > **five** of the declared ten seeds, from a script: a paired EMA ratio of
+  > 0.977 +/- 0.014 against a constant-gate arm, ahead on four of five, with the
+  > curriculum engaging on all five (first mark between steps 32 and 76, `T(c)`
+  > reaching `tau`). The trained-parameter ratio, mask rate, impurity and
+  > outcome NLL are unmeasured. That is enough to say the mechanism runs and
+  > points the right way; it is not enough to say the method reproduces, and
+  > `CLAUDE.md`'s standing rule is that only a Tier 2 result sets `reproduced`.
+  > It also does *not* establish that the per-class half of CPL earns the ratio:
+  > with `K = 2` both classes reach `beta = 1` together, and the
+  > class-imbalanced probe in §6.3 is a null with error bars an order of
+  > magnitude wider. Anyone wanting that question answered needs a fixture with
+  > more treatment levels, which is the one thing this section's K = 2 project
+  > DGP cannot supply at any seed count.
   >
   > Getting even the paired result required fixing a mechanic this backlog entry
   > should flag for every descendant below.

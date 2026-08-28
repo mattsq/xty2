@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pytest
 import torch
+from xty2 import objectives
 from xty2.core import (
     CosineDecay,
     Dataset,
@@ -42,7 +43,7 @@ from xty2.objectives import (
     CurriculumThreshold,
     PseudoLabelTreatmentNLL,
 )
-from xty2.recipes import fixmatch, flexmatch
+from xty2.recipes import doublematch, fixmatch, flexmatch
 from xty2.recipes.fixmatch import (
     STRONG_X,
     WEAK_MASK_RATE,
@@ -234,6 +235,48 @@ def test_swapping_the_gate_back_leaves_the_fixmatch_plan_bar_deviation_two() -> 
         assert mine.replace("flexmatch", "fixmatch").replace("/STL", "") == yours
 
 
+def test_the_cards_prose_about_the_views_matches_the_plan() -> None:
+    """§4's YAML has no key for a view, so nothing else checks these two lines.
+
+    Both went stale once: the §3.2 mapping row and the §4 paragraph kept saying
+    `FeatureMask(p=0.5)` after deviation 2 moved the recipe to 0.2, and the
+    card-key cross-check could not see it because it parses §4's YAML block
+    only. `CLAUDE.md` rule 4 makes §3.2 the artifact the reviewer diffs the plan
+    against, so a stale row there is the review failing silently.
+
+    Deliberately a search for the rendered transform strings rather than a
+    parse of the table: what has to be true is that the numbers the card prints
+    are the numbers the plan prints, and any prose that names the other one is
+    the failure.
+    """
+    text = CARD.read_text(encoding="utf-8")
+    mapping = text.split("### 3.2 Mapping to xty2", 1)[1].split("## 4.", 1)[0]
+    checklist = text.split("## 4. Mechanics checklist", 1)[1].split("## 5.", 1)[0]
+    plan = compile(flexmatch(_schema())).plan
+    weak, strong = plan.views
+    assert strong.transforms == (
+        f"FeatureMask(p={WEAK_MASK_RATE}, columns=all, value=0.0)",
+        f"FeatureMask(p={STRONG_MASK_RATE}, columns=all, value=0.0)",
+    )
+    for section, where in ((mapping, "§3.2"), (checklist, "§4")):
+        assert f"FeatureMask(p={STRONG_MASK_RATE})" in section, (
+            f"{where} does not name the strong view the plan runs "
+            f"(p={STRONG_MASK_RATE})"
+        )
+        assert f"FeatureMask(p={WEAK_MASK_RATE})" in section
+    # The one number that must NOT appear unqualified: `fixmatch`'s 0.5. It may
+    # be named as the thing this recipe departs *from*, which both sections do,
+    # so the check is that every mention sits on a line that says so.
+    for section, where in ((mapping, "§3.2"), (checklist, "§4")):
+        for line in section.splitlines():
+            if "FeatureMask(p=0.5)" in line:
+                assert "fixmatch" in line or "deviation 2" in line, (
+                    f"{where} names FeatureMask(p=0.5) without saying it is "
+                    f"`fixmatch`'s: {line!r}"
+                )
+    assert weak.draws == 2
+
+
 def test_the_curriculum_term_is_the_only_line_the_gate_adds_to_the_plan() -> None:
     """What the reviewer diffs: eight `setting` lines, all about the gate."""
     stage = compile(flexmatch(_schema())).stage("joint_fit")
@@ -392,17 +435,67 @@ def _short(recipe: Recipe) -> Recipe:
     )
 
 
-def test_only_the_curriculum_term_declares_state() -> None:
-    """Opt-in: no existing recipe grows a code path (`DESIGN.md` §4)."""
-    flex = compile(flexmatch(_schema())).stage("joint_fit")
-    fix = compile(fixmatch(_schema())).stage("joint_fit")
-    assert _objective_states(fix, None) == {}
-    stateful = [
+def test_only_the_curriculum_objective_declares_state() -> None:
+    """Opt-in, checked over the whole objective package (`DESIGN.md` §4).
+
+    Card §5.1 claims that no existing objective declares `initial_state`, so the
+    executor builds an empty mapping for every existing stage and no plan,
+    digest or recorded result can move. An earlier version of this test checked
+    `fixmatch` alone while the card claimed the property of every recipe; an
+    adversarial review pointed out the gap.
+
+    Enumerating `xty2.objectives.__all__` rather than compiling every recipe is
+    what makes it exhaustive: the claim is about objectives, and a recipe can
+    only carry an objective this list names. It is also schema-free, where
+    compiling each recipe would need a schema each one accepts.
+    """
+    stateful = sorted(
+        name
+        for name in objectives.__all__
+        if isinstance(getattr(objectives, name), type)
+        and isinstance(getattr(objectives, name), StatefulObjective)
+    )
+    assert stateful == ["CurriculumPseudoLabelTreatmentNLL"], (
+        "exactly one objective in the package declares per-stage state"
+    )
+    instantiated = {
+        "ObservedOutcomeNLL": objectives.ObservedOutcomeNLL(),
+        "ObservedTreatmentNLL": objectives.ObservedTreatmentNLL(),
+        "MissingTreatmentMarginalNLL": objectives.MissingTreatmentMarginalNLL(
+            grad_path="both"
+        ),
+        "PseudoLabelTreatmentNLL": PseudoLabelTreatmentNLL(
+            port=Port.T_GIVEN_X,
+            target=WEAK_X,
+            prediction=STRONG_X,
+            threshold=TAU,
+            sharpening="hard",
+            stop_grad="target",
+            rows="all",
+        ),
+    }
+    for name, objective in instantiated.items():
+        assert not isinstance(objective, StatefulObjective), name
+
+
+def test_no_existing_stage_builds_objective_state() -> None:
+    """The executor's own path, on the recipes that share this schema.
+
+    `_objective_states(stage, None)` is what `_run_stage` calls. An empty result
+    on a `None` population is the proof that nothing is constructed and nothing
+    can raise for a stage whose objectives are all stateless.
+    """
+    schema = _schema()
+    for name, builder in (("fixmatch", fixmatch), ("doublematch", doublematch)):
+        torch.manual_seed(3)
+        for compiled in compile(builder(schema)).stages:
+            assert _objective_states(compiled, None) == {}, f"{name}.{compiled.name}"
+    flex = compile(flexmatch(schema)).stage("joint_fit")
+    assert [
         objective.name
         for objective in flex.objectives
         if isinstance(objective.objective, StatefulObjective)
-    ]
-    assert stateful == [CURRICULUM_TERM]
+    ] == [CURRICULUM_TERM]
 
 
 def _recipe() -> Recipe:
