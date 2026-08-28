@@ -186,9 +186,10 @@ class PseudoLabelTreatmentNLL:
         """No: the gate reads one row's own confidence, not the batch's.
 
         The distinction matters here more than anywhere: a *threshold* over the
-        batch's own confidences — FreeMatch's self-adaptive one, say — would
-        make this true, and the same class name would then mean something the
-        card had not declared.
+        batch's own confidences makes this true, and the same class name would
+        then mean something the card had not declared. That is no longer a
+        hypothetical — `SelfAdaptiveThresholdTreatmentNLL` is exactly it, and it
+        is a separate objective rather than a policy on this one.
         """
         return False
 

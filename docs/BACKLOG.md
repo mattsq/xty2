@@ -157,6 +157,21 @@ whole batch to one direction inside ten steps at every `w_s` from 0.5 to 0.01
 only the normalisation does not, which is what the first version of that card
 got wrong and an adversarial review caught.
 
+**FreeMatch has landed too, and it is the first card in this repository whose
+framework addition was designed in advance by a *different* card.**
+`flexmatch.md` §5.1 named it as the second consumer of objective state and made
+two claims about the shape; §2.5 records which held. The transferable result is
+about fixtures rather than about thresholds: **a mechanism that acts on the
+class marginal cannot be measured on this section's balanced K = 2 DGP, in
+either direction.** FreeMatch's SAT half beats a constant gate on five seeds of
+five; its SAF half sits at the floor of its own loss for the entire run, and so
+does the same term with its sign flipped. That is the third distinct question
+this fixture has been unable to answer — after FlexMatch's per-class curriculum
+and its imbalanced probe — and the pattern is now clear enough to act on: a card
+whose mechanic is *about the distribution over classes* should declare a fixture
+with more levels, or a skewed prior, in its §6 before it is written, not after
+its §6.2 comes back null.
+
 **Step 4's neighbourhood has now been visited too, out of order and
 deliberately.** `flexmatch` is not step 4 - ReMixMatch is - but it is the
 cheapest available test of the same architectural claim the sequence was built
@@ -370,6 +385,81 @@ cross-entropy. Its descendants then modify or add mechanisms around that core:
 
 - **FreeMatch** — self-adaptive global and class-specific thresholds plus
   fairness/class-balancing regularisation.
+
+  > **Implemented.** `docs/recipes/freematch.md` and
+  > `xty2/recipes/freematch.py`. It cost **two objectives**
+  > (`SelfAdaptiveThresholdTreatmentNLL` for eq. (8) and `SelfAdaptiveFairness`
+  > for eq. (11), with their `SelfAdaptiveThreshold` policy and shared
+  > `SelfAdaptiveThresholds` state) and **one sentence of `DESIGN.md` §4 with no
+  > code**: an objective may read the state of a *named sibling* in the same
+  > stage. Eq. (12) gives the two terms separate weights, so they cannot be one
+  > objective without dropping `w_f` from the plan; eqs. (5), (6) and (10) are
+  > one set of statistics both read. `TrainContext.objective_state` already took
+  > a name, so the capability existed and only the contract had to say so. No
+  > new card key — `losses.confidence_threshold` holds the policy, which is now
+  > the *second* card to read that key as a rule rather than a number — no new
+  > port, view, schedule, row population or executor.
+  >
+  > **It was §15.2's stateful-mediation question, and the answer is still
+  > "wait".** There are now three gated pseudo-label objectives sharing an
+  > arg-max, a mask and a mean, which is real duplication at the third instance.
+  > `freematch.md` §5.3 declines a union anyway, on a specific ground: their
+  > gates are three different functions of three different things, and their
+  > `batch_coupled` answers differ — so a policy field would put a `bool` the
+  > *compiler* reads behind a value a recipe passes. SoftMatch's continuous
+  > weight is a fourth kind of gate and is the recipe that would settle it.
+  >
+  > **`flexmatch.md` §5.1's named-second-consumer prediction was half right, and
+  > checking it is the point of naming one.** The shape held exactly:
+  > FreeMatch's state is built from `K` alone and ignores the population, so
+  > `initial_state(population: TrainingPopulation | None)` was load-bearing on
+  > the first day it had a second consumer. The *ordering* claim was wrong.
+  > That card predicted the state would be "updated from each batch after that
+  > batch's gate is applied"; FreeMatch's Algorithm 1 updates `tau_t`, `p~_t`
+  > and `h~_t` from the current batch at lines 3-5 and gates that same batch at
+  > line 9. So both terms are `batch_coupled` where FlexMatch's is not, and a
+  > stage holding either is barred from `ExternalBatches`. The prediction that
+  > got it right was in `pseudo_label.py`'s own docstring, sitting beside the
+  > one that got it wrong.
+  >
+  > **Three results, and the second is the one to read before writing
+  > SoftMatch.** All six clauses of §6's declared tolerance are met at five of
+  > the declared ten seeds: the paired held-out `p(t|x)` NLL ratio against a
+  > constant gate at `tau = 0.95` is **0.961 ± 0.007** on the EMA and
+  > **0.952 ± 0.010** on the trained network, ahead on five of five on both, and
+  > the mask rate, impurity, outcome NLL and `tau_t` trajectory all clear their
+  > bounds. It is also the first card in this family whose EMA and trained
+  > readings agree rather than disagreeing (`fixmatch.md` §6.2,
+  > `doublematch.md` §6.2).
+  >
+  > **Self-adaptive fairness contributes nothing on this fixture, and the
+  > measurement says why rather than guessing.** The paper's own `w_f = 0`
+  > ablation is within `-0.0001 ± 0.0012` of the full recipe, against a
+  > SAT-versus-constant effect of `-0.0123`. The terminal marginal entropy of
+  > the retained rows is 0.6919 against a maximum of `log 2 = 0.6931`, so eq.
+  > (11) sits at its own floor for the whole run: on a near-balanced two-class
+  > fixture a term that pushes the predicted marginal towards uniformity has
+  > nothing to push. **This is not "SAF does not help"** — it is "this fixture
+  > cannot ask", and the difference is the one `CLAUDE.md` says is the most
+  > expensive to get wrong. Any card in this section whose mechanism acts on the
+  > *class marginal* — SoftMatch's distribution alignment, ReMixMatch's, and
+  > CGMatch's partitions — will meet the same wall on the K = 2 project DGP and
+  > should declare an imbalanced fixture up front rather than discover it in §6.
+  >
+  > That wall also swallowed the card's one genuine paper-versus-paper
+  > disagreement. Eq. (11) prints `L_f = -H(A, B)`, which minimised drives the
+  > batch marginal *away* from the model's own — the opposite of the diverse
+  > predictions the paper states the term is for in four places. Deviation 7
+  > implements the intent, and §6.1 declared the literal reading as its own arm
+  > because `w_f = -0.05` expresses it with no code change. Both signs came back
+  > null, for the reason above: **the sign of an inert term is unmeasurable**.
+  > The argument stands on the derivative in §5 and the experiment that would
+  > close it is this recipe on `flexmatch.md` §6.1's imbalanced variant.
+  >
+  > One thing the card is careful not to claim, and the next measurement it
+  > wants: the gain is **not** attributed to self-adaptivity as against the
+  > lower threshold it happens to produce. `tau_t` ends at 0.922 where the
+  > comparison arm is fixed at 0.95, and a constant gate at 0.92 was not run.
 - **SoftMatch** — continuous confidence weighting rather than a binary gate,
   together with distribution alignment.
 - **ConMatch** — confidence estimation and multiple strong views.

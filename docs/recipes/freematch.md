@@ -56,11 +56,20 @@ on the paper's own prose instead.
   target in §6 it improves held-out treatment prediction against an otherwise
   identical constant-gate arm without damaging the outcome stack.
 
-  **What §6.2 measures of that is stated there and nowhere rounded up.** The
-  §6 tolerance is a conjunction; §6.2 says which clauses have numbers, at how
-  many seeds, and from what. There is no Tier 2 runner for this card (§6.3), so
-  `reproduced` is not available to it under `FIDELITY.md` §1.1 whatever the
-  numbers say.
+  **What §6.2 measures of that is stated there and nowhere rounded up.** It
+  reports **all six** clauses of §6's tolerance, met, at **five** of the
+  declared ten seeds, from a script rather than a Tier 2 runner — so the claim
+  above is supported on this fixture at half the declared seed count and
+  `reproduced` is not available to it under `FIDELITY.md` §1.1 (§6.3).
+
+  Two things the numbers do **not** support, stated here rather than left in
+  §6.2 for a reader who stops early. The gain is **not** attributed to
+  self-adaptivity as against the lower threshold it produces — the terminal
+  `tau_t` is 0.922 where the comparison arm is fixed at 0.95, and a constant
+  gate at 0.92 was not run. And **self-adaptive fairness contributes nothing
+  measurable here**: the paper's own `w_f = 0` ablation is within 0.0001 ±
+  0.0012 of the full recipe, because on a near-balanced two-class fixture the
+  term sits at its own floor (§2's third limitation, measured in §6.2).
 - **Not claimed:** No image number is claimed. Five limitations are structural
   and are stated here rather than left to be discovered:
 
@@ -270,6 +279,13 @@ declares `initial_state`; the fairness objective declares a field naming it and
 reads that state through `TrainContext.objective_state`. `DESIGN.md` §4 gains
 one sentence for this and no code (§5.1).
 
+The threshold objective also carries `num_treatments`, which is `C` and is not
+a card key: it is a property of the schema, a component takes it the same way
+(`CategoricalPropensity`), and the state is `[C]` wide and is built before the
+first batch exists. `compute` checks it against `ctx.schema` for the reason
+`DESIGN.md` §3.1 gives — a term that read `C` off the head's own output would
+agree with a head that had the wrong `C`.
+
 **The shared update is idempotent within a step, so declaration order cannot
 change a number.** Algorithm 1 lines 3–5 run once per iteration. Whichever of
 the two objectives the mixer computes first performs that update; the second
@@ -278,6 +294,14 @@ Tier 0 asserts it by swapping the two objectives in the stage and comparing the
 loss to the last bit. Without that property the recipe would carry an invisible
 dependency on the order two lines appear in, which is precisely the "logic in
 the recipe" `CLAUDE.md` rule 3 exists to forbid.
+
+Idempotence only *makes* the order inert if the two terms are entitled to the
+same rows, since otherwise the first to run would decide which set the averages
+were taken over. Both declare `all`, for the footnote-2 reason below; and
+`SelfAdaptiveThresholds.observe` refuses a repeat at one step whose row count
+differs, rather than silently ignoring it. Equal counts over different sets
+would still pass, so the declaration is the guard and the check is the cheap
+half of it.
 
 **`U` is every training row, so eq. (8)'s rows are `all` and so are eq. (11)'s.**
 FreeMatch §3 restates FixMatch's and UDA's framework and §5.1 adopts their
@@ -461,11 +485,16 @@ batch *after* that batch's gate is applied". Algorithm 1 lines 3–5 update
 *before* line 7 computes the gate and line 9 applies it, so a row's threshold
 depends on the confidences of the other rows in its own batch. Both FreeMatch
 objectives therefore declare `batch_coupled = True`, where
-`CurriculumPseudoLabelTreatmentNLL` declares `False` and its docstring
-explicitly predicted this one would not — "A threshold computed from *this*
-batch's confidences — FreeMatch's self-adaptive one — would answer true". That
-sentence is right and §5.1's is wrong; the docstring guessed the right answer
-about a member the prediction it sat beside contradicted. The consequence is
+`CurriculumPseudoLabelTreatmentNLL` declares `False`.
+
+The repository contained both answers at once. That objective's own docstring
+said "A threshold computed from *this* batch's confidences — FreeMatch's
+self-adaptive one — would answer true", which is right; `flexmatch.md` §5.1,
+written in the same packet, said the update comes after the gate, which implies
+false. Nobody reconciled them because nothing forced it: a prediction about a
+card that does not exist yet costs nothing to get wrong. This is what the
+§11.2 obligation buys — not that the guess is right, but that somebody has to
+come back and score it. The consequence is
 real and it is enforced: a stage holding either objective may not declare
 `ExternalBatches` (`DESIGN.md` §7), so this recipe could not hand `mu B` back to
 a caller even if a later edit tried.
@@ -581,14 +610,110 @@ a bad trade in this repository.
 
 ### 6.2 What the Tier 1 fixture shows
 
-*Not yet measured. This section is written when the numbers exist, and it says
-which clauses of §6's tolerance they cover and which they do not.*
+Tier 1 is not Tier 2 and none of this is a `reproduced` claim: there is no
+Tier 2 runner for this card (§6.3), the seed count is **five** rather than the
+declared ten, and the metrics were computed by a script rather than by
+`evaluation/benchmarks/`. What it is, is the declared budget, the declared
+fixture, the declared replicate seeds and the four declared arms.
+
+Each replicate `r` uses `s_r = 90000 + 100 r`, with the DGP at `s_r + 1`, every
+arm initialised from `s_r + 6` and fitted under stage seed `s_r + 10000`, so the
+four arms differ in the gate and the fairness weight and in nothing else.
+
+**The primary metric, five seeds, 3,000 steps.**
+
+| `r` | 0 | 1 | 2 | 3 | 4 | mean ± stderr |
+|---|---|---|---|---|---|---|
+| held-out `p(t\|x)` NLL, EMA — `constant` | 0.295 | 0.338 | 0.333 | 0.315 | 0.300 | 0.316 ± 0.009 |
+| held-out `p(t\|x)` NLL, EMA — `freematch` | 0.285 | 0.317 | 0.322 | 0.308 | 0.287 | 0.304 ± 0.008 |
+| ratio, EMA | 0.967 | 0.938 | 0.966 | 0.979 | 0.957 | **0.961 ± 0.007** |
+| ratio, trained network | 0.953 | 0.931 | 0.951 | 0.988 | 0.936 | **0.952 ± 0.010** |
+| marginal-frequency baseline | 0.694 | 0.694 | 0.694 | 0.693 | 0.693 | 0.694 |
+
+Both ratios are below 1.0 by more than four standard errors and FreeMatch is
+ahead on five seeds of five on both, which is the direction §2 claims. The two
+readings agreeing is worth one sentence, because two cards in this family have
+found them disagreeing — `fixmatch.md` §6.2 on the overlapping fixture and
+`doublematch.md` §6.2 across two initialisation draws — and a result resting on
+the EMA alone is a result about a reporting device. That they agree here is a
+fact about these five runs, not a property established of the method.
+
+**Every clause of §6's tolerance, on those five seeds.**
+
+| Clause | Measured | Met? |
+|---|---|---|
+| ratio < 1.0 in mean on the EMA, by ≥ 1 stderr | 0.961 ± 0.007 | yes, by 5.7 |
+| ratio < 1.0 in mean on the trained network, by ≥ 1 stderr | 0.952 ± 0.010 | yes, by 4.9 |
+| terminal mask rate above 0.2 | 0.822 ± 0.013 | yes |
+| impurity of retained labels < 0.15 | 0.047 ± 0.002 | yes |
+| held-out outcome NLL within 1.05x of `constant` | 0.9999 ± 0.0001, max 1.0003 | yes |
+| `tau_t` above 0.8 and strictly above `1/K` at the end | 0.922 ± 0.005 | yes |
+
+So the declared target is met on every clause at five of the declared ten
+seeds. That is not `reproduced` and §6.3 says why; it is the strongest thing
+Tier 1 evidence is allowed to be.
+
+**The mechanism, on the same five runs.** `tau_t` starts at `1/K = 0.5`
+exactly, so eq. (8) opens ungated on the whole batch — coverage 1.0 at step 0
+against the constant arm's 0.0 — and ends at 0.922, having been earned rather
+than declared. Eq. (7)'s local half is live throughout: the terminal
+`min_c tau_t(c)` is 0.858 against a `max_c` of 0.922, so `MaxNorm` separates the
+two classes by 0.064 where FlexMatch's `beta` would have collapsed both to `tau`
+(§2's third limitation). Terminal coverage is 0.854 against the constant arm's
+0.804, so the self-adaptive gate admits *more* rows — which is the direction
+§4.1 says SAT is for. It does so at an impurity of 0.047 ± 0.002 against the
+constant arm's 0.049 ± 0.002; those overlap within a standard error, so the
+honest statement is that admitting the extra rows did not cost purity, not that
+it bought any.
+
+**Self-adaptive fairness contributes nothing here, and the reason is
+measurable rather than inferred.** The paper's own §5.3 ablation is the `sat`
+arm, `w_f = 0`:
+
+| paired difference in held-out `p(t\|x)` NLL (EMA), five seeds | mean ± stderr |
+|---|---|
+| `freematch` (`w_f = 0.05`) − `sat` (`w_f = 0`) | **−0.0001 ± 0.0012** |
+| `literal` (`w_f = −0.05`, eq. 11 as printed) − `sat` | **+0.0001 ± 0.0010** |
+
+Against a `sat` − `constant` difference of −0.0123, SAF moves the metric by
+under 1% of what SAT moves it by, with error bars an order of magnitude smaller
+than that effect. So this is a bound, not merely a failure to detect one.
+
+The diagnostic says why, and it is exactly §2's third limitation: the terminal
+marginal entropy of the retained rows' predictions is **0.6919 ± 0.0006**
+against a maximum of `log 2 = 0.6931`. `B` is uniform to two parts in a
+thousand, which is the minimum of `H(A, B)` when `A` is uniform too — the term
+sits at its own floor for the whole run and has no gradient to contribute. On a
+near-balanced two-class fixture a term that pushes the predicted marginal
+towards uniformity has nothing to push.
+
+**Which means this fixture cannot settle deviation 7, and saying so is the
+point of having run the `literal` arm.** The two signs differ by −0.0001 and
++0.0001 against the same baseline; both are zero. That is not evidence that the
+sign does not matter — it is evidence that *on a fixture where the term is
+inert, the sign of an inert term is unmeasurable*. Deviation 7 therefore stands
+on §5's argument alone, and the experiment that would test it needs a fixture
+where the marginal is genuinely skewed. `flexmatch.md` §6.1's class-imbalanced
+variant (`p(t = 1) ≈ 0.16`) is the obvious candidate and is not run here; §7's
+first row is where that debt lives.
+
+**One thing this section deliberately does not say.** It does not claim the
+gain is FreeMatch's *self-adaptivity* rather than the lower effective threshold
+it happens to produce. The terminal `tau_t` is 0.922 against the constant arm's
+0.95, and a constant gate at 0.92 was not run. Separating "the threshold
+adapts" from "0.92 beats 0.95 on this fixture" needs a third constant-gate arm,
+and `BACKLOG.md`'s note on this card is where that is recorded as the next
+measurement rather than as a result.
 
 ### 6.3 Result ledger
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
 | — | — | — | — | Not run |
+
+§6.2's numbers are **not** in the table above, and that is the rule rather than
+an oversight: `FIDELITY.md` §3 makes the ledger a record of Tier 2 runs, and
+§6.2 is five seeds from a script.
 
 **No Tier 2 runner exists for this card**, and that is stated here rather than
 left to be inferred from an empty table. `xty2/evaluation/benchmarks/` has one
@@ -601,7 +726,7 @@ a reviewer has signed §8.
 
 | Unspecified in paper | Our choice | Basis |
 |---|---|---|
-| The sign of eq. (11). As printed, `L_f = -H(A, B)` minimised is entropy *minimisation* of the modulated marginal, which contradicts the purpose §1, §2, §4.2 and §6 all state for the term | `L_f = +H(A, B)`, minimised — deviation 7 | The paper's own prose against the paper's own sign, plus the derivative in deviation 7. **This is the row a reference implementation would have closed**, and §1 records why one was not read. It is also the row most likely to be wrong, which is why §6.1 declares the literal reading as its own arm rather than leaving the choice unmeasured |
+| The sign of eq. (11). As printed, `L_f = -H(A, B)` minimised is entropy *minimisation* of the modulated marginal, which contradicts the purpose §1, §2, §4.2 and §6 all state for the term | `L_f = +H(A, B)`, minimised — deviation 7 | The paper's own prose against the paper's own sign, plus the derivative in deviation 7. **This is the row a reference implementation would have closed**, and §1 records why one was not read. §6.1's `literal` arm was declared to measure it and §6.2 ran it — and it came back a null on **both** signs, because the term is inert on a near-balanced two-class fixture. So the choice is still argued rather than measured, and the outstanding experiment is the same one §6.2 names: this recipe on `flexmatch.md` §6.1's class-imbalanced variant, where the marginal SAF acts on is genuinely skewed |
 | What `Hist` does when a class has no retained row: eq. (9)'s `\bar h(c)` is then 0 and `\bar p(c)/\bar h(c)` is undefined | Classes with an empty `\bar h` bin are **excluded from both SumNorms**, and a step in which fewer than two classes survive contributes `L_f = 0` | Convention. The two candidates are exclusion and "treat `1/\bar h(c)` as 0", and the second is worse under the sign deviation 7 settles: it makes `B(c) = 0` for an absent class, so `-A(c) log B(c)` is an arbitrarily large penalty carrying no gradient — a constant added to the loss for a class the term cannot act on. Exclusion keeps the term differentiable everywhere and makes it inert rather than explosive when the retained set is single-class. The objective logs `fairness_support` so a run in which this is biting is visible rather than inferred |
 | `h~_0`, the initial value of eq. (10)'s EMA. Eqs. (5) and (6) state `t = 0` cases and eq. (10) does not | `h~_0(c) = 1/C`, uniform | Consistency with eqs. (5) and (6), which give every other statistic in the same triple a uniform initialisation, and with the quantity: `h~` is a normalised histogram, so the uninformative value is the uniform one. A zero initialisation would make eq. (11)'s `p~/h~` undefined at the first step |
 | Whether the `t = 0` cases of eqs. (5) and (6) mean "initialise, then update from step 1" or "initialise and also fold in step 0's batch" | Initialise, and skip the update at step 0 | Eq. (5)'s piecewise form is explicit that `tau_0` *is* `1/C`, which folding step 0's batch in would contradict. At `lambda = 0.999` the two readings differ by about `10^-3` of one batch's mean confidence, so this is recorded for exactness rather than because anything turns on it |

@@ -435,19 +435,26 @@ def _short(recipe: Recipe) -> Recipe:
     )
 
 
-def test_only_the_curriculum_objective_declares_state() -> None:
+def test_state_stays_opt_in_across_the_objective_package() -> None:
     """Opt-in, checked over the whole objective package (`DESIGN.md` §4).
 
-    Card §5.1 claims that no existing objective declares `initial_state`, so the
-    executor builds an empty mapping for every existing stage and no plan,
-    digest or recorded result can move. An earlier version of this test checked
-    `fixmatch` alone while the card claimed the property of every recipe; an
-    adversarial review pointed out the gap.
+    Card §5.1 claims that no objective that existed before this one declares
+    `initial_state`, so the executor builds an empty mapping for every stage
+    that predates FlexMatch and no plan, digest or recorded result can move. An
+    earlier version of this test checked `fixmatch` alone while the card claimed
+    the property of every recipe; an adversarial review pointed out the gap.
 
     Enumerating `xty2.objectives.__all__` rather than compiling every recipe is
     what makes it exhaustive: the claim is about objectives, and a recipe can
     only carry an objective this list names. It is also schema-free, where
     compiling each recipe would need a schema each one accepts.
+
+    The list has grown by one since, and that is the mechanism working rather
+    than the claim weakening: `SelfAdaptiveThresholdTreatmentNLL` is the second
+    consumer this card's §5.1 named in advance (`freematch.md` §5.1). The
+    property being asserted is that the set is *this* set — opting in is
+    deliberate, and an objective that acquired state by accident would show up
+    here.
     """
     stateful = sorted(
         name
@@ -455,9 +462,10 @@ def test_only_the_curriculum_objective_declares_state() -> None:
         if isinstance(getattr(objectives, name), type)
         and isinstance(getattr(objectives, name), StatefulObjective)
     )
-    assert stateful == ["CurriculumPseudoLabelTreatmentNLL"], (
-        "exactly one objective in the package declares per-stage state"
-    )
+    assert stateful == [
+        "CurriculumPseudoLabelTreatmentNLL",
+        "SelfAdaptiveThresholdTreatmentNLL",
+    ], "exactly the two declared objectives carry per-stage state"
     instantiated = {
         "ObservedOutcomeNLL": objectives.ObservedOutcomeNLL(),
         "ObservedTreatmentNLL": objectives.ObservedTreatmentNLL(),

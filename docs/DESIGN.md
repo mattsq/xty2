@@ -432,7 +432,23 @@ Rules:
   nothing checkpoints, restores or keys provenance by it (§7.1), which
   `BACKLOG.md` §11.3 asks for explicitly until two recipes need the same
   lifecycle. `population` is `None` for a stage fed by `ExternalBatches`, and it
-  is the objective that decides whether it can run without one. The protocol is
+  is the objective that decides whether it can run without one.
+- **An objective may read the state of a *named sibling* in the same stage**,
+  when two objectives are two halves of one published mechanic over one set of
+  statistics. FreeMatch is the first and `docs/recipes/freematch.md` §5.1 is the
+  argument: eq. (12) gives its gate (eq. 8) and its fairness term (eq. 11)
+  separate weights, so they cannot be one objective, and eqs. (5), (6) and (10)
+  are one `tau_t`, `p~_t` and `h~_t` that both read. The reader declares the
+  owner's `name` as an ordinary field and calls `ctx.objective_state(owner,
+  kind)`; no framework code changed, because the accessor already took a name.
+  One condition makes it safe, and it is on the *state* rather than on the
+  accessor: **a shared update must be idempotent within a step.** The mixer
+  computes objectives in declaration order, so an update that fired once per
+  reader would make the loss a function of how many terms happened to read it
+  and of which line came first — recipe logic hidden in a declaration, which is
+  what §9's "no logic in recipes" forbids. `SelfAdaptiveThresholds.observe`
+  records the step it last folded in and returns early on a repeat, and Tier 0
+  swaps the two lines and compares the trace to the last bit. The protocol is
   `@runtime_checkable` and declares `initial_state` alone, so `isinstance`
   against it tests for that one member — the executor only ever asks it of
   already-compiled objectives, which have the rest by construction. A stateful
@@ -518,6 +534,15 @@ two consumers of a mechanism to be local and explicit. It is also the only
 objective so far that declares `StatefulObjective`: `T_t(c)` is a function of
 marks accumulated over every step, which no arrangement of ports, realisations
 or row populations computes from one batch.
+
+`SelfAdaptiveThresholdTreatmentNLL` and `SelfAdaptiveFairness` — FreeMatch's
+self-adaptive gate and its class-fairness regulariser — arrived with
+`docs/recipes/freematch.md`. They are the second objective to declare
+`StatefulObjective` and the first *pair* to share one state, which is the
+sibling read above. They are also the first terms whose threshold is a function
+of the batch they gate: algorithm 1 folds a batch's confidences into `tau_t`
+before computing the gate it applies to that same batch, so both answer true to
+`batch_coupled` where `CurriculumPseudoLabelTreatmentNLL` answers false.
 
 `InfoNCEContrastive` is the second, and arrived with `docs/recipes/scarf.md`.
 It is the first objective whose per-row value depends on the *other* rows of
@@ -1032,8 +1057,13 @@ caller supplies batches" is the true answer for a stage whose card marks
 `optimisation.batch_size` as `n/a`. What stops it being an escape hatch is a
 compile-time bar: `Objective.batch_coupled` is a required member, and a stage
 declaring `ExternalBatches` may not hold a term that reads the rest of the
-batch. `InfoNCEContrastive` is the one `True` today; Barlow Twins and VICReg,
-whose losses are computed from a covariance over the batch axis, are next.
+batch. `InfoNCEContrastive` was the first `True`; FreeMatch's
+`SelfAdaptiveThresholdTreatmentNLL` and `SelfAdaptiveFairness` are the second
+and third, and they are a different *kind* of coupling worth naming — not a loss
+over pairs of rows, but a **threshold** computed from the batch's own
+confidences and then applied to it (§4, `docs/recipes/freematch.md` §3.1). Barlow
+Twins and VICReg, whose losses are computed from a covariance over the batch
+axis, remain the next of the first kind.
 
 A recipe declares `data` exactly when some stage samples, and not otherwise: a
 policy over batches the caller builds would print four values in the plan that
