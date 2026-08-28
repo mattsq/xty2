@@ -3,6 +3,9 @@
 **Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
+> **Agent route:** read §2, §3.2, and §4 to implement; §5 for departures;
+> §6 only for benchmark/reporting work. Historical diagnosis lives in Git.
+
 ---
 
 ## 1. Provenance
@@ -16,32 +19,11 @@
 | Reference implementation | Official [`DoubleML/doubleml-for-py` @ `1808b07a13cc8c61f508c1ed6aec658ea32a2807`](https://github.com/DoubleML/doubleml-for-py/tree/1808b07a13cc8c61f508c1ed6aec658ea32a2807), especially [`DoubleMLIRM`](https://github.com/DoubleML/doubleml-for-py/blob/1808b07a13cc8c61f508c1ed6aec658ea32a2807/doubleml/irm/irm.py). Project-local predecessor: [`mattsq/XTYLearner` `ss_dml.py` @ `35734ec2d5a62d54a59eca38d1e31423da31e1ea`](https://github.com/mattsq/XTYLearner/blob/35734ec2d5a62d54a59eca38d1e31423da31e1ea/xtylearner/models/ss_dml.py). |
 | Reference impl. runnable? | The official implementation was inspected but not executed in the card pass. The old XTYLearner wrapper is not a valid reference run: it constructs `DoubleMLSSM` without the selection indicator required by that estimator and then calls an undocumented `set_external_data(X_full=...)` surface. |
 
-The old name is misleading. In DoubleML, `SSM` means **sample selection
-model**, where an outcome-selection variable `S` and nuisance
-`pi(d,x)=P(S=1 | D=d,X=x)` are part of the score. It does not mean
-semi-supervised DML. The old wrapper discards rows whose treatment is missing,
-does not supply `S`, and therefore neither implements DoubleML's SSM contract
-nor uses the unlabelled rows. P11 keeps the public recipe name `ssdml` but bases
-the estimator on the appropriate interactive-regression ATE score and records
-the treatment-imputation extension as a deviation.
-
 ## 2. Estimand and claim
 
-- **Estimand:** For binary treatment, the average treatment effect
-  `theta_0 = E[Y(1)-Y(0)]` under consistency, positivity and conditional
-  exchangeability given `X`.
-- **Claim:** With fully observed treatment, the DML interactive-regression
-  score is Neyman-orthogonal and cross-fitting limits overfit/regularisation
-  bias from the outcome and propensity nuisance estimators. P11 additionally
-  tests a staged semi-supervised point estimator: cross-fit `p(t | x)` on rows
-  with observed treatment, hard-label missing treatments out of fold, then run
-  an explicit array-based cross-fitted ATE action on the joined batch.
-- **Not claimed:** The DML paper does not analyse hard pseudo-treatment labels.
-  Its root-N normality and confidence-interval results are not transferred to
-  this extension. The first P11 implementation reports a point estimate and a
-  diagnostic influence-score standard error only. It is not DoubleMLSSM, does
-  not handle outcome attrition or nonignorable selection, does not estimate
-  CATE, and supports only `K=2`.
+- **Estimand:** the binary-treatment average treatment effect under consistency, positivity, and exchangeability.
+- **Method claim:** DML2 evaluates the orthogonal interactive-regression score out of fold. xty2 prepends project-local out-of-fold hard treatment imputation.
+- **Scope:** the imputed-treatment extension is not covered by the DML theorem. The reported standard error is diagnostic only; this is not DoubleML's sample-selection model.
 
 ## 3. Equations and mapping
 
@@ -83,29 +65,7 @@ the P11 missing-treatment problem.
 
 ### 3.2 Mapping to xty2
 
-P11 uses two explicit stages:
-
-1. `propensity_labels`, `executor="cross_fit"`: `mlp_encoder` and
-   `categorical_propensity` produce `T_GIVEN_X`. `ObservedTreatmentNLL` fits
-   them on each fold complement's `t_observed` rows. The action emits hard
-   argmax labels for held-out `t_missing` rows. Because the source is
-   `p(t | x)`, artifact provenance must derive `used_y=false`; actual row sets
-   must still earn `prediction_mode="out_of_fold"`.
-2. `dml_ate`, `executor="array_fit"`: the stage consumes
-   `propensity_labels`, receives the finite functionally joined batch once and
-   invokes `SSDMLATEAction`. The action uses the supplied non-negative
-   `fold_id` values. For each fold it fits, on the complement:
-   - separate ridge outcome regressions `g_0(0,x)` and `g_0(1,x)`;
-   - a ridge logistic propensity `m_0(x)`;
-   - then evaluates the ATE score on the held-out fold after clipping
-     `m_hat` to `[0.025, 0.975]`.
-
-The action returns immutable tensor state containing `ate`,
-`diagnostic_standard_error`, held-out `influence_score`, `g0_hat`, `g1_hat`,
-`m_hat`, `row_id` and `fold_id`. The checkpoint's
-`trained_on_row_ids` is produced by the executor from the finite input; the
-action cannot assert its own provenance. No opaque sklearn or DoubleML object
-is pickled.
+A cross-fit propensity stage emits missing-treatment labels. An `array_fit` stage then fits fold-complement ridge outcome models and logistic propensity, clips propensity to `[0.025, 0.975]`, and aggregates held-out AIPW scores.
 
 | Paper / stage quantity | Meaning | xty2 Port / artifact | xty2 Objective / Component / action |
 |---|---|---|---|
@@ -117,6 +77,8 @@ is pickled.
 | `psi(W;theta,eta)` | Held-out orthogonal ATE score | array checkpoint tensor state | `SSDMLATEAction` score aggregation |
 
 ## 4. Mechanics checklist
+
+This YAML is the executable fidelity contract. Keep its keys synchronized with the recipe and tests.
 
 ```yaml
 gradients:
@@ -213,78 +175,17 @@ data:
 | 6 | `framework-limitation` | `repeated-cross-fitting` | Run one fixed five-fold split and no repeated sample splitting. | Repeating the split and aggregating across repetitions is part of the estimator's recommended procedure, not an optional refinement, so this is a mechanic the source states and we do not implement. The framework is what stops us: an `XTYBatch` carries one `fold_id`, and the artifact contract, the fold-disjointness check and the checkpoint provenance are each written against a single fold assignment (`DESIGN.md` section 11.4, `repeated-cross-fitting`). | Higher Monte Carlo variance than repeated DML: the section 6 number is one draw of the split, and its stderr is over seeds rather than over partitions, so it understates the spread the published procedure averages out. |
 | 7 | `judgement` | — | Preserve observed treatments and hard-fill only missing rows. | This is the P10 functional join contract. | Avoids classifier error on gold labels; the semi-supervised gain/loss comes only from formerly missing rows. |
 
+### 5.1 Framework impact
+
+`SSDMLATEAction` uses the existing array executor and returns portable tensor state. The open framework debt is repeated cross-fitting; one fixed five-fold assignment is used.
+
 ### Tier 2 outcome
 
 On 2026-08-24, commit `d060df351f2fe8bac6d951c3757506c684d8b408` produced a `deviating` result: This matches the predeclared project-local staged-imputation IRM target. It validates deterministic executor/artifact plumbing and does not transfer the DML paper's inference claim to hard labels. Failed target(s): staged_absolute_ATE_error was 0.423247 +/- 0.0131 against mean <= 0.3.
 
 ## 6. Reproduction target
 
-The paper's Monte Carlo tables assume fully observed treatment. They cannot
-validate the P11 imputation extension. P12 must run the fixed project-local
-mechanism target below and report it separately from the paper's inferential
-claims.
-
-### 6.1 Fixed staged-imputation IRM DGP
-
-Run twenty replicates `r in {0, ..., 19}` with base seed
-`s_r = 120000 + 100*r`. Each independent estimation population contains 4,000
-rows. Draw `X`, `U_T`, `epsilon_Y` and `U_M` independently in that order. Let
-`X in R^6` have independent standard-normal columns,
-
-$$
-e(x)=0.05+0.90\operatorname{sigmoid}
-  (1.25x_1-0.75x_2+0.5x_3),
-\qquad T=\mathbb 1\{U_T<e(x)\},
-$$
-
-$$
-\mu_0(x)=x_1+0.5x_2-0.25x_3,
-\qquad \tau(x)=1+0.25x_4,
-$$
-
-$$
-Y=\mu_0(X)+T\tau(X)+\epsilon_Y,
-\qquad \epsilon_Y\sim\mathcal N(0,1).
-$$
-
-The analytic ATE is `1.0`. In training, set
-`t_observed = 1{U_M < 0.50}` independently. Assign `fold_id = row_id mod 5`.
-Standardise `X` using the complement's mean and standard deviation inside each
-fold fit; apply those frozen statistics to that fold's held-out rows. Do not
-standardise `Y`.
-
-This is not a correctly specified ridge/logistic benchmark. Even before
-imputation, `0.05 + 0.90*sigmoid(linear(x))` is not representable as a single
-logistic-linear propensity because its tails are bounded at `0.05` and `0.95`.
-Hard imputation creates a second misspecification. If `M` is the observation
-indicator, `rho=P(M=1)=0.5` and `h(x)` is the hard classifier decision, then the
-idealised joined treatment satisfies
-
-$$
-\widetilde T=MT+(1-M)h(X),
-\qquad
-P(\widetilde T=1\mid X=x)=\rho e(x)+(1-\rho)h(x),
-$$
-
-which is generally not logistic-linear. Conditioning $Y$ on
-$(X,\widetilde T)$ also mixes true-treatment and imputed strata, so the original
-linear potential-outcome equations do not make the joined-data outcome
-nuisances linear. The staged target therefore tests deterministic executor and
-artifact plumbing under explicit nuisance misspecification; its tolerance is a
-fixed mechanism target, not a consequence of the DML theorem or correct
-specification.
-
-The primary metric is absolute ATE error `|theta_hat - 1.0|`. Secondary
-guardrails are: finite held-out predictions for every row; all propensities in
-`[0.025,0.975]`; `used_y=false` and verified out-of-fold provenance for the
-label artifact; no source-batch mutation; and the same seed produces
-bit-identical tensor state. For every replicate, also run the same
-`SSDMLATEAction` with generator-truth treatment in place of the joined labels.
-Report its ATE error as an `oracle_treatment` ablation and require its
-twenty-seed mean absolute error to be at most `0.10`. Report the staged-minus-
-oracle estimate difference without a pass threshold. The ablation separates a
-broken array estimator from error introduced by the documented pseudo-label
-composition; it does not make the staged estimator inferentially valid.
+The target measures the staged point estimator on a fixed project-local IRM DGP.
 
 ```yaml
 reproduction:
@@ -300,6 +201,7 @@ reproduction:
 ```
 
 ### 6.2 Result ledger
+
 
 | Date | Commit | Metric | Value +/- stderr | Within tolerance? |
 |---|---|---|---|---|

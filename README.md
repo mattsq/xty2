@@ -1,51 +1,35 @@
 # xty2
 
-XTYLearner 2 — semi-supervised learning in tabular settings using a causal
-framework, building on Lucas Beyer's approaches in MOAM etc.
+Composable semi-supervised causal learning for tabular data.
 
-## Design documents
+xty2 separates representation, parameterisation, objectives, data views, and
+training order. Named methods are declarative recipes assembled from those
+parts, so a result can be traced to a specific mechanic rather than a monolithic
+model class.
 
-| Document | What it covers |
-|---|---|
-| [`SEED.md`](SEED.md) | The original architectural proposal this design derives from |
-| [`docs/DESIGN.md`](docs/DESIGN.md) | Architecture: ports, components, objectives, views, loss mixer, program, recipes, compiler |
-| [`docs/FIDELITY.md`](docs/FIDELITY.md) | How reimplementations are kept honest: spec cards and three test tiers |
-| [`docs/PLAN.md`](docs/PLAN.md) | Thirteen work packets (P0–P12), two review gates, risk register |
-| [`docs/recipes/_TEMPLATE.md`](docs/recipes/_TEMPLATE.md) | The spec card every recipe must have before it is implemented |
-| [`CLAUDE.md`](CLAUDE.md) | The short rules for anyone — human or agent — writing code here |
+Each recipe also has a reviewed spec card. The card records the source method,
+equations, executable hyperparameters, deviations, unknowns, and a predeclared
+reproduction target. Fast invariants and synthetic smoke fits run on every PR;
+published-number benchmarks run nightly.
 
-## The one-paragraph version
+## Documentation
 
-XTYLearner registered ~40 monolithic model classes, so nothing composed and a bad
-result could not be attributed to a cause. xty2 splits five collapsed questions —
-what quantities are represented, how they are parameterised, which losses train
-them, which data views and row subsets each loss uses, and in what order — into
-separate, independently testable layers. Named methods become **recipes** that
-compose registered components, objectives and views.
-
-Correctness is not left to review. Every recipe has a **spec card** written and
-reviewed *before* any code: paper provenance, transcribed equations, a mechanics
-checklist covering the details that get silently dropped, declared deviations,
-declared unknowns, and a pre-declared reproduction target. Three test tiers back
-it — invariants and a synthetic smoke fit on every PR, published-number
-reproduction nightly. A recipe is done when it reproduces its target or explains
-in writing why it does not.
-
-**Scope of v1:** categorical treatment with small K, exact marginalisation over
-missing treatments, a linear list of training stages, Python-first recipes, and
-five ported models. See `docs/DESIGN.md` §11 for what is deliberately not built.
+Start at [`docs/README.md`](docs/README.md). It explains which document is
+authoritative and which one to read for a given task. Recipe cards are indexed
+at [`docs/RECIPES.md`](docs/RECIPES.md).
 
 ## Development
 
 ```bash
 uv venv
-uv pip install torch --index-url https://download.pytorch.org/whl/cpu  # optional: skips the CUDA wheel
+uv pip install torch --index-url https://download.pytorch.org/whl/cpu
 uv pip install -e ".[dev]"
 
-uv run pytest tests/invariants tests/smoke   # Tier 0 + Tier 1, what CI runs on a PR
-uv run ruff check . && uv run ruff format --check .
+uv run pytest tests/invariants tests/smoke
+uv run ruff check .
+uv run ruff format --check .
 uv run mypy --strict
 ```
 
-Tier 2 (`tests/benchmarks`) runs nightly, not on PRs. Tests are marked
-`tier0`/`tier1`/`tier2` automatically by directory.
+Tier 0 is `tests/invariants/`, Tier 1 is `tests/smoke/`, and Tier 2 is
+`tests/benchmarks/`. Directory-based markers are applied automatically.

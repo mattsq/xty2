@@ -3,6 +3,9 @@
 **Status:** `reproduced`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
+> **Agent route:** read §2, §3.2, and §4 to implement; §5 for departures;
+> §6 only for benchmark/reporting work. Historical diagnosis lives in Git.
+
 ---
 
 ## 1. Provenance
@@ -16,32 +19,11 @@
 | Reference implementation | Project-local source: [`mattsq/XTYLearner` `cycle_dual.py` @ `35734ec2d5a62d54a59eca38d1e31423da31e1ea`](https://github.com/mattsq/XTYLearner/blob/35734ec2d5a62d54a59eca38d1e31423da31e1ea/xtylearner/models/cycle_dual.py). Paper-level CycleGAN reference: [`junyanz/pytorch-CycleGAN-and-pix2pix` @ `2a7afba2895d52556dd5dfe07e8555ef657ced6f`](https://github.com/junyanz/pytorch-CycleGAN-and-pix2pix/tree/2a7afba2895d52556dd5dfe07e8555ef657ced6f). |
 | Reference impl. runnable? | Not attempted in the P11 card pass. The project-local source was inspected at the pinned commit. |
 
-The authority order is deliberate. The two papers establish what cycle
-consistency means in unpaired image translation. The pinned XTYLearner source
-defines the historical tabular adaptation and recipe name. Neither source
-establishes a causal estimator for missing treatment labels. The P11 card owns
-that adaptation and states the departures explicitly.
-
 ## 2. Estimand and claim
 
-- **Estimand:** The first stage estimates the categorical treatment posterior
-  `q(t | x, y)`. The second estimates candidate-treatment outcome means
-  `mu_k(x) = E[Y | X=x, T=k]`; under consistency, positivity and conditional
-  exchangeability, contrasts `mu_k(x) - mu_j(x)` identify conditional treatment
-  effects.
-- **Claim:** This recipe tests a narrow staged construction: fit an
-  outcome-dependent treatment posterior on observed treatment labels, emit hard
-  out-of-fold labels for missing treatments, then fit a treatment-conditional
-  outcome model on the functionally joined data. The posterior should exploit
-  outcome information that `p(t | x)` cannot, while P10 provenance prevents an
-  in-sample posterior-to-outcome refit.
-- **Not claimed:** CycleGAN and DualGAN do not justify this causal adaptation.
-  Out-of-fold pseudo-labelling prevents direct training-row reuse but does not
-  make a misspecified posterior, hard labels, or a missing-not-at-random
-  mechanism harmless. The recipe does not claim valid confidence intervals,
-  does not identify effects without the ordinary causal assumptions, does not
-  implement continuous treatment, and does not reproduce an image-translation
-  result.
+- **Estimand:** `q(t | x,y)` in stage one and treatment-specific outcome means in stage two.
+- **Method claim:** fit the posterior on observed treatments, emit hard out-of-fold labels for missing treatments, then fit the outcome model on the functional join.
+- **Scope:** this is a project-local staged adaptation. It does not reproduce CycleGAN/DualGAN, transfer their claims, or add inverse generators, cycles, or discriminators.
 
 ## 3. Equations and mapping
 
@@ -102,32 +84,7 @@ the P10 causal provenance decision.
 
 ### 3.2 Mapping to xty2
 
-P11 keeps the dual statistical directions that exercise the v1 framework and
-makes their transition explicit:
-
-1. `posterior_labels`, `executor="cross_fit"`:
-   `categorical_posterior` maps `(X_RAW, Y_RAW)` to `T_GIVEN_XY`.
-   `ObservedTreatmentNLL(port=T_GIVEN_XY)` fits it on `t_observed` rows. For
-   every actual `fold_id`, the executor starts from the same initial state,
-   fits on the complement and applies `PseudoLabelAction(T_GIVEN_XY)` only to
-   held-out `t_missing` rows. The artifact must derive `used_y=true` and earn
-   `prediction_mode="out_of_fold"` from its row sets.
-2. `outcome_fit`, `executor="gradient"`: the stage consumes
-   `posterior_labels`. The join preserves observed treatments, fills only the
-   originally missing rows and marks those joined treatments available in the
-   fresh batch. `mlp_encoder` and `tarnet_head` then minimise
-
-$$
-\mathcal L_y
-= -\frac{1}{N}\sum_i
-  \log p_\theta(y_i\mid x_i,\tilde t_i).
-$$
-
-The production recipe is causal and safe by construction. P11 also carries a
-mutation test made from this real recipe: replacing
-`posterior_labels.executor="cross_fit"` with `"gradient"` while leaving the
-artifact edge and outcome stage unchanged must make `compile()` raise the
-`q(t|x,y) -> p(y|x,t)` circular-fit error. The unsafe form is never registered.
+A `cross_fit` stage produces a provenance-bearing `PseudoLabels` artifact from `T_GIVEN_XY`; a gradient stage consumes it and trains `mlp_encoder` plus `tarnet_head`. The compiler rejects the in-sample posterior-to-outcome form.
 
 | Source symbol / operation | Meaning | xty2 Port / artifact | xty2 Objective / Component / action |
 |---|---|---|---|
@@ -137,10 +94,9 @@ artifact edge and outcome stage unchanged must make `compile()` raise the
 | `G_Y(x,t)` | Treatment-conditional outcome distribution | `X_RAW -> X_REPR -> Y_GIVEN_XT` | `mlp_encoder`, `tarnet_head` |
 | `-log p_theta(y | x,tilde t)` | Outcome fit after functional label join | `Y_GIVEN_XT` plus `posterior_labels` input | `ObservedOutcomeNLL` |
 
-No view, teacher, inverse `G_X`, adversarial discriminator or reconstruction
-port is created by this card.
-
 ## 4. Mechanics checklist
+
+This YAML is the executable fidelity contract. Keep its keys synchronized with the recipe and tests.
 
 ```yaml
 gradients:
@@ -241,63 +197,13 @@ data:
 | 5 | `judgement` | — | Support categorical treatment only. | Continuous treatment is outside xty2 v1 scope. | No categorical effect for the declared benchmark; legacy continuous-treatment behaviour is absent. |
 | 6 | `judgement` | — | Use all hard pseudo-labels with no entropy or confidence threshold. | Neither paper states a confidence gate, and section 4 accordingly marks `losses.confidence_threshold` as `n/a` — so no paper mechanic is being dropped here, which is what `DESIGN.md` section 11.2 Q1 asks. That `PseudoLabelAction` emits argmax only is a consequence of the same absence rather than its cause; a gate has existed on the objective path since `fixmatch`, and this card still declines one. | Noisy labels can bias the outcome fit; the fixed benchmark is intended to reveal that rather than tune it away. |
 
+### 5.1 Framework impact
+
+The card reuses the cross-fit executor, immutable artifact join, posterior component, and outcome stack. It adds no port or executor.
+
 ## 6. Reproduction target
 
-There is no published causal `cycle_dual` result. P12 must run the fixed
-project-local benchmark below and must not describe it as a reproduction of
-CycleGAN or DualGAN.
-
-### 6.1 Fixed posterior-imputation DGP
-
-Run ten replicates `r in {0, ..., 9}` with base seed
-`s_r = 110000 + 100*r`. Independent train, validation and test populations have
-2,048, 1,024 and 2,048 rows. Draw, in order, `X`, `U_T`, `epsilon_Y` and `U_M`
-from independent CPU generators. Let `X in R^4` have independent standard-normal
-columns and
-
-$$
-e(x)=\operatorname{sigmoid}(0.8x_1-0.5x_2+0.25x_3),
-\qquad T=\mathbb 1\{U_T<e(x)\},
-$$
-
-$$
-\mu_0(x)=0.5x_1-0.25x_2+0.25(x_3^2-1),
-\qquad \tau(x)=1.5+0.5\tanh(x_1),
-$$
-
-$$
-Y=\mu_0(X)+T\tau(X)+0.5\epsilon_Y.
-$$
-
-The analytic ATE is `1.5`. In the training population set
-`t_observed = 1{U_M < 0.30}` independently of `(X,T,Y)`. Validation and test
-treatments remain available to the evaluator but are never passed as observed
-to a fitted posterior. Assign `fold_id = row_id mod 5`. Standardise `X` and `Y`
-with training-population mean and standard deviation only; transform validation
-and test with those frozen statistics. The outcome head therefore emits means
-in standardised-Y units. Before scoring, inverse-transform every candidate mean
-with the frozen training statistics,
-
-$$
-\hat\mu_t^{\mathrm{original}}(x)
-= \bar Y_{train}+s_{Y,train}\hat\mu_t^{\mathrm{standardised}}(x).
-$$
-
-Compute treatment contrasts only after this inverse transform. Equivalently,
-multiply each standardised contrast by `s_Y_train`; the additive mean cancels.
-
-The primary metric, entirely on the original outcome scale, is
-
-$$
-\left|\frac{1}{N_{test}}\sum_i
-  [\hat\mu_1(x_i)-\hat\mu_0(x_i)]-1.5\right|.
-$$
-
-Secondary guardrails are: the emitted training labels report
-`prediction_mode="out_of_fold"` and `used_y=true`; hidden-treatment accuracy on
-the originally missing training rows is at least `0.75`; the unsafe executor
-mutation fails compilation; and every observed treatment is unchanged by the
-artifact join.
+The target is the declared posterior-imputation DGP and absolute ATE error, not an image-translation metric.
 
 ```yaml
 reproduction:
@@ -313,6 +219,7 @@ reproduction:
 ```
 
 ### 6.2 Result ledger
+
 
 | Date | Commit | Metric | Value +/- stderr | Within tolerance? |
 |---|---|---|---|---|
