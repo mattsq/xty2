@@ -19,6 +19,7 @@ from xty2.recipes.fixmatch import (
     WEAK_MASK_RATE,
     fixmatch,
 )
+from xty2.recipes.flexmatch import CURRICULUM, FLEXMATCH_STEPS, TAU, flexmatch
 from xty2.recipes.mean_teacher import mean_teacher
 from xty2.recipes.scarf import (
     CORRUPTION_RATE,
@@ -35,12 +36,14 @@ __all__ = [
     "CNFLOW_ENCODER_WIDTHS",
     "CORRUPTION_RATE",
     "COSINE_PHASE",
+    "CURRICULUM",
     "CYCLE_DUAL_ENCODER_WIDTHS",
     "CYCLE_DUAL_OUTCOME_WIDTHS",
     "CYCLE_DUAL_POSTERIOR_WIDTHS",
     "DOUBLEMATCH_STEPS",
     "ENCODER_WIDTHS",
     "FIXMATCH_STEPS",
+    "FLEXMATCH_STEPS",
     "JOINT_FIT_STEPS",
     "OUTCOME_WIDTHS",
     "PRETRAIN_STEPS",
@@ -48,12 +51,14 @@ __all__ = [
     "SELF_SUPERVISED_WEIGHT",
     "SSDML_ENCODER_WIDTHS",
     "STRONG_MASK_RATE",
+    "TAU",
     "TEMPERATURE",
     "WEAK_MASK_RATE",
     "cnflow",
     "cycle_dual",
     "doublematch",
     "fixmatch",
+    "flexmatch",
     "mean_teacher",
     "scarf",
     "ssdml",

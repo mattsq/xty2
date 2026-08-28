@@ -397,6 +397,10 @@ class Objective(Protocol):
     def compute(self, state: State, batch: XTYBatch,
                 rows: RowIndex, ctx: TrainContext) -> LossTerm: ...
 
+@runtime_checkable                                    # opt-in; see the rules
+class StatefulObjective(Protocol):
+    def initial_state(self, population: TrainingPopulation | None) -> object: ...
+
 @dataclass(frozen=True)
 class LossTerm:
     value: Tensor          # scalar, UNWEIGHTED, mean over eligible rows
@@ -409,8 +413,33 @@ Rules:
 - An objective returns its **unweighted** value. Weighting is the mixer's job
   (§6). An objective that applies its own weight is a bug, because it makes the
   logged raw value incomparable across runs.
-- An objective never calls `.backward()`, never mutates state, never touches
-  parameters directly.
+- An objective never calls `.backward()`, never mutates `State`, the batch or
+  parameters, and never touches parameters directly.
+- **An objective may declare one piece of state of its own, and the framework
+  owns its lifecycle.** Most cannot: a likelihood is a function of this batch.
+  A few published mechanics are functions of the training *history* — FlexMatch's
+  per-class threshold is computed from marks accumulated over every step so far
+  (`docs/recipes/flexmatch.md` §3.1, algorithm 1) — and no arrangement of ports,
+  realisations or row populations computes one of those from a single batch. So
+  an objective may implement `StatefulObjective.initial_state(population)`; the
+  executor calls it **once per stage execution** and hands the result back
+  through `TrainContext.objective_states`, which `compute` reads via
+  `ctx.objective_state(name, kind)` and may mutate. Three consequences are the
+  reason it is shaped this way rather than as a mutable field on the objective:
+  a recipe stays an immutable declaration, two runs of one compiled recipe are
+  identical, and a paired ablation whose two arms share an objective instance
+  cannot leak one arm's history into the other. The state is not an artifact —
+  nothing checkpoints, restores or keys provenance by it (§7.1), which
+  `BACKLOG.md` §11.3 asks for explicitly until two recipes need the same
+  lifecycle. `population` is `None` for a stage fed by `ExternalBatches`, and it
+  is the objective that decides whether it can run without one. The protocol is
+  `@runtime_checkable` and declares `initial_state` alone, so `isinstance`
+  against it tests for that one member — the executor only ever asks it of
+  already-compiled objectives, which have the rest by construction. A stateful
+  objective in a `cross_fit` stage is a **compile error**: that executor slices
+  a fresh training batch per fold and has no population to build state from, and
+  whether a curriculum should reset per fold or persist across them is a
+  question for the first card that needs both.
 - An objective with an arithmetic choice that is not already visible through
   its ports, realisations, rows, reduction, schedule or card keys emits that
   choice through stable `plan_details()`. Those lines are part of the execution
@@ -480,6 +509,15 @@ stage transition: FixMatch's artificial label is a per-batch detached target,
 where §7's `PseudoLabelAction` emits an immutable side table between stages.
 Both exist because those are two different mechanisms, not two spellings of
 one.
+
+`CurriculumPseudoLabelTreatmentNLL` — FixMatch's gate with FlexMatch's
+per-class curriculum threshold in place of the constant — arrived with
+`docs/recipes/flexmatch.md`, and is a *separate* objective rather than a policy
+field on `PseudoLabelTreatmentNLL` because `BACKLOG.md` §15.2 asks for the first
+two consumers of a mechanism to be local and explicit. It is also the only
+objective so far that declares `StatefulObjective`: `T_t(c)` is a function of
+marks accumulated over every step, which no arrangement of ports, realisations
+or row populations computes from one batch.
 
 `InfoNCEContrastive` is the second, and arrived with `docs/recipes/scarf.md`.
 It is the first objective whose per-row value depends on the *other* rows of
@@ -1345,9 +1383,9 @@ that renaming should trigger.
 | `distributed` | Distributed training | a single recipe stops fitting in one process | — |
 | `out-of-core-data` | Streaming or larger-than-memory sources: a `Dataset` is one in-memory row table (§7.3) | a card's dataset does not fit in one process. The loader takes the whole population and splits it, so the boundary is memory rather than API — a chunked source would change what `TrainingPopulation.fitted_on_row_ids` can even mean, since a statistic fitted over chunks is not fitted over rows anyone can name | — |
 | `stateful-sampler` | A sampler whose behaviour depends on training state: curriculum sampling, hard-negative mining, active-learning acquisition (`BACKLOG.md` §3.3, §13) | a card's §4 states a sampling rule that reads the model. Deliberately refused when the loader was built rather than left unconsidered: it would make the data stream a function of the model and destroy the property every paired ablation in this repository rests on — that two recipes differing only in an objective weight draw identical rows (`tests/invariants/test_loading.py`). That is a real cost and it should be paid by the card that needs it, knowingly | — |
-| `batch-row-repetition` | A batch holding one row more than once, and with it a labelled quota larger than its own population | a card's §4 states a labelled batch size exceeding the labelled rows available, which FixMatch's smallest CIFAR-10 setting does exactly — `B = 64` against 40 labels in total, filled by iterating the labelled set as a repeating shuffle. `XTYBatch.row_id` must be unique because artifacts and provenance are keyed by it (§7.1), so a repeated row is unrepresentable and the scarcest budget expressible is `B` itself. Load-bearing vocabulary under §11.2 — the batch contract is what every objective, artifact and row population is written against — so a named second consumer comes before the shape: PAWS's support set (`BACKLOG.md` §2.10) draws `k` rows per class from the same labelled pool and meets the same wall | `fixmatch` §5.12; `doublematch` §5.7 |
+| `batch-row-repetition` | A batch holding one row more than once, and with it a labelled quota larger than its own population | a card's §4 states a labelled batch size exceeding the labelled rows available, which FixMatch's smallest CIFAR-10 setting does exactly — `B = 64` against 40 labels in total, filled by iterating the labelled set as a repeating shuffle. `XTYBatch.row_id` must be unique because artifacts and provenance are keyed by it (§7.1), so a repeated row is unrepresentable and the scarcest budget expressible is `B` itself. Load-bearing vocabulary under §11.2 — the batch contract is what every objective, artifact and row population is written against — so a named second consumer comes before the shape: PAWS's support set (`BACKLOG.md` §2.10) draws `k` rows per class from the same labelled pool and meets the same wall | `fixmatch` §5.12; `doublematch` §5.7; `flexmatch` §5.8 |
 | `lr-schedules` | LR schedules beyond `Constant`, `Ramp`, `SigmoidRamp`, `CosineDecay`, `Step` and `ExponentialDecay` (one-cycle, warm restarts) | a card names one. The rate is a schedule multiplier, so a new type serves both loss weights and the LR; `ExponentialDecay` entered with TARNet, `SigmoidRamp` with Mean Teacher and `CosineDecay` with FixMatch, the first real cards that name them | — |
-| `augmentation-vocabulary` | A tabular augmentation vocabulary with tunable per-operation magnitudes, and any adaptive controller over it | a set of tabular operations exists whose magnitudes are worth learning over. `FeatureMask` has one scalar and `BoundedJitter` one more, so the controller has nothing to control; SCARF corruption, SubTab feature subsets and VIME masking were the `BACKLOG.md` candidates, and `scarf` has since built the first of the three — `FeatureCorruption`, which carries one scalar of its own. Three operations with one magnitude each is still not a vocabulary worth learning over, so the row stands and the prerequisite is now two thirds outstanding rather than three. Genuinely blocked on prerequisites rather than on consumer count | `fixmatch` §5.10; `doublematch` §5.6 |
+| `augmentation-vocabulary` | A tabular augmentation vocabulary with tunable per-operation magnitudes, and any adaptive controller over it | a set of tabular operations exists whose magnitudes are worth learning over. `FeatureMask` has one scalar and `BoundedJitter` one more, so the controller has nothing to control; SCARF corruption, SubTab feature subsets and VIME masking were the `BACKLOG.md` candidates, and `scarf` has since built the first of the three — `FeatureCorruption`, which carries one scalar of its own. Three operations with one magnitude each is still not a vocabulary worth learning over, so the row stands and the prerequisite is now two thirds outstanding rather than three. Genuinely blocked on prerequisites rather than on consumer count | `fixmatch` §5.10; `doublematch` §5.6; `flexmatch` §5.7 |
 | `staged-gate` | Confidence gating / soft labels on the staged `PseudoLabelAction` path | a reviewed card whose §4 names a `losses.confidence_threshold` on a *staged writeback*. The objective path has had a gate since `fixmatch`, and §11.3 records what asking the question here settled: `cycle_dual` §5.6 is a judgement, because neither of its papers states a gate and its §4 marks the key `n/a`. Nothing is paying for this one | — |
 | `repeated-cross-fitting` | Repeated sample splitting: a second, third, … fold assignment over the same rows, and an aggregation across them | the executor can carry more than one partition. `Dataset.assignments` is a mapping of named subsets rather than one `split` field precisely so that a second partition has somewhere to live, so that half of the obstacle is gone. What remains is the half that matters: the artifact contract, the fold-disjointness check (§7.1) and checkpoint provenance are each written against one assignment, and an `XTYBatch` still carries a single `fold_id`. This is load-bearing vocabulary under §11.2, so it also wants a named second consumer before the shape is fixed; repeated-split DML and any nested cross-fitting recipe are the candidates, and neither has a card | `ssdml` §5.6 |
 | `early-stopping` | A stage that ends on a monitored validation metric rather than after a fixed `steps` count, and the held-out split it would have to watch | a card's protocol cannot be stated as a fixed step budget without changing what the method does. `Stage.steps` binds `optimisation.total_steps_or_epochs` and is `REQUIRED` (§9.1), and half of what blocked this is gone: `Dataset.assignments` is where a validation split lives now, and `tarnet` declares one. What is left is the stopping rule — a stage that ends on a monitored metric rather than a `steps` count — which is still the executor contract and load-bearing under §11.2. SimCLRv2-style staged pretraining and any early-stopped meta-learner are the `BACKLOG.md` candidates, and neither has a card. **Nothing is paying for this one**, and the way that came about is worth keeping: `scarf` §5.4 cited it as a debt in its first draft, because SCARF stops pretraining by "early stopping with patience 3 on the validation loss" and we fix 1,000 steps. Asking §11.2's questions properly turned that around — every card here fixes a project-local budget for attributability and would keep doing so with the capability in hand, which is `FIDELITY.md` §5's definition of a judgement, and `scarf` §6.2 measured four fine-tuning budgets and found its result did not turn on the choice. Same shape as `staged-gate`: the row survives because the question is real, not because a card is owed | — |

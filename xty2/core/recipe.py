@@ -243,7 +243,15 @@ class Objective(Protocol):
         distribution objects that are not generally sliceable.
 
         An objective never weights its own value, never calls `.backward()`,
-        never mutates state and never touches parameters directly.
+        never mutates `state`, the batch or parameters, and never touches
+        parameters directly.
+
+        The one thing it *may* mutate is state of its own: an objective that
+        implements `StatefulObjective.initial_state` is handed the result back
+        through `ctx.objective_states` and may write to it (`DESIGN.md` §4).
+        That state is built once per stage execution by the executor, so it is
+        a property of the run rather than of the recipe, and it is not an
+        artifact.
         """
 
 
@@ -700,6 +708,30 @@ class Stage:
                 raise CompileError(
                     f"stage {self.name!r} uses cross_fit but has no objectives "
                     "to fit in each training fold"
+                )
+            stateful = sorted(
+                weighted.name
+                for weighted in self.objectives
+                if hasattr(weighted.objective, "initial_state")
+            )
+            if stateful:
+                # `_run_cross_fit` slices a fresh training batch per fold and
+                # calls `_run_stage` without a `TrainingPopulation`, so an
+                # objective that needs one to build its state would raise at the
+                # first step of the first fold. Rejected here instead: the
+                # executor is declared on the stage, so the compiler can see it,
+                # and `DESIGN.md` §8 wants this class of failure at compile time
+                # with the reason attached (`flexmatch.md` §5.1).
+                raise CompileError(
+                    f"stage {self.name!r} uses cross_fit and holds the stateful "
+                    f"objective(s) {stateful!r}. Per-stage objective state is "
+                    "built from the stage's TrainingPopulation (DESIGN.md §4), "
+                    "and the cross-fit executor draws a fresh training slice "
+                    "per fold without one — there is no population for "
+                    "`initial_state` to count `N` over, and no reviewed answer "
+                    "yet to whether the state should reset per fold or persist "
+                    "across them. A card that needs both takes that question "
+                    "first."
                 )
         if (
             is_pseudo

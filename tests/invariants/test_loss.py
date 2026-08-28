@@ -28,7 +28,10 @@ from xty2.core import (
     PortContractError,
     PortValue,
     Ramp,
+    Realisation,
     State,
+    StatefulObjective,
+    TrainContext,
     Weighted,
     XTYBatch,
     apply_reduction,
@@ -38,7 +41,11 @@ from xty2.core import (
     treatment_at,
     treatment_distribution,
 )
-from xty2.objectives import ObservedOutcomeNLL
+from xty2.objectives import (
+    CurriculumPseudoLabelTreatmentNLL,
+    CurriculumThreshold,
+    ObservedOutcomeNLL,
+)
 
 from tests.invariants.conftest import (
     BATCH_SIZE,
@@ -323,3 +330,60 @@ def test_an_objective_is_recognised_structurally(batch: XTYBatch) -> None:
     toy = ToyObjective(name="toy", requires=frozenset({(Port.X_REPR, DEFAULT)}))
     assert Weighted(toy, weight=1.0, reduction="mean").objective is toy
     del batch
+
+
+# ---------------------------------------------------------------------------
+# Per-stage objective state (`DESIGN.md` §4, `StatefulObjective`)
+# ---------------------------------------------------------------------------
+
+
+def test_a_context_carries_no_objective_state_unless_one_is_given() -> None:
+    """The default that keeps every existing objective and test unchanged."""
+    context = TrainContext(global_step=0, schema=make_schema())
+    assert dict(context.objective_states) == {}
+
+
+def test_objective_state_is_narrowed_at_the_read_rather_than_cast() -> None:
+    class _Marks:
+        pass
+
+    marks = _Marks()
+    context = TrainContext(
+        global_step=0, schema=make_schema(), objective_states={"gate": marks}
+    )
+    assert context.objective_state("gate", _Marks) is marks
+    with pytest.raises(LossError, match="expected list state"):
+        context.objective_state("gate", list)
+
+
+def test_an_objective_asking_for_state_the_stage_has_none_of_is_told_so() -> None:
+    """A `KeyError` inside a loss would name the lookup, not the declaration."""
+    context = TrainContext(global_step=0, schema=make_schema(), stage="fit")
+    with pytest.raises(LossError, match="asked for per-stage state"):
+        context.objective_state("gate", list)
+
+
+def test_the_state_mapping_cannot_be_written_through() -> None:
+    """A run's state belongs to the run; a loss must not add to the mapping."""
+    given = {"gate": [1]}
+    context = TrainContext(global_step=0, schema=make_schema(), objective_states=given)
+    given["other"] = [2]
+    assert set(context.objective_states) == {"gate"}
+    with pytest.raises(TypeError):
+        context.objective_states["other"] = [3]  # type: ignore[index]
+
+
+def test_an_ordinary_objective_does_not_satisfy_the_stateful_protocol() -> None:
+    """Opt-in, so no existing stage grows a code path (`DESIGN.md` §4)."""
+    assert not isinstance(ObservedOutcomeNLL(), StatefulObjective)
+    assert isinstance(
+        CurriculumPseudoLabelTreatmentNLL(
+            port=Port.T_GIVEN_X,
+            target=Realisation(view="weak_x"),
+            prediction=Realisation(view="strong_x"),
+            threshold=CurriculumThreshold(tau=0.95, warm_up=True, mapping="convex"),
+            sharpening="hard",
+            stop_grad="target",
+        ),
+        StatefulObjective,
+    )

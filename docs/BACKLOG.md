@@ -157,6 +157,23 @@ whole batch to one direction inside ten steps at every `w_s` from 0.5 to 0.01
 only the normalisation does not, which is what the first version of that card
 got wrong and an adversarial review caught.
 
+**Step 4's neighbourhood has now been visited too, out of order and
+deliberately.** `flexmatch` is not step 4 - ReMixMatch is - but it is the
+cheapest available test of the same architectural claim the sequence was built
+to probe, because Curriculum Pseudo Labeling changes exactly one thing about
+`fixmatch` and that one thing needs a mechanic the framework did not have: a
+quantity accumulated across steps. §2.5 records what it cost (one objective, one
+framework concept, no new card key) and what it found.
+
+Its most transferable result is not about CPL at all. **A recipe with an
+ungated phase is an instrument for measuring whether the project's strong view
+is any good, and every recipe before it was blind to that.** `fixmatch`'s strong
+view flips the Bayes-optimal label on one row in six; three recipes shipped on
+it without noticing, because a confidence gate holds the term inert until the
+noticing would matter. The check is training-free and cheap - the Bayes-optimal
+label-flip rate of the view on the fixture, closed form for the project DGP -
+and every card declaring a strong view should now carry it.
+
 Two things follow for §5.1's cosine-shaped methods (SimMatch's instance
 similarity, PAWS's soft assignments, BYOL, SimSiam, and Barlow Twins by the
 same argument about its cross-correlation). Any of them meets this the moment
@@ -286,6 +303,71 @@ cross-entropy. Its descendants then modify or add mechanisms around that core:
 
 - **FlexMatch** — class-specific curriculum thresholds based on learning
   progress.
+
+  > **Implemented.** `docs/recipes/flexmatch.md` and
+  > `xty2/recipes/flexmatch.py`. It cost **one objective**
+  > (`CurriculumPseudoLabelTreatmentNLL`, with its `CurriculumThreshold` policy
+  > and `CurriculumStatus` state) and **one framework concept**: objective state
+  > with a stage lifecycle (`StatefulObjective`,
+  > `TrainContext.objective_states`), taken in the load-bearing quadrant with
+  > FreeMatch named as the second consumer and its shape checked against it
+  > (card §5.1). No new card key — the gate rule is one value bound to
+  > `losses.confidence_threshold` — no new port, view, schedule, row population
+  > or executor. §15.2's instruction was followed to the letter: the mechanism
+  > is local and explicit, a *separate* objective rather than a policy union on
+  > `PseudoLabelTreatmentNLL`, and the duplicated arg-max/mask/mean arithmetic
+  > is the price §15.2 asks for until FreeMatch shows the shape.
+  >
+  > **Not reproduced — `draft`, no Tier 2 runner — and the way it first failed
+  > is the more useful half anyway.** Be precise about the evidence, because
+  > this entry is what the next agent reads to decide what is settled.
+  > `flexmatch.md` §6.2 measures **one** of §6's five tolerance clauses, at
+  > **five** of the declared ten seeds, from a script: a paired EMA ratio of
+  > 0.977 +/- 0.014 against a constant-gate arm, ahead on four of five, with the
+  > curriculum engaging on all five (first mark between steps 32 and 76, `T(c)`
+  > reaching `tau`). The trained-parameter ratio, mask rate, impurity and
+  > outcome NLL are unmeasured. That is enough to say the mechanism runs and
+  > points the right way; it is not enough to say the method reproduces, and
+  > `CLAUDE.md`'s standing rule is that only a Tier 2 result sets `reproduced`.
+  > It also does *not* establish that the per-class half of CPL earns the ratio:
+  > with `K = 2` both classes reach `beta = 1` together, and the
+  > class-imbalanced probe in §6.3 is a null with error bars an order of
+  > magnitude wider. Anyone wanting that question answered needs a fixture with
+  > more treatment levels, which is the one thing this section's K = 2 project
+  > DGP cannot supply at any seed count.
+  >
+  > Getting even the paired result required fixing a mechanic this backlog entry
+  > should flag for every descendant below.
+  >
+  > **A gated method hides a strong view that is not label-preserving; an
+  > ungated phase does not.** FixMatch §2.3 asks a strong augmentation to be
+  > severe *and* label-preserving, and `fixmatch`'s tabular analogue - a 10%
+  > mask followed by a 50% one, an effective 0.55 over six columns of which
+  > four carry the signal - flips the *Bayes-optimal* label on 16.8% of rows.
+  > `fixmatch` scores the same at 0.55 as at 0.28 across five seeds, because
+  > its constant gate holds eq. (4) inert until the model is already confident.
+  > FlexMatch has no such protection: its thresholds start at zero, so eq. (8)
+  > is ungated until some row clears `tau`, and a strong view whose one-hot
+  > target is unattainable pins the propensity below `tau` for good. At 0.55
+  > that happened on **three initialisation seeds of five**; at the 0.2 that
+  > clears a stated label-preservation criterion, on none.
+  >
+  > Three things follow for the rest of this section. **The strong view is a
+  > hyperparameter of the *fixture*, not of the recipe, and it needs a
+  > training-free check** - the Bayes-optimal label-flip rate under the view,
+  > which `flexmatch.md` §5.2 computes in closed form for the project DGP and
+  > Tier 0 recomputes. Any descendant that opens the gate early - SoftMatch's
+  > continuous weights at low confidence, FreeMatch's self-adaptive `tau` in
+  > its own warm-up, Dash's decaying threshold - is exposed to the same trap and
+  > should run that check first. **Watch the labelled cross-entropy, not only
+  > the unlabelled one**: in the trapped runs eq. (10) stayed flat above `log 2`
+  > for 3,000 steps, which is a louder signal than any coverage number. And
+  > **one seed is not a measurement of a warm-up**: the first draft of that card
+  > reported a single initialisation draw as a property of the method, and it
+  > was not even a property of the seed set - `doublematch.md` §6.2 had already
+  > recorded the same lesson about initialisation draws and this card had to
+  > learn it twice.
+
 - **FreeMatch** — self-adaptive global and class-specific thresholds plus
   fairness/class-balancing regularisation.
 - **SoftMatch** — continuous confidence weighting rather than a binary gate,

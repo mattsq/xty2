@@ -22,6 +22,37 @@ This file is the short version of the rules those documents make binding.
    the reviewer diffs it against the card's §3 mapping table and §4 checklist.
    That diff is the review.
 
+## Paper reproduction
+
+These govern the gap between what a paper says and what the code does. They are
+the rules the four above exist to serve.
+
+- **Reproduce before simplifying.** An unexplained omission is a bug, not an
+  abstraction. If you cannot say which sentence of the paper a piece of your
+  implementation comes from, that is the piece to look at first.
+- **The paper and its reference code are the source of truth, and every
+  departure is recorded** in card §5 with its kind (`docs/FIDELITY.md` §5).
+  Where the two disagree, say which one you followed and why.
+- **Keep faithful reproduction separate from framework-native adaptation.** A
+  tabular analogue of an image mechanic is a `judgement` in §5, written as one —
+  not folded into the mapping table as though the paper had said it.
+- **A negative result is an implementation failure until you have shown it is
+  not.** "The mechanism does not help here" is the single easiest wrong
+  conclusion to reach in this repository, and the most expensive: it gets
+  written into a card, asserted in a test, and read by the next agent as
+  settled.
+- **Before declaring a mechanism ineffective, audit it component by component
+  against the source** — every equation, every hyperparameter, every view, and
+  every choice you inherited from a neighbouring recipe rather than derived.
+  Inherited choices are the ones to distrust: nobody checked them against *this*
+  paper. Then check that the result survives more than one seed.
+  `docs/recipes/flexmatch.md` §5.2 and §6.2 are the worked example — a strong
+  view inherited without checking it against the requirement its own paper
+  states, and a single initialisation draw reported as a property of the method.
+- **If you are unsure whether a component matters, implement it and ablate it
+  later.** Guessing that it does not is how mechanics go missing; the ablation
+  is cheap and it produces a number the card can carry.
+
 ## Layout
 
 ```
@@ -52,6 +83,16 @@ uv run pytest -m tier0                       # same set, selected by marker
 uv run ruff check . && uv run ruff format .
 uv run mypy --strict
 ```
+
+## Editing
+
+Prefer the native file tools — read a file with the read tool, change it with
+the edit tool. Reach for a shell heredoc, `sed`, or a throwaway Python script
+only when it is genuinely cheaper: the same mechanical substitution across many
+files, or content that has to be generated rather than typed. A Python
+`Path.read_text` / `replace` / `write_text` round trip to change one block costs
+more tokens than the edit it performs, and it fails silently when the anchor
+text has drifted — where the edit tool errors and tells you.
 
 ## Standing rules
 

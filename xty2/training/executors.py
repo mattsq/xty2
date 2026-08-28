@@ -49,7 +49,7 @@ from xty2.core.compile import CompiledRun, CompiledStage
 from xty2.core.data import Dataset, ExternalBatches, TrainingPopulation
 from xty2.core.errors import ArtifactError, TrainingError
 from xty2.core.graph import ComponentGraph
-from xty2.core.loss import TrainContext, treatment_distribution
+from xty2.core.loss import StatefulObjective, TrainContext, treatment_distribution
 from xty2.core.recipe import ArrayFitAction, PseudoLabelAction
 from xty2.core.rows import resolve_rows
 from xty2.training.artifacts import Checkpoint, PseudoLabels, RunDirectory
@@ -1277,6 +1277,37 @@ def _slice_batch(batch: XTYBatch, rows: Tensor) -> XTYBatch:
     )
 
 
+def _objective_states(
+    compiled: CompiledStage, population: TrainingPopulation | None
+) -> Mapping[str, object]:
+    """One fresh state per stateful objective of this stage (`core/loss.py`).
+
+    Empty for every stage whose objectives are all stateless, which is every
+    stage but `flexmatch`'s today — so no existing run gains a code path, and
+    no plan, digest or recorded result moves.
+
+    `initial_state` returning `None` is refused here rather than at the read.
+    An objective that declares the protocol and then hands back nothing would
+    otherwise fail inside `compute`, at the first step, with an error about the
+    lookup instead of about the declaration.
+    """
+    states: dict[str, object] = {}
+    for objective in compiled.objectives:
+        loss = objective.objective
+        if not isinstance(loss, StatefulObjective):
+            continue
+        state = loss.initial_state(population)
+        if state is None:
+            raise TrainingError(
+                f"objective {objective.name!r} declares StatefulObjective and "
+                "its initial_state returned None. A stateful objective returns "
+                "the state it will read back through TrainContext "
+                "(DESIGN.md §4)."
+            )
+        states[objective.name] = state
+    return states
+
+
 def _run_stage(
     run: CompiledRun,
     compiled: CompiledStage,
@@ -1315,6 +1346,11 @@ def _run_stage(
         optimiser = spec.build(parameters)
         tensors = [parameter for _, parameter in parameters]
         mixer = LossMixer.for_stage(compiled, probe=probe)
+        # Built here and nowhere else, which is what makes it per *execution*
+        # rather than per recipe: a stage run twice gets two fresh states, and
+        # a paired ablation whose arms share an objective instance cannot leak
+        # one arm's history into the other (`core/loss.py`, StatefulObjective).
+        objective_states = _objective_states(compiled, population)
         source = iter(batches)
         modes = {module: module.training for module in graph.modules()}
         graph.train()
@@ -1344,6 +1380,7 @@ def _run_stage(
                     rng_key=seed + step,
                     teacher=teacher,
                     population=population,
+                    objective_states=objective_states,
                 )
                 records.append(
                     StepRecord(
@@ -1422,6 +1459,7 @@ def _step(
     rng_key: int,
     teacher: EMATeacher | None,
     population: TrainingPopulation | None = None,
+    objective_states: Mapping[str, object] | None = None,
 ) -> _Stepped:
     """Forward, mix, backward, clip, step — in that order and no other."""
     state = run.state(
@@ -1431,7 +1469,12 @@ def _step(
         teacher_graph=teacher.graph if teacher is not None else None,
         population=population,
     )
-    ctx = TrainContext(global_step=step, schema=run.recipe.schema, stage=compiled.name)
+    ctx = TrainContext(
+        global_step=step,
+        schema=run.recipe.schema,
+        stage=compiled.name,
+        objective_states=objective_states or {},
+    )
     mixed = mixer.mix(state, batch, ctx, parameters=tensors)
     optimiser.zero_grad(set_to_none=True)
     grad_norm = 0.0
