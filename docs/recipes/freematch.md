@@ -681,11 +681,12 @@ than that effect. So this is a bound, not merely a failure to detect one.
 
 The diagnostic says why, and it is exactly §2's third limitation: the terminal
 marginal entropy of the retained rows' predictions is **0.6919 ± 0.0006**
-against a maximum of `log 2 = 0.6931`. `B` is uniform to two parts in a
-thousand, which is the minimum of `H(A, B)` when `A` is uniform too — the term
-sits at its own floor for the whole run and has no gradient to contribute. On a
-near-balanced two-class fixture a term that pushes the predicted marginal
-towards uniformity has nothing to push.
+against a maximum of `log 2 = 0.6931` — a deficit of 0.0012 nats, which for
+two classes puts the marginal within about 0.025 of even. `H(A, B)` with `A`
+uniform is minimised at exactly that point, so the term sits within a thousandth
+of its own floor for the whole run and the gradient it has to contribute is the
+gradient of a loss at its minimum. On a near-balanced two-class fixture a term
+that pushes the predicted marginal towards uniformity has nothing to push.
 
 **Which means this fixture cannot settle deviation 7, and saying so is the
 point of having run the `literal` arm.** The two signs differ by −0.0001 and
