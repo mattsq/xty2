@@ -14,14 +14,15 @@ second is also the first whose state a *sibling* objective in the same stage
 reads: `SelfAdaptiveFairness` names it, because FreeMatch's eq. (8) and eq. (11)
 are two weighted terms over one set of statistics.
 
-Ten objectives exist so far: the three likelihood terms the first recipe
+Twelve objectives exist so far: the three likelihood terms the first recipe
 needs (P3, P5), the view-keyed ``ConsistencyLoss`` (P6), the confidence-gated
 ``PseudoLabelTreatmentNLL`` that FixMatch is assembled from, the
 ``InfoNCEContrastive`` that SCARF is, the ``CosineFeatureConsistency``
 DoubleMatch adds to FixMatch, the ``CurriculumPseudoLabelTreatmentNLL``
 FlexMatch replaces FixMatch's gate with, and the
 ``SelfAdaptiveThresholdTreatmentNLL`` / ``SelfAdaptiveFairness`` pair FreeMatch
-is. The rest arrive with the recipes that consume them; migration is lazy by
+is, and PAWS's support-set consistency and me-max terms. The rest arrive with
+the recipes that consume them; migration is lazy by
 design (§11).
 """
 
@@ -62,6 +63,12 @@ from xty2.objectives.pseudo_label import (
     Sharpening,
 )
 from xty2.objectives.supervised import ObservedOutcomeNLL, ObservedTreatmentNLL
+from xty2.objectives.support_set import (
+    MeanEntropyMaximisation,
+    SupportSetClassifier,
+    SupportSetPseudoLabelConsistency,
+    TargetRole,
+)
 
 __all__ = [
     "CONSISTENCY_DIVERGENCES",
@@ -79,6 +86,7 @@ __all__ = [
     "FeatureStopGrad",
     "GradPath",
     "InfoNCEContrastive",
+    "MeanEntropyMaximisation",
     "MissingTreatmentMarginalNLL",
     "ObservedOutcomeNLL",
     "ObservedTreatmentNLL",
@@ -90,4 +98,7 @@ __all__ = [
     "SelfAdaptiveThresholds",
     "Sharpening",
     "StopGrad",
+    "SupportSetClassifier",
+    "SupportSetPseudoLabelConsistency",
+    "TargetRole",
 ]

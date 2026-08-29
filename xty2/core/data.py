@@ -483,6 +483,13 @@ class QuotaSampler:
         """`optimisation.batch_size` — derived, so it cannot be misdeclared."""
         return sum(quota.size for quota in self.quotas)
 
+    def resolved_batch_size(self, treatment_cardinality: int) -> int:
+        """Batch size after resolving each stratified quota's `K` levels."""
+        return sum(
+            quota.size * (treatment_cardinality if quota.stratify == "t" else 1)
+            for quota in self.quotas
+        )
+
     @property
     def labelled_unlabelled_ratio(self) -> float | None:
         """`optimisation.labelled_unlabelled_ratio` — derived from the quotas.
@@ -497,9 +504,35 @@ class QuotaSampler:
             return None
         return unlabelled / labelled
 
-    def describe_lines(self) -> tuple[str, ...]:
-        ratio = self.labelled_unlabelled_ratio
-        head = f"quota, batch_size={self.batch_size}, without replacement"
+    def resolved_labelled_unlabelled_ratio(
+        self, treatment_cardinality: int
+    ) -> float | None:
+        """Label ratio after resolving stratified quotas against schema `K`."""
+        sizes = {
+            quota.rows: quota.size
+            * (treatment_cardinality if quota.stratify == "t" else 1)
+            for quota in self.quotas
+        }
+        labelled = sizes.get("t_observed")
+        unlabelled = sizes.get("t_missing")
+        if labelled is None or unlabelled is None:
+            return None
+        return unlabelled / labelled
+
+    def describe_lines(
+        self, *, treatment_cardinality: int | None = None
+    ) -> tuple[str, ...]:
+        batch_size = (
+            self.batch_size
+            if treatment_cardinality is None
+            else self.resolved_batch_size(treatment_cardinality)
+        )
+        ratio = (
+            self.labelled_unlabelled_ratio
+            if treatment_cardinality is None
+            else self.resolved_labelled_unlabelled_ratio(treatment_cardinality)
+        )
+        head = f"quota, batch_size={batch_size}, without replacement"
         if ratio is not None:
             head += f", mu={ratio:g}"
         return (head, *(f"  {quota.describe()}" for quota in self.quotas))
@@ -514,10 +547,12 @@ SamplerSpec: TypeAlias = "UniformSampler | QuotaSampler | ExternalBatches"
 SAMPLERS: tuple[type, ...] = (UniformSampler, QuotaSampler, ExternalBatches)
 
 
-def sampler_lines(sampler: SamplerSpec) -> tuple[str, ...]:
+def sampler_lines(
+    sampler: SamplerSpec, *, treatment_cardinality: int | None = None
+) -> tuple[str, ...]:
     """The plan's `sampler` lines for any declared sampler."""
     if isinstance(sampler, QuotaSampler):
-        return sampler.describe_lines()
+        return sampler.describe_lines(treatment_cardinality=treatment_cardinality)
     return (sampler.describe(),)
 
 

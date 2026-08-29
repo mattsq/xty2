@@ -25,6 +25,7 @@ from xty2.core import (
     Schedule,
     SigmoidRamp,
     Step,
+    WarmupCosine,
     Xty2Error,
     as_schedule,
 )
@@ -153,6 +154,44 @@ def test_cosine_decay_describes_its_formula_stably() -> None:
     assert CosineDecay(steps=3_000, phase=7 / 16).describe() == (
         "cosine 1.0 * cos(pi * 0.4375 * min(step/3000, 1))"
     )
+
+
+# ---------------------------------------------------------------------------
+# PAWS warm-up followed by cosine decay
+# ---------------------------------------------------------------------------
+
+
+def test_warmup_cosine_has_both_exact_boundaries() -> None:
+    schedule = WarmupCosine(start=0.25, final=0.01, warmup=20, steps=100)
+    assert schedule(0) == 0.25
+    assert schedule(10) == pytest.approx(0.625)
+    assert schedule(20) == 1.0
+    assert schedule(60) == pytest.approx(0.505)
+    assert schedule(100) == pytest.approx(0.01)
+    assert schedule(10_000) == pytest.approx(0.01)
+    assert schedule.nominal == 0.01
+
+
+def test_warmup_cosine_description_is_the_review_surface() -> None:
+    schedule = WarmupCosine(start=0.25, final=0.01, warmup=17, steps=1_000)
+    assert schedule.describe() == (
+        "warmup cosine 0.25 -> 1.0 over 17 steps, then cosine -> 0.01 at 1000 steps"
+    )
+
+
+@pytest.mark.parametrize(
+    ("warmup", "steps"), [(0, 100), (-1, 100), (10, 10), (10, 9), (1.5, 10)]
+)
+def test_warmup_cosine_requires_a_real_warmup_and_decay_phase(
+    warmup: object, steps: int
+) -> None:
+    with pytest.raises(Xty2Error, match="WarmupCosine"):
+        WarmupCosine(
+            start=0.25,
+            final=0.01,
+            warmup=warmup,  # type: ignore[arg-type]
+            steps=steps,
+        )
 
 
 @pytest.mark.parametrize("phase", [0.0, -0.1, 0.75, 1.0])

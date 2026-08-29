@@ -15,6 +15,7 @@ its evidence. The status line inside each card is authoritative.
 | [`doublematch.md`](recipes/doublematch.md) | `doublematch` | FixMatch plus representation consistency |
 | [`flexmatch.md`](recipes/flexmatch.md) | `flexmatch` | stateful class-adaptive confidence thresholds |
 | [`freematch.md`](recipes/freematch.md) | `freematch` | shared self-adaptive thresholds and fairness |
+| [`paws.md`](recipes/paws.md) | `paws` | class-stratified support sets and non-parametric soft pseudo-labels |
 
 Use [`_TEMPLATE.md`](recipes/_TEMPLATE.md) for a new method and stop for review
 before implementation.
