@@ -606,6 +606,22 @@ cards' primary numbers are directly comparable.
 | `literal` | this recipe with `w_f = -0.05` | eq. (11) exactly as printed; deviation 7's alternative, expressible with no code change |
 | `amplified` | this recipe with `w_f = +1.0` | the same term at twenty times the paper's weight |
 | `amplified_literal` | this recipe with `w_f = -1.0` | eq. (11) as printed, likewise amplified |
+| `matched` | eq. (8) replaced by eq. (4) at the constant `tau` that fixture's `sat` arm converged to — 0.92 / 0.83 / 0.84 / 0.78 for primary / `k4` / `k4_skewed` / `k4_adjacent` | whether the win is adaptivity or the threshold *level* it settles on |
+
+The `matched` arm is the one §6.2 and §6.4 both name as outstanding, and its
+`tau` is chosen **after** seeing the SAT arms rather than before. That is
+deliberate and it is stated rather than hidden: the point of the arm is to give
+the rival hypothesis — "a self-adaptive threshold is just a roundabout way of
+arriving at a lower constant" — its strongest possible form, which means handing
+it the exact number SAT converged to. A `tau` picked in advance would be a
+weaker opponent, not a fairer one. Nothing else about the arm is post-hoc, and
+it is compared against arms that were declared before anything ran.
+
+How to read it, fixed before the run. If `matched` lands on `sat`, the whole
+effect is the threshold level and "self-adaptive" is a way of finding a number
+that could have been tuned. If `sat` still beats `matched`, what is left is the
+two things a constant cannot reproduce — the *trajectory* from `1/K` upwards,
+and eq. (7)'s per-class spread — and the per-class held-out NLL says which.
 
 The last two arms are §6.4's, not §6's, and they exist because of an asymmetry
 in the two readings rather than to tune anything. Deviation 7's sign is bounded
