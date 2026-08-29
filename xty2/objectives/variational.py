@@ -30,8 +30,8 @@ class VariationalTreatmentELBO:
 
     The candidate treatments come from the schema, never from ``batch.t``.
     Nothing is detached: the term trains the propensity, outcome head and
-    outcome-aware posterior together. ``torch.xlogy`` gives the entropy its
-    exact limiting value ``0 * log(0) = 0``.
+    outcome-aware posterior together. Exact zero mass is masked before the
+    entropy multiplication, giving the limiting value ``0 * log(0) = 0``.
     """
 
     name: str = "variational_treatment_elbo"
@@ -74,8 +74,10 @@ class VariationalTreatmentELBO:
 
         log_pt = propensity.log_prob(candidates)
         log_py = outcome.log_prob(batch.y, candidates)
+        log_q = posterior.log_prob(candidates)
         q = posterior.probs
-        per_row = (q * (-log_pt - log_py) + torch.xlogy(q, q)).sum(dim=-1)
+        safe_log_q = torch.where(q > 0, log_q, torch.zeros_like(log_q))
+        per_row = (q * (-log_pt - log_py + safe_log_q)).sum(dim=-1)
         exact_per_row = -torch.logsumexp(log_pt + log_py, dim=-1)
         exact = reduce_rows(exact_per_row, rows)
         gap = reduce_rows(per_row - exact_per_row, rows)
