@@ -513,7 +513,7 @@ judgement explaining why the choice survives the capability.
 | `distributed` | distributed training | one required recipe no longer fits one process | — |
 | `out-of-core-data` | streaming or larger-than-memory datasets | a card's dataset does not fit in memory | — |
 | `stateful-sampler` | sampling driven by model or training state | a card states curriculum sampling, hard-negative mining, or acquisition | — |
-| `batch-row-repetition` | repeated `row_id` values inside one batch | a faithful protocol requires a quota larger than its source population and the shape is checked against PAWS-style support sampling | `fixmatch` §5.12; `doublematch` §5.7; `flexmatch` §5.8; `freematch` §5.9 |
+| `batch-row-repetition` | repeated `row_id` values inside one batch | a faithful protocol requires a quota larger than its source population and the shape is checked against PAWS-style support sampling — `paws` §5.1 now supplies that check | `fixmatch` §5.12; `doublematch` §5.7; `flexmatch` §5.8; `freematch` §5.9; `paws` §5.3 |
 | `lr-schedules` | schedule families beyond the implemented types | a reviewed card names one | — |
 | `augmentation-vocabulary` | a shared augmentation vocabulary and adaptive controller | multiple useful operations and magnitudes exist | `fixmatch` §5.10; `doublematch` §5.6; `flexmatch` §5.7; `freematch` §5.8 |
 | `staged-gate` | confidence gating on staged pseudo-label writeback | a reviewed staged method names the gate | — |

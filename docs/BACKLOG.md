@@ -33,10 +33,10 @@ Git retains the exploratory chronology removed from this active queue.
 | Variational latent treatment | uses q(t\|x,y), p(t\|x), and p(y\|x,t) together | ELBO composition |
 | Explicit treatment-observation model | promotes label availability to a statistical variable | missingness semantics |
 
-Already present: SCARF is deviating, FixMatch is reproduced, and DoubleMatch,
-FlexMatch, and FreeMatch are drafts. Read their cards before proposing a close
-relative; their active ledgers supersede the historical notes once carried
-here.
+Already present: SCARF is deviating, FixMatch is reproduced, DoubleMatch,
+FlexMatch, and FreeMatch are drafts, and PAWS is a card awaiting review. Read
+their cards before proposing a close relative; their active ledgers supersede
+the historical notes once carried here.
 
 ### Recommended stress-test sequence
 
@@ -121,7 +121,9 @@ before code.
 
 PAWS builds soft assignments from labelled support representations. Its sampler
 should be expressible as a stratified Quota beside an unlabelled quota; this is
-why QuotaSampler is generic rather than labelled/unlabelled-specific.
+why QuotaSampler is generic rather than labelled/unlabelled-specific. Drafted:
+`docs/recipes/paws.md` confirms the sampler shape and supplies the
+`batch-row-repetition` check the ledger asked PAWS for.
 
 ### 2.11 Meta Pseudo Labels + UDA ★
 
