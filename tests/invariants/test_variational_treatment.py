@@ -7,9 +7,9 @@ import math
 from dataclasses import replace
 from pathlib import Path
 
-import pytest
 import torch
 from torch import Tensor
+from xty2.components import CategoricalPosterior
 from xty2.core import (
     DEFAULT,
     CategoricalTreatment,
@@ -19,6 +19,8 @@ from xty2.core import (
     Program,
     State,
     TrainContext,
+    TreatmentDistribution,
+    XTYBatch,
     compile,
 )
 from xty2.core.rows import resolve_rows
@@ -33,7 +35,12 @@ from xty2.recipes.variational_treatment import (
     VARIATIONAL_TREATMENT_STEPS,
 )
 
-from tests.invariants.conftest import BATCH_SIZE, NUM_TREATMENTS, make_batch, make_schema
+from tests.invariants.conftest import (
+    BATCH_SIZE,
+    NUM_TREATMENTS,
+    make_batch,
+    make_schema,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -61,7 +68,7 @@ def _state(
     propensity_logits: Tensor | None = None,
     outcome_loc: Tensor | None = None,
     posterior_logits: Tensor | None = None,
-    posterior: object | None = None,
+    posterior: TreatmentDistribution | None = None,
 ) -> State:
     propensity_logits = (
         torch.randn(BATCH_SIZE, NUM_TREATMENTS, dtype=torch.float64)
@@ -78,7 +85,7 @@ def _state(
         if posterior_logits is None
         else posterior_logits
     )
-    posterior_value = (
+    posterior_value: TreatmentDistribution = (
         CategoricalTreatment(posterior_logits) if posterior is None else posterior
     )
     return State(
@@ -95,15 +102,14 @@ def _state(
     )
 
 
-def _terms(state: State, batch: object) -> tuple[Tensor, Tensor]:
-    assert hasattr(batch, "t_missing")
-    rows = resolve_rows(batch, "t_missing")  # type: ignore[arg-type]
+def _terms(state: State, batch: XTYBatch) -> tuple[Tensor, Tensor]:
+    rows = resolve_rows(batch, "t_missing")
     context = TrainContext(0, make_schema())
     variational = VariationalTreatmentELBO().compute(
-        state, batch, rows, context  # type: ignore[arg-type]
+        state, batch, rows, context
     ).value
     exact = MissingTreatmentMarginalNLL(grad_path="both").compute(
-        state, batch, rows, context  # type: ignore[arg-type]
+        state, batch, rows, context
     ).value
     return variational, exact
 
@@ -158,7 +164,11 @@ def test_the_bound_is_tight_when_q_is_the_exact_posterior() -> None:
 def test_uniform_q_contributes_exactly_negative_log_k_entropy() -> None:
     torch.manual_seed(14)
     batch = make_batch(y=torch.randn(BATCH_SIZE, dtype=torch.float64))
-    state = _state(posterior_logits=torch.zeros(BATCH_SIZE, NUM_TREATMENTS, dtype=torch.float64))
+    state = _state(
+        posterior_logits=torch.zeros(
+            BATCH_SIZE, NUM_TREATMENTS, dtype=torch.float64
+        )
+    )
     rows = resolve_rows(batch, "t_missing")
     value = VariationalTreatmentELBO().compute(
         state, batch, rows, TrainContext(0, make_schema())
@@ -195,7 +205,7 @@ def test_one_hot_q_reduces_to_the_selected_complete_case_term() -> None:
         -propensity.log_prob(candidates) - outcome.log_prob(batch.y, candidates)
     )[:, selected]
     torch.testing.assert_close(value, selected_loss.index_select(0, rows).mean())
-    assert torch.isfinite(value)
+    assert bool(torch.isfinite(value))
 
 
 def test_gradients_reach_propensity_outcome_and_posterior() -> None:
@@ -308,9 +318,10 @@ def test_plan_matches_the_reviewed_card_and_shared_data_bindings() -> None:
     assert POSTERIOR_WIDTHS == (300,)
     assert OBSERVED_PER_BATCH + MISSING_PER_BATCH == 128
 
-    posterior = recipe.system.component("categorical_posterior")
-    assert posterior.standardisation == DATA_POLICY.standardisation  # type: ignore[attr-defined]
-    assert posterior.outcome_scaling == DATA_POLICY.outcome_scaling  # type: ignore[attr-defined]
+    posterior = recipe.system["categorical_posterior"]
+    assert isinstance(posterior, CategoricalPosterior)
+    assert posterior.standardisation == DATA_POLICY.standardisation
+    assert posterior.outcome_scaling == DATA_POLICY.outcome_scaling
     assert hyperparameters["data.standardisation"] == DATA_POLICY.standardisation
     assert hyperparameters["data.outcome_scaling"] == DATA_POLICY.outcome_scaling
 
