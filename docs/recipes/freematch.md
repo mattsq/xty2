@@ -451,7 +451,7 @@ stale on `flexmatch` once already.
 | 4 | `judgement` | — | Retain the P5 TARNet architecture (encoder, outcome head, propensity) rather than Wide ResNet-28-2. | Holding the causal stack fixed is what makes the SAT/SAF addition attributable, and it is `fixmatch.md` deviation 6, `flexmatch.md` deviation 4 and `mean_teacher.md` deviation 10. | The project-local result validates wiring and mechanism, not image-scale accuracy. |
 | 5 | `judgement` | — | Retain P5's `Ramp(0.0, 0.5, 1000)` on the marginal-likelihood term while both FreeMatch weights stay constant. | The ramp belongs to the reviewed P5 term, not to FreeMatch; eq. (12) states fixed `w_u` and `w_f`. | Identical to `fixmatch`'s and `flexmatch`'s arrangement, so the pair in §6 shares it. |
 | 6 | `judgement` | — | Do not adopt the two SVHN-specific techniques of §5.1: a two-epoch warm-up on labelled data only, and clamping `tau_t` to `[0.9, 0.95]`. | §5.1 introduces both for SVHN alone, as a fix for a dataset where "using a low threshold at early training stage impedes the model to cluster the unlabeled data". They are not part of the method as stated in §4, and adopting the clamp in particular would replace the mechanism this card is porting with a hand-set threshold wearing its name. | Leaves §2's first limitation live rather than patched. If the ungated warm-up turns out to be what hurts on this fixture, the clamp is the paper's own answer and a card amendment, not a silent addition. |
-| 7 | `judgement` | — | Implement eq. (11) **without its leading minus**: `L_f = H(SumNorm(p~/h~), SumNorm(\bar p/\bar h))`, minimised. | The sign as written contradicts the purpose the paper states for the term in four places (§1 "encourage the model for diverse predictions", §2's summary, §4.2 "encourage the model to make diverse predictions for each class", §6's related work on entropy maximisation inducing fairness). The arithmetic settles it: with `A` detached and `B` on the simplex, `d/dB_1 [sum_c A_c log B_c]` vanishes at `B = A` and points *away* from it either side, so minimising `-H(A, B)` drives `B` to a corner — entropy minimisation of the marginal. Minimising `+H(A, B)` has `B = A` as its minimum, which is what §4.2's sentence "encourages the expectation of the output probability for each mini-batch to be close to a marginal class distribution of the model" describes. §7 records that a reference implementation would have settled this directly and was not consulted. | Bounded either way at this weight, but opposite in direction. **The literal reading needs no code**: `w_f = -0.05` on this objective is eq. (11) exactly as printed, so §6 declares it as a third arm rather than arguing about it. |
+| 7 | `judgement` | — | Implement eq. (11) **without its leading minus**: `L_f = H(SumNorm(p~/h~), SumNorm(\bar p/\bar h))`, minimised. | The sign as written contradicts the purpose the paper states for the term in four places (§1 "encourage the model for diverse predictions", §2's summary, §4.2 "encourage the model to make diverse predictions for each class", §6's related work on entropy maximisation inducing fairness), and `+H(A, B)` has `B = A` as its minimum, which is what §4.2's "encourages the expectation of the output probability for each mini-batch to be close to a marginal class distribution of the model" describes. **§6.4 has since measured this, and the second half of the original argument is withdrawn.** That half read: `-H(A, B)` is unbounded below, so minimising it drives `B` to a corner of the simplex and must misbehave at weight. It does not. At twenty times the paper's `w_f` the printed sign moves its own objective by 0.002 — it saturates against the simplex rather than running away — while the corrected sign moves it by 0.053 and is the one that degrades the fit. The surviving reason is therefore narrower and empirical: **the corrected sign is the reading under which eq. (11) is a functioning objective at all**, where the printed one is very nearly inert. §7 records that a reference implementation would have settled this directly and was not consulted. | Small either way at the declared weight, and §6.4 quantifies it: `-0.0087 ± 0.0079` in the corrected sign's favour on `k4_adjacent`, about 1.1 standard errors, which is not a result. **The literal reading needs no code** — `w_f = -0.05` is eq. (11) exactly as printed — so §6 and §6.4 measure it rather than arguing about it. |
 | 8 | `framework-limitation` | `augmentation-vocabulary` | No adaptive augmentation and no RandAugment: the strong view's strength is a fixed scalar. | The argument is `fixmatch.md` deviation 10's and is not restated. FreeMatch adds nothing to the case either way — its contribution is the threshold and the fairness term, not the augmentation — and its §5.1 runs the same RandAugment the earlier cards already deviate from. | Removes whatever augmentation diversity buys, equally from both arms of §6's pair, so it is a limit on what the numbers describe rather than a confound within them. |
 | 9 | `framework-limitation` | `batch-row-repetition` | Set the §6 label budget to 64 rather than a scarcer regime, holding `B = 64` and `mu = 7` at the paper's values. | `XTYBatch.row_id` must be unique (`DESIGN.md` §7.1), so a labelled quota of `B` cannot be drawn from a population smaller than `B` without repeating a row, and the scarcest budget expressible is `B` itself. The alternative — lowering `B` — would deviate from a number the paper states. | This is the deviation that costs this card the most. §5.2's largest margins, and the setting §4.2 says SAF exists for ("especially under the settings where labeled data are rare"), are the 10-label and 40-label CIFAR-10 regimes. At 64 labels over `K = 2` the recipe is nowhere near barely supervised, so SAF is being measured outside the regime it was designed for. It moves both arms of the pair equally. |
 | 10 | `judgement` | — | Record §6.4's `K`-sweep and skewed fixtures as a diagnostic measurement rather than as a second Tier 2 target or a second Tier 1 arm. | They exist to exercise the half of FreeMatch the primary fixture leaves inert — §2's third limitation — and the same reasoning `flexmatch.md` deviation 9 applies to its imbalanced probe applies here: making them reproduction targets would multiply the nightly cost of a card whose declared claim is the paired one, and making them Tier 1 arms would add minutes of CI on every PR for a number `FIDELITY.md` §3 says is not a result anyway. | None on the §6 metric. What changes is what §6.4 is allowed to claim: a direction on five seeds, not a target. |
@@ -688,7 +688,7 @@ which §6.2 established this card's primary fixture cannot answer:
 2. **Is deviation 7's sign question measurable?** The `literal` arm on a fixture
    where SAF is live is the experiment §6.2 said was needed and could not run.
    `k4_adjacent` and the two amplified arms are what make it decidable if the
-   first two fixtures leave it at the noise floor.
+   first two fixtures leave it at the noise floor. They did, and it is.
 3. **Does the `k4` / `k4_skewed` contrast separate "more classes" from
    "skewed marginal"?** SAT's local half has more to differentiate at `K = 4`
    whatever the prior; SAF's was expected to move only under skew.
@@ -827,15 +827,112 @@ a reviewer has signed §8.
 
 ### 6.4 The diagnostic fixtures
 
-*Declared in §6.1 above and not yet measured. This section is written when the
-numbers exist; the questions it must answer are fixed before the run, and the
-answers are directions on five seeds rather than targets (deviation 10).*
+Five seeds per arm, the declared 3,000-step budget, the §6.2 replicate seeds,
+and the fixtures §6.1 declares. Directions rather than targets (deviation 10),
+and no clause of §6's tolerance is being tested here.
+
+**SAT: the primary fixture was hiding most of the effect.** The paired ratio
+against the constant gate, EMA parameters, ahead on five seeds of five
+everywhere:
+
+| fixture | `K` | prior | ratio, EMA | ratio, trained | terminal `tau_t(c)` spread |
+|---|---|---|---|---|---|
+| primary (§6.2) | 2 | uniform | 0.961 ± 0.007 | 0.952 ± 0.010 | 0.858 – 0.922 |
+| `k4` | 4 | uniform | **0.872 ± 0.025** | 0.866 ± 0.033 | 0.660 – 0.831 |
+| `k4_skewed` | 4 | skewed | **0.839 ± 0.020** | 0.810 ± 0.022 | 0.143 – 0.839 |
+| `k4_adjacent` | 4 | uniform | **0.844 ± 0.024** | 0.844 ± 0.023 | 0.564 – 0.782 |
+
+The gain is roughly four times what §6.2 measured, and the `k4` / `k4_skewed`
+contrast answers question 3: **most of it is the class count, not the skew.**
+Going from `K = 2` to `K = 4` at a uniform prior moves the ratio 0.961 → 0.872;
+skewing the prior on top of that moves it a further 0.872 → 0.839. Eq. (7)'s
+local half is doing the work — the per-class thresholds separate by 0.17 at
+`K = 4` uniform and by 0.70 under skew, against 0.06 on the primary fixture.
+
+Per-class, on `k4_skewed`, this is visibly the trade §4.1 describes: the rarest
+class (7% of rows) goes from 2.331 ± 0.220 held-out NLL under the constant gate
+to **1.502 ± 0.136**, the next from 1.276 to 0.925, while the commonest class
+gets slightly *worse*, 0.190 → 0.280. SAT retains more rows (coverage 0.89
+against 0.62) at a lower impurity (0.061 against 0.090).
+
+**SAF, question 1: the premise was wrong and the correction is the result.**
+`k4_skewed` was declared expecting a skewed marginal to wake the term. It did
+not: the predicted marginal is plainly skewed (entropy 1.19 against `log 4 =
+1.386`) and `H(A, B)` still sits at **1.3861** against a floor of 1.3863. The
+paired effect is `-0.0001 ± 0.0012`, indistinguishable from §6.2's.
+
+The reason is arithmetic, and it is worth stating because it is a property of
+eq. (9) rather than of any fixture. `p_bar / h_bar` divides mean probability
+mass by predicted-label frequency, so it is the mean confidence *per predicted
+class*. A rare class pushes that ratio in two directions at once — it collects
+disproportionate spill from the other rows' off-class mass, which raises it, and
+it is predicted less confidently, which lowers it. Where rarity and low
+confidence coincide, as they generally do because a rare class is a
+badly-learned one, the two cancel. A closed form over the measured per-class
+confidences gives `log K - H(A, B) = 0.0001` against a measured 0.0002.
+
+So **no prior can wake this term**, and `k4_adjacent` is what does: unequal
+per-class confidence at equal frequency. There the term is live — and the two
+signs finally separate.
+
+**SAF, question 2: the sign question is answered, and deviation 7's argument
+does not survive it.** On `k4_adjacent`, held-out `p(t|x)` NLL on the EMA:
+
+| arm | `w_f` | held-out NLL | vs `sat` | terminal `H(A, B)` |
+|---|---|---|---|---|
+| `sat` | 0 | 1.2422 ± 0.0609 | — | 1.3870 ± 0.0004 |
+| `freematch` | +0.05 | 1.2374 ± 0.0564 | −0.0048 ± 0.0056 | 1.3873 ± 0.0006 |
+| `literal` | −0.05 | 1.2461 ± 0.0616 | +0.0040 ± 0.0029 | 1.3875 ± 0.0006 |
+| `amplified` | **+1.0** | **1.3889 ± 0.0908** | **+0.147** | **1.3333 ± 0.0590** |
+| `amplified_literal` | **−1.0** | 1.2281 ± 0.0467 | −0.014 | 1.3887 ± 0.0004 |
+
+The amplified arms separate by 0.16 nats against standard errors of 0.09 and
+0.05, so **the sign matters** and this fixture can see it. What it shows is not
+what deviation 7 predicted.
+
+That deviation argued the printed sign is *unbounded below* and would therefore
+run away at weight, while the corrected sign is bounded and safe. The
+measurement inverts both halves. The printed sign barely moves its own
+objective even at twenty times the paper's weight — `H(A, B)` goes from 1.3870
+to 1.3887, a change of 0.002 — because pushing `B` away from `A` saturates
+against the simplex rather than running away. The corrected sign is the one with
+a real gradient: it drives `H(A, B)` from 1.3870 down to 1.3333, and *that* is
+what degrades the fit. Per class it redistributes rather than improves — the
+crowded class 0 goes from 1.442 to 0.966 while classes 1 and 2 go from 1.609 and
+1.413 to 2.161 and 2.006 — and on one seed of five a class drops out of the
+retained support entirely (`fairness_support` 3.8 of 4).
+
+**What that leaves deviation 7.** Its *conclusion* stands and its *reason*
+changes, which §5 now says. The corrected sign is the reading under which
+eq. (11) is a functioning objective at all; the printed one is very nearly
+inert. But the a-priori boundedness argument is withdrawn — refuted here — and
+the honest statement about the paper's own weight is that at `w_f = 0.05` the
+two readings differ by **−0.0087 ± 0.0079**, about 1.1 standard errors in the
+corrected sign's favour. That is not a result. It is, however, the most useful
+thing to know about this deviation: **at the weight FreeMatch actually
+specifies, the sign barely matters for anything this card reports**, and the
+reason the paper can afford `w_f <= 0.05` is visible in the `amplified` row —
+the term is harmful well before it is strong.
+
+**One caveat the amplified arms carry.** A recipe at `w_f = 1.0` is not
+FreeMatch and §6.1 says so. These two arms answer "does the sign do anything,
+and which way" — they do not license a claim about the method at its own
+hyperparameters. The `k4` arms, at the declared `w_f`, are where that claim
+would have to come from, and there it is `-0.0016 ± 0.0013`: a hair in the
+corrected sign's favour, still inside the noise this card can resolve at five
+seeds.
+
+**What is still not claimed.** Nothing here separates SAT's adaptivity from the
+lower threshold it produces — `tau_t` ends between 0.78 and 0.84 across the
+three fixtures against the constant arm's 0.95, and a constant gate at 0.80 was
+not run on any of them. That remains §6.2's outstanding attribution question and
+it is now outstanding on four fixtures rather than one.
 
 ## 7. Unknowns
 
 | Unspecified in paper | Our choice | Basis |
 |---|---|---|
-| The sign of eq. (11). As printed, `L_f = -H(A, B)` minimised is entropy *minimisation* of the modulated marginal, which contradicts the purpose §1, §2, §4.2 and §6 all state for the term | `L_f = +H(A, B)`, minimised — deviation 7 | The paper's own prose against the paper's own sign, plus the derivative in deviation 7. **This is the row a reference implementation would have closed**, and §1 records why one was not read. §6.1's `literal` arm was declared to measure it and §6.2 ran it — and it came back a null on **both** signs, because the term is inert on a near-balanced two-class fixture. So the choice is still argued rather than measured, and the outstanding experiment is the same one §6.2 names: this recipe on `flexmatch.md` §6.1's class-imbalanced variant, where the marginal SAF acts on is genuinely skewed |
+| The sign of eq. (11). As printed, `L_f = -H(A, B)` minimised is entropy *minimisation* of the modulated marginal, which contradicts the purpose §1, §2, §4.2 and §6 all state for the term | `L_f = +H(A, B)`, minimised — deviation 7 | The paper's prose against the paper's sign. **This is the row a reference implementation would have closed**, and §1 records why one was not read. It is no longer only argued: §6.2's `literal` arm was a null on both signs because the term is inert on a balanced two-class fixture; §6.4 then built a fixture where it is *not* inert — unequal per-class confidence at equal frequency — and there the two signs separate by 0.16 nats at `w_f = ±1.0`. The measurement kept the choice and killed one of its two reasons: the printed sign turns out to be near-inert rather than unstable, so "unbounded below" was the wrong worry. At the paper's own weight the two differ by 1.1 standard errors, so **this row's practical stakes are now known to be small**, which is more than it could say before |
 | What `Hist` does when a class has no retained row: eq. (9)'s `\bar h(c)` is then 0 and `\bar p(c)/\bar h(c)` is undefined | Classes with an empty `\bar h` bin are **excluded from both SumNorms**, and a step in which fewer than two classes survive contributes `L_f = 0` | Convention. The two candidates are exclusion and "treat `1/\bar h(c)` as 0", and the second is worse under the sign deviation 7 settles: it makes `B(c) = 0` for an absent class, so `-A(c) log B(c)` is an arbitrarily large penalty carrying no gradient — a constant added to the loss for a class the term cannot act on. Exclusion keeps the term differentiable everywhere and makes it inert rather than explosive when the retained set is single-class. The objective logs `fairness_support` so a run in which this is biting is visible rather than inferred |
 | `h~_0`, the initial value of eq. (10)'s EMA. Eqs. (5) and (6) state `t = 0` cases and eq. (10) does not | `h~_0(c) = 1/C`, uniform | Consistency with eqs. (5) and (6), which give every other statistic in the same triple a uniform initialisation, and with the quantity: `h~` is a normalised histogram, so the uninformative value is the uniform one. A zero initialisation would make eq. (11)'s `p~/h~` undefined at the first step |
 | Whether the `t = 0` cases of eqs. (5) and (6) mean "initialise, then update from step 1" or "initialise and also fold in step 0's batch" | Initialise, and skip the update at step 0 | Eq. (5)'s piecewise form is explicit that `tau_0` *is* `1/C`, which folding step 0's batch in would contradict. At `lambda = 0.999` the two readings differ by about `10^-3` of one batch's mean confidence, so this is recorded for exactness rather than because anything turns on it |

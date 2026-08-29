@@ -160,17 +160,54 @@ got wrong and an adversarial review caught.
 **FreeMatch has landed too, and it is the first card in this repository whose
 framework addition was designed in advance by a *different* card.**
 `flexmatch.md` §5.1 named it as the second consumer of objective state and made
-two claims about the shape; §2.5 records which held. The transferable result is
-about fixtures rather than about thresholds: **a mechanism that acts on the
-class marginal cannot be measured on this section's balanced K = 2 DGP, in
-either direction.** FreeMatch's SAT half beats a constant gate on five seeds of
-five; its SAF half sits at the floor of its own loss for the entire run, and so
-does the same term with its sign flipped. That is the third distinct question
-this fixture has been unable to answer — after FlexMatch's per-class curriculum
-and its imbalanced probe — and the pattern is now clear enough to act on: a card
-whose mechanic is *about the distribution over classes* should declare a fixture
-with more levels, or a skewed prior, in its §6 before it is written, not after
-its §6.2 comes back null.
+two claims about the shape; §2.5 records which held.
+
+Its more transferable result is about **fixtures**, and it took three attempts
+to state correctly — the first two are kept here because the corrections are the
+content.
+
+The `K`-cluster family now lives in `benchmarks/common.py`
+(`cluster_population`), generalising `fixmatch.md` §6.1's DGP over the class
+count, the class prior and class *adjacency*, and reducing to that DGP
+bit-for-bit at `K = 2` with a uniform prior. Three questions had died on the
+original fixture; two are now answered.
+
+1. **"A balanced K = 2 fixture cannot measure a mechanism that acts on the class
+   marginal."** True, and the fix is worth more than expected: at `K = 4`
+   FreeMatch's self-adaptive threshold beats a constant gate by **0.87** where
+   the two-class fixture said 0.96, and the per-class thresholds separate by
+   0.17 instead of 0.06. Most of that is the class *count*; skewing the prior on
+   top adds a little more (0.87 → 0.84). A card whose mechanic is per-class
+   should declare more levels in its §6 before it is written.
+2. **"So declare a skewed prior."** ~~The advice this section gave first.~~
+   **Wrong for anything reading eq. (9)-style statistics, and `freematch.md`
+   §6.4 is the counter-example.** SAF stayed at the floor of its own loss on a
+   plainly skewed marginal, because `p_bar / h_bar` divides mean probability
+   mass by predicted-label frequency and therefore measures *confidence per
+   predicted class*. A rare class raises that ratio (it collects spill from
+   every other row) and lowers it (it is predicted less confidently), and since
+   rarity and poor learning coincide, the two cancel — closed form 0.0001,
+   measured 0.0002.
+3. **What actually wakes such a term is unequal per-class confidence at equal
+   frequency**, which is *class adjacency* — the thing FreeMatch §4.1 names when
+   it motivates a per-class threshold. `cluster_centres(groups=(3, 1),
+   within=0.5)` packs three classes together and isolates a fourth, giving Bayes
+   confidences of 0.63/0.63/0.63 against 0.87 at a uniform prior. On that
+   fixture the term is live and its two signs separate by 0.16 nats.
+
+The generalisable rule, third time of asking: **ask which statistic your
+mechanism reads, and vary that.** A per-class *threshold* reads class counts, so
+more levels and a skewed prior expose it. A term that reads a *ratio* of two
+quantities that move together is invisible to anything that moves both, however
+extreme. Neither of the first two versions of this note would have predicted the
+second case, and both were written with the measurement already in hand.
+
+A fourth question this family cannot settle, recorded so the next card does not
+rediscover it: none of these fixtures separates a self-adaptive threshold from
+the lower constant it converges to. `tau_t` ends between 0.78 and 0.84 against a
+comparison arm pinned at 0.95, and a constant-gate arm at 0.80 has not been run
+on any fixture. That is one cheap arm and it is the next measurement anyone
+extending this should take.
 
 **Step 4's neighbourhood has now been visited too, out of order and
 deliberately.** `flexmatch` is not step 4 - ReMixMatch is - but it is the
@@ -432,29 +469,34 @@ cross-entropy. Its descendants then modify or add mechanisms around that core:
   > readings agree rather than disagreeing (`fixmatch.md` §6.2,
   > `doublematch.md` §6.2).
   >
-  > **Self-adaptive fairness contributes nothing on this fixture, and the
-  > measurement says why rather than guessing.** The paper's own `w_f = 0`
-  > ablation is within `-0.0001 ± 0.0012` of the full recipe, against a
-  > SAT-versus-constant effect of `-0.0123`. The terminal marginal entropy of
-  > the retained rows is 0.6919 against a maximum of `log 2 = 0.6931`, so eq.
-  > (11) sits at its own floor for the whole run: on a near-balanced two-class
-  > fixture a term that pushes the predicted marginal towards uniformity has
-  > nothing to push. **This is not "SAF does not help"** — it is "this fixture
-  > cannot ask", and the difference is the one `CLAUDE.md` says is the most
-  > expensive to get wrong. Any card in this section whose mechanism acts on the
-  > *class marginal* — SoftMatch's distribution alignment, ReMixMatch's, and
-  > CGMatch's partitions — will meet the same wall on the K = 2 project DGP and
-  > should declare an imbalanced fixture up front rather than discover it in §6.
+  > **Self-adaptive fairness contributes nothing on the primary fixture, and
+  > §6.4 has since found out why.** The paper's own `w_f = 0` ablation is within
+  > `-0.0001 ± 0.0012` of the full recipe, against a SAT-versus-constant effect
+  > of `-0.0123`, and the term sits at the floor of its own loss all run. That
+  > survived a four-class fixture and a skewed prior unchanged; what moved it
+  > was **class adjacency** — unequal per-class confidence at equal frequency —
+  > for the reason in the sequence note above. **This was never "SAF does not
+  > help"**, and the distinction is the one `CLAUDE.md` says is most expensive
+  > to get wrong: three fixtures could not ask the question, and the fourth
+  > could. SoftMatch's distribution alignment and ReMixMatch's meet the same
+  > wall and should declare an adjacency fixture, not merely an imbalanced one.
   >
   > That wall also swallowed the card's one genuine paper-versus-paper
-  > disagreement. Eq. (11) prints `L_f = -H(A, B)`, which minimised drives the
-  > batch marginal *away* from the model's own — the opposite of the diverse
-  > predictions the paper states the term is for in four places. Deviation 7
-  > implements the intent, and §6.1 declared the literal reading as its own arm
-  > because `w_f = -0.05` expresses it with no code change. Both signs came back
-  > null, for the reason above: **the sign of an inert term is unmeasurable**.
-  > The argument stands on the derivative in §5 and the experiment that would
-  > close it is this recipe on `flexmatch.md` §6.1's imbalanced variant.
+  > disagreement, until §6.4 broke it. Eq. (11) prints `L_f = -H(A, B)` where
+  > the paper's prose asks for diverse predictions in four places; deviation 7
+  > implements the intent, and `w_f = -0.05` expresses the literal reading with
+  > no code change. On the primary fixture both signs were null — the sign of an
+  > inert term is unmeasurable — but on `k4_adjacent` at `w_f = ±1.0` they
+  > separate by 0.16 nats, **and the result refuted half of deviation 7's own
+  > argument.** That half said the printed sign is unbounded below and would run
+  > away at weight. It does not: it barely moves its objective at all, because
+  > pushing `B` away from `A` saturates against the simplex. The corrected sign
+  > is the active one — and at high weight the harmful one. The choice survives
+  > on the narrower ground that it is the reading under which eq. (11) is an
+  > objective at all, and at the paper's own `w_f` the two differ by 1.1
+  > standard errors, so the stakes are now known to be small. **An a-priori
+  > argument about a loss's boundedness lost to one fixture and thirty fits**,
+  > which is the cheapest lesson in this entry.
   >
   > One thing the card is careful not to claim, and the next measurement it
   > wants: the gain is **not** attributed to self-adaptivity as against the
