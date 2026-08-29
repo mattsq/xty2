@@ -35,10 +35,10 @@ Git retains the exploratory chronology removed from this active queue.
 
 Already present: SCARF is deviating, FixMatch is reproduced, DoubleMatch,
 FlexMatch and FreeMatch are drafts, and PAWS is implemented and smoke-passing.
-The variational latent treatment now has a drafted card awaiting review,
-`docs/recipes/variational_treatment.md`; see §3.4 below. Read
-their cards before proposing a close relative; their active ledgers supersede
-the historical notes once carried here.
+The variational latent treatment is also implemented and smoke-passing;
+`docs/recipes/variational_treatment.md` is its authoritative card. Read their
+cards before proposing a close relative; their active ledgers supersede the
+historical notes once carried here.
 
 ### Recommended stress-test sequence
 
@@ -180,11 +180,14 @@ streams.
 Entropy minimisation, EM, and ELBOs are useful because xty2 already exposes
 p(t\|x), q(t\|x,y), and p(y\|x,t). Require a single written probabilistic
 objective before composing terms. `docs/recipes/variational_treatment.md` is
-the first such card: it ports M2's eq. (7) and eq. (9) (Kingma et al., 2014) as
-one bound on the same observed-data likelihood `MissingTreatmentMarginalNLL`
-computes exactly, so its slack is a single measurable `KL(q ‖ posterior)` and
-its §6 is a paired substitution against exact marginalisation rather than a
-benchmark.
+the first implemented, smoke-passing card of this kind: it ports M2's eq. (7)
+and eq. (9) (Kingma et al., 2014) as one bound on the same observed-data
+likelihood `MissingTreatmentMarginalNLL` computes exactly, so its slack is a
+single measurable `KL(q ‖ posterior)` and its §6 is a paired substitution
+against exact marginalisation rather than a benchmark. In this discrete
+adaptation the exact posterior is already derivable by enumerating `K`; the
+learned `q` is an amortised posterior head and variational training mechanism,
+not an otherwise unavailable inference path.
 
 ### 3.5 Multi-model SSL
 
@@ -498,14 +501,3 @@ Record conclusions in PRIOR_ART.md; do not turn library APIs into requirements.
 
 Test whether validated objectives cooperate under matched streams, budgets, and
 diagnostics before designing a composition framework.
-
-### 19.3 Composition interaction and order effects
-
-Use factorial ablations, schedule/order swaps, and gradient diagnostics. A
-combined gain alone does not identify which interaction helped.
-
-### 19.4 Framework-abstraction decision checklist
-
-Before changing core vocabulary, answer: which card mechanic is impossible,
-which quadrant applies, what is the smallest contract, which second consumer
-checks its shape when required, and which existing plans remain byte-stable.
