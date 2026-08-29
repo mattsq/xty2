@@ -1,6 +1,6 @@
 # Recipe spec card: paws
 
-**Status:** `draft`
+**Status:** `smoke-passing`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
@@ -60,22 +60,30 @@ $$
 \qquad k = 1,\dots,K
 $$
 
-With `p̄ := (1/2n) Σ_i (ρ(p_i) + ρ(p_i^+))`, the two-view objective is
+With `p̄₂ := (1/2n) Σ_i (ρ(p_i) + ρ(p_i^+))`, the two-view objective is
 
 $$
 \frac{1}{2n}\sum_{i=1}^{n}
-\Big( H(\rho(p_i^+), p_i) + H(\rho(p_i), p_i^+) \Big) - H(\bar p)
+\Big( H(\rho(p_i^+), p_i) + H(\rho(p_i), p_i^+) \Big) - H(\bar p_2)
 \tag{1}
 $$
 
-and the multi-crop objective over two large and six small views is
+For the multi-crop objective, the reference implementation forms the me-max
+average from every prediction view,
+
+$$
+\bar p_8 := \frac{1}{8n}\sum_{i=1}^{n}\sum_{k=1}^{8}\rho(p_i^k),
+$$
+
+not from the two large targets alone. The objective over two large and six
+small views is
 
 $$
 \frac{1}{8n}\sum_{i=1}^{n}
 \Big(
 H(\rho(p_i^1), p_i^2) + H(\rho(p_i^2), p_i^1)
 + \sum_{k=3}^{8} H\big(\tfrac{\rho(p_i^1)+\rho(p_i^2)}{2},\, p_i^k\big)
-\Big) - H(\bar p)
+\Big) - H(\bar p_8)
 \tag{4}
 $$
 
@@ -181,12 +189,13 @@ This YAML is the executable fidelity contract. Keep its keys synchronized with t
 ```yaml
 gradients:
   stop_gradients:
-    pretrain.support_set_pseudo_label_consistency: the sharpened targets rho(p^1), rho(p^2)   # §3.1: "not the sharpened targets"; a role-level detach, so `detaches` is empty (§5.1)
+    pretrain.support_set_pseudo_label_consistency: none       # both large realisations are predictions; the target-role detach is recorded below
     pretrain.mean_entropy_maximisation: none                  # ref impl: me-max reads the *anchor* probs, with gradient
     joint_fit.observed_outcome_nll: none
     joint_fit.observed_treatment_nll: none
     joint_fit.missing_treatment_marginal_nll: none
-  detached_targets: target                                    # every target in eq. (4) is detached; no prediction is
+  detached_targets:
+    pretrain.support_set_pseudo_label_consistency: target     # every target role in eq. (4) is detached; no whole realisation is
   gradient_clipping:
     pretrain: none                                            # paper and ref impl name none
     joint_fit: none
@@ -306,7 +315,7 @@ compare them.
 |---|---|---|---|---|---|
 | 1 | `judgement` | — | Assign the *treatment* label rather than an image class, and fine-tune into the reviewed xty2 causal stack (outcome NLL, treatment NLL, exact marginalisation) rather than the paper's SuNCEt fine-tuning phase and paws-nn readout. | The paper's downstream task is supervised classification. The project-local question `BACKLOG.md` §1 asks is whether *class* structure — here, treatment structure — can be carried by a representation at all, after `scarf` showed instance-only structure did not reach the end task on the sibling fixture. `p(t \| x)` is a classifier, so the analogue is exact for the metric §6 leads with. The paper's own readout is not discarded: paws-nn is kept as a §6 guardrail, which is the only place a number of the paper's *shape* survives. | No published number applies. The comparison is internal: the same `joint_fit` stage, seeds and batches, with and without the pretrained initialisation. |
 | 2 | `judgement` | — | Replace SimCLR augmentation and multi-crop with schema-aware empirical-marginal corruption: two large views at `rate=0.25`, six small views at `rate=0.5`. | There is no image geometry in a tabular XTY batch. `FeatureCorruption` is the reviewed tabular operation (`scarf.md` §5.2) and, unlike masking, it replaces a cell with a value the column actually takes, so a corrupted row stays in the data's support — which matters more here than for a gated method, because *every* anchor row trains. The relation the paper's design carries is that small views are lossier than large ones; the two rates preserve it. The crop-scale-to-corruption-rate mapping is ours and is in §7. | Directly defines the invariance learned. A view that destroys the treatment-predictive columns makes eq. (4) train the model toward the support set's marginal; §6.2 predeclares the Bayes-label flip rate of both rates on the fixture, measured before training, as the guardrail — `flexmatch.md` §5.2 is the precedent for why an undeclared strong view is a trap. |
-| 3 | `framework-limitation` | `batch-row-repetition` | The support quota and the anchor quota draw from disjoint populations (`t_observed`, `t_missing`), and the support quota cannot exceed the labelled pool. The paper draws a support batch 2.5× the size of its unlabelled batch, from a labelled set the unlabelled batch is also drawn from. | Both halves follow from one rule: `XTYBatch.row_id` is unique because artifacts and provenance are keyed by it (`DESIGN.md` §1.1, §7.1). A labelled row cannot be a support sample and an anchor in the same batch, so "the images in the support set `S` may overlap with the images in the dataset `D`" is not expressible; and reaching the paper's support-heavy ratio from a 64-row labelled pool would mean drawing 320 support rows from 64, which is a quota larger than its population — the exact condition the ledger's row names. §5.1 records the shape a repayment would need. | Two effects, in opposite directions. The anchors are 128 rows the support set has never seen, which if anything makes the consistency task *harder* than the paper's. The support set is 32 rows read under 2 views against the paper's 640 under 2, so `π_d`'s denominator is small and its variance across steps is high; §6.2 predeclares the support-size sensitivity check that measures it. Both arms of §6 share the limitation. |
+| 3 | `judgement` | — | Draw 32 distinct support rows (16 per treatment) and 128 distinct missing-treatment anchors from disjoint populations. The paper's CIFAR run draws 640 distinct support images and 256 anchors from one training split, so a labelled image may also be an anchor. | The 64-label project fixture cannot supply 640 unique support images. The source is explicit that support images are unique within an iteration; its with-replacement rule applies only across iterations. Repeating a labelled row, or counting extra augmentations of it as extra support samples, would therefore be a second deviation rather than a faithful workaround. Disjoint populations preserve the meaning of observed labels and unique `row_id`; the reduced support size is the unavoidable project-local adaptation and is tested directly in §6.2. | The anchors are never also support rows and `π_d` uses 32 rather than 640 distinct supports, increasing its variance. §6.2 predeclares support-size sensitivity at 8 and 16 rows per level. Both arms share the fixture choice. |
 | 4 | `judgement` | — | Adam at `1e-3` rather than LARS (`trust_coefficient=0.001`) over SGD at `lr = 3.2` with momentum 0.9. The warmup-then-cosine *shape* is kept, re-based on the step budget with the paper's ratios. | LARS exists to make a 4,096-image (ImageNet) or 256-image (CIFAR) batch trainable at a learning rate three orders of magnitude above ours; its layer-wise trust ratio is inseparable from that batch size, and `lr = 3.2` is not a number any other optimiser can be handed. This is the opposite call from `fixmatch.md` §5.9, and deliberately: FixMatch's table 7 reports the optimiser as part of its published finding, and PAWS reports no such comparison. Adam at `1e-3` is the pretraining optimiser `scarf.md` §4 already fixes, which is what makes the two pretraining objectives comparable at all. | The pretraining trajectory is ours, not the paper's. §6's pair shares the optimiser, so the PAWS *mechanism* stays attributable; a comparison against the paper's convergence rate ("4× to 12× less training than the previous best methods") is not available and is not claimed. |
 | 5 | `judgement` | — | Retain the P5 encoder (3 layers of 200, ELU, row-`l2`) rather than WideResNet-28-2. Take the projection head's shape from the paper — 3 layers of 128, ReLU, affine output, no prediction head — but with `row_l2` output and **no BatchNorm** on its hidden layers. | Holding the causal stack fixed is what makes an addition attributable, and is the same decision `scarf.md` §5.3 and `fixmatch.md` §5.6 record. The head is not part of that stack, so its shape is the paper's. BatchNorm is the one part that is not: a running statistic makes a component's output depend on the *composition* of the batch it is evaluated in, and this recipe plans eight forward passes over one batch whose rows are two populations drawn by quota. `fixmatch.md` §5.11 records that the equivalence of per-realisation passes to the reference's single interleaved pass holds "only while no component holds batch-coupled state"; adding BN here would break it for the first time, silently, in the card that also introduces the most passes. | Removes whatever the head's normalisation buys. Since `π_d` `l2`-normalises both sides regardless, the effect is on the gradient scale reaching the head rather than on the loss (`ProjectionHead`'s docstring measures the same thing for SCARF). §6.2's collapse guardrail is what would show it going wrong. |
 | 6 | `judgement` | — | Fixed budgets of 1,000 pretraining and 3,000 fine-tuning optimiser steps, rather than 600 CIFAR epochs. The warmup keeps the paper's 10/600 fraction (17 steps) and the cosine is re-based on the same 1,000. | Every card in this repository fixes a project-local step budget so that a difference between recipes is attributable to the recipe, and §6's target is a *paired* comparison in which both arms get the same budget either way. `scarf.md` §5.4 argues this at length and would be the row to revisit if the argument ever stops holding. Re-basing the schedule rather than dropping it is `fixmatch.md` §5.3's move, and here it costs nothing: the ratios are unit-free. | Pretraining length is chosen by us. The paper's CIFAR-10 result is a 600-epoch number and its ablation table 3 reports gains still accruing at 200; 1,000 steps is a different regime and §6 states its target in those terms. |
@@ -327,27 +336,13 @@ against, and the first to run it.
 | `WarmupCosine` schedule: linear `start -> 1.0` over `warmup` steps, then cosine to `final`, as `src/utils.py`'s `WarmupCosineSchedule` | fidelity-bearing, reversible | `pretrain.lr_schedule` | not required (reversible) | `DESIGN.md` §6 has `Ramp` and `CosineDecay` and no way to compose them, and the ledger's `lr-schedules` row says the family is built "when a reviewed card names one". This card names one. §11.2 Q1/Q2 then answer `build`, and `FIDELITY.md` §4.1 forbids the alternative — writing a permanent deviation to keep a diff small — so this is an addition rather than a §5 row. |
 | A correction, not an addition: `QuotaSampler.batch_size` and `.labelled_unlabelled_ratio` must count a stratified quota as `size × levels` | fidelity-bearing, reversible | this card | — | The derivation sums `Quota.size` while the loader draws `size` per level, so the plan would print `144` and `mu = 8` for a sampler running `160` and `mu = 4` (§4). No shipped recipe stratifies, so nothing is measured wrong today and no plan digest moves; the card that first stratifies is the one that has to fix it. The number of levels is `schema.treatment_cardinality`, which `QuotaSampler` does not hold — so the fix belongs where the compiler already resolves hyperparameters, not in the dataclass. |
 
-**What repaying `batch-row-repetition` would take** (deviation 3, and the shape
-check the ledger row asks for). PAWS needs a batch in which a labelled row may
-appear (a) once as an anchor and once as a support sample, and (b) more than
-once in the support set when the per-level quota exceeds the level's
-population. Both are the same requirement — a batch is a *multiset* of rows —
-and it collides with `row_id` uniqueness, which artifacts, pseudo-label joins
-and fold-disjointness checks all key on. The two candidate shapes are not
-equivalent, and PAWS discriminates between them:
-
-- **A repeated `row_id` inside one `XTYBatch`.** Cheapest to write, and it
-  breaks the invariant every provenance check rests on. PAWS does not need it:
-  its support rows produce no artifact and are joined to nothing.
-- **A per-realisation support expansion** — the batch keeps unique rows, and
-  the *classifier* declares how many independent view draws of each support row
-  enter `z_S`. This is what `supervised_views = 2` already is, and it extends
-  to (a) by letting the same row be gathered under a support role and an anchor
-  role from one unique-row batch.
-
-The second shape is the one this card's arithmetic wants, and it does not touch
-`row_id` at all. That is the finding the ledger row asked PAWS for; whether to
-build it is a review decision, not this draft's.
+**Support identity and the fixture limit** (deviation 3). The two large
+augmentations of each support row are both used by the classifier, but they do
+not turn one base row into two distinct support samples. The source requires
+unique support images inside an iteration and permits replacement only across
+iterations. Consequently PAWS neither requires nor discharges the
+`batch-row-repetition` ledger item. A faithful support-heavy run needs a larger
+labelled population, not repeated `row_id` values or a per-view expansion.
 
 ## 6. Reproduction target
 
@@ -355,6 +350,8 @@ The pair compares PAWS pretraining with no pretraining on a fixed project-local
 DGP, holding `joint_fit` identical. The paper's own readout (paws-nn) and its
 collapse conditions are carried as mechanism guardrails, so a null result can be
 attributed to the representation rather than to the fine-tuning stage.
+The paws-nn NLL scores the pre-`argmax` probabilities `π_d`; accuracy alone
+applies the paper's `argmax` decision rule.
 
 ```yaml
 reproduction:
@@ -393,8 +390,9 @@ Two fixture facts this recipe adds, both checked rather than assumed:
 
 ### 6.2 Predeclared evidence
 
-No result exists: the status line is `draft` and no code has been written. This
-section fixes what will count, before anything is run.
+The criteria below were fixed while the card was `draft`. Tier 0 and Tier 1 now
+pass at the implementation on PR #23; the ten-seed downstream reproduction
+target remains unrun and §6.3 therefore stays empty.
 
 **Tier 0 (invariants).**
 
@@ -430,14 +428,38 @@ section fixes what will count, before anything is run.
    weighted 0. Predeclared expectation, from the paper's table 6: lower terminal
    `H(p̄)`, and a higher chance of the collapse `ProjectionHead`'s docstring
    describes. We report it whichever way it goes.
-4. **The skewed-propensity fixture.** `freematch.md`'s prior-skew fixture
-   (`p(t = 1) = 0.15`), where me-max's pull toward a uniform marginal is
-   misspecified. Predeclared: report the terminal `p̄`, the paws-nn error rate,
-   and whether the me-max ablation *helps* there. This is the card's own
-   falsification test and §2 already refuses the claim it would settle.
+4. **The skewed-propensity fixture.** A binary prior-skew fixture with
+   `p(t = 1) = 0.15`, where me-max's pull toward a uniform marginal is
+   misspecified. It uses a 160-label MCAR diagnostic budget, rather than the
+   primary fixture's 64: at 64 labels the minority has about 10 examples and
+   cannot fill the predeclared 16-per-level support quota. The replicate must
+   still assert at least 16 observed rows per level before fitting. Report the
+   terminal `p̄`, paws-nn error rate, and whether the me-max ablation *helps*.
+   This is the card's own falsification test and §2 already refuses the claim
+   it would settle; the larger diagnostic label budget is not used by the
+   primary arm.
 5. **Support-set size sensitivity.** The same fit at 8 and at 16 rows per
    level, to bound how much of any effect is deviation 3's small support rather
    than the mechanism.
+
+**Tier 1 measurements, seed 90,010 (2026-08-29).** These are single-seed wiring
+measurements, with no standard error and no reproduction claim.
+
+| Arm | Eq. (4), first 50 → last 50 | paws-nn NLL, before → after | Accuracy, before → after | Terminal `H(p̄)` / predicted marginal |
+|---|---:|---:|---:|---:|
+| primary, 16 supports/level | 0.6134 → 0.5076 | 0.3429 → 0.2771 | 0.9092 → 0.9253 | 0.6908 / (0.4723, 0.5277) |
+| me-max weight 0 | 0.6033 → 0.5101 | 0.3429 → 0.2786 | 0.9092 → 0.9214 | 0.6889 / (0.4735, 0.5265) |
+| 8 supports/level | 0.6780 → 0.5163 | 0.3429 → 0.2877 | 0.9092 → 0.9175 | 0.6931 / (0.4708, 0.5292) |
+| skewed, me-max on | 0.6204 → 0.3743 | 0.2570 → 0.2619 | 0.9033 → 0.9575 | 0.6923 / (0.7853, 0.2147) |
+| skewed, me-max weight 0 | 0.6639 → 0.2246 | 0.2570 → 0.1222 | 0.9033 → 0.9619 | 0.4751 / (0.8345, 0.1655) |
+
+The large/small corruption flip rates on the primary fixture were 0.1133 and
+0.2422. The primary mechanism passes: consistency falls, paws-nn improves, and
+entropy stays above `0.95 log 2`. The me-max ablation barely changes the
+balanced fixture. On the skewed fixture it is plainly harmful: disabling the
+uniform-marginal prior cuts NLL by more than half and moves the predicted
+minority share from 0.215 toward the true 0.15. That is the falsification §2
+predeclared, not a failure of the implementation.
 
 ### 6.3 Result ledger
 
@@ -465,5 +487,5 @@ section fixes what will count, before anything is run.
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status → `reviewed`) | | |
-| Plan diffed against §3.2 and §4 | | |
+| Card reviewed (status → `reviewed`) | Codex | 2026-08-29 |
+| Plan diffed against §3.2 and §4 | Codex | 2026-08-29 |

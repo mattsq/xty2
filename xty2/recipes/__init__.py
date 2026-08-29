@@ -29,6 +29,15 @@ from xty2.recipes.freematch import (
     freematch,
 )
 from xty2.recipes.mean_teacher import mean_teacher
+from xty2.recipes.paws import (
+    LARGE_CORRUPTION_RATE,
+    MISSING_ANCHORS,
+    PAWS_SAMPLER,
+    SHARPENING,
+    SMALL_CORRUPTION_RATE,
+    SUPPORT_PER_TREATMENT,
+    paws,
+)
 from xty2.recipes.scarf import (
     CORRUPTION_RATE,
     JOINT_FIT_STEPS,
@@ -56,13 +65,19 @@ __all__ = [
     "FLEXMATCH_STEPS",
     "FREEMATCH_STEPS",
     "JOINT_FIT_STEPS",
+    "LARGE_CORRUPTION_RATE",
+    "MISSING_ANCHORS",
     "OUTCOME_WIDTHS",
+    "PAWS_SAMPLER",
     "PRETRAIN_STEPS",
     "PROJECTION_WIDTHS",
     "SAT",
     "SELF_SUPERVISED_WEIGHT",
+    "SHARPENING",
+    "SMALL_CORRUPTION_RATE",
     "SSDML_ENCODER_WIDTHS",
     "STRONG_MASK_RATE",
+    "SUPPORT_PER_TREATMENT",
     "TAU",
     "TEMPERATURE",
     "UNSUPERVISED_WEIGHT",
@@ -74,6 +89,7 @@ __all__ = [
     "flexmatch",
     "freematch",
     "mean_teacher",
+    "paws",
     "scarf",
     "ssdml",
     "tarnet",

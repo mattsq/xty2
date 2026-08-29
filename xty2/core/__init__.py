@@ -149,6 +149,7 @@ from xty2.core.schedules import (
     Schedule,
     SigmoidRamp,
     Step,
+    WarmupCosine,
     as_schedule,
 )
 from xty2.core.schema import FeatureSpec, OutcomeSpec, Schema
@@ -255,6 +256,7 @@ __all__ = [
     "ViewError",
     "ViewSpec",
     "ViewTransform",
+    "WarmupCosine",
     "WeightDecay",
     "Weighted",
     "XTYBatch",

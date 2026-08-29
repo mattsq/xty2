@@ -11,6 +11,9 @@ different constants. `CosineDecay` arrives with FixMatch, whose section 2.4
 states `eta cos(7 pi k / 16 K)` and whose appendix B.4 ablates it against a
 linear decay and against none — the ledger entry in `DESIGN.md` §11 asks for
 exactly that, a card naming the schedule.
+`WarmupCosine` arrives with PAWS. Its reference warms the learning rate to its
+base value and only then starts a cosine fall to a non-zero final multiplier;
+making that one declaration keeps both phases visible in the plan.
 
 They live in `core/` rather than beside the mixer for the reason `DESIGN.md`
 §10 gives for `Stage` and `Recipe`: they are the compiler's *input*. A recipe
@@ -250,6 +253,57 @@ class CosineDecay(Schedule):
 
 
 @dataclass(frozen=True)
+class WarmupCosine(Schedule):
+    """Linear warm-up to 1, then cosine decay to `final` at `steps`.
+
+    `steps` is the total optimiser-step horizon, including the warm-up. The
+    cosine phase therefore spans `warmup..steps`, matching PAWS's pinned
+    `WarmupCosineSchedule`; it is flat at `final` afterwards.
+    """
+
+    start: float
+    final: float
+    warmup: int
+    steps: int
+
+    def __post_init__(self) -> None:
+        _require_finite("WarmupCosine.start", self.start)
+        _require_finite("WarmupCosine.final", self.final)
+        if not 0.0 <= float(self.start) <= 1.0:
+            raise Xty2Error(f"WarmupCosine.start must be in [0, 1], got {self.start!r}")
+        if not 0.0 <= float(self.final) <= 1.0:
+            raise Xty2Error(f"WarmupCosine.final must be in [0, 1], got {self.final!r}")
+        if type(self.warmup) is not int or self.warmup < 1:
+            raise Xty2Error(
+                "WarmupCosine.warmup must be an integer at least 1, got "
+                f"{self.warmup!r}"
+            )
+        if type(self.steps) is not int or self.steps <= self.warmup:
+            raise Xty2Error(
+                "WarmupCosine.steps must be an integer greater than warmup "
+                f"({self.warmup}), got {self.steps!r}"
+            )
+
+    def value(self, step: int) -> float:
+        if step <= self.warmup:
+            fraction = step / self.warmup
+            return float(self.start) + fraction * (1.0 - float(self.start))
+        progress = min((step - self.warmup) / (self.steps - self.warmup), 1.0)
+        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return float(self.final) + (1.0 - float(self.final)) * cosine
+
+    @property
+    def nominal(self) -> float:
+        return float(self.final)
+
+    def describe(self) -> str:
+        return (
+            f"warmup cosine {float(self.start)!r} -> 1.0 over {self.warmup} steps, "
+            f"then cosine -> {float(self.final)!r} at {self.steps} steps"
+        )
+
+
+@dataclass(frozen=True)
 class Step(Schedule):
     """A piecewise-constant weight that jumps at `boundaries`.
 
@@ -358,8 +412,8 @@ def as_schedule(weight: float | Schedule) -> Schedule:
     if isinstance(weight, bool) or not isinstance(weight, int | float):
         raise Xty2Error(
             f"a weight is a number or a Schedule, got {type(weight)}. The v1 "
-            "schedules are Constant, Ramp, SigmoidRamp, CosineDecay, Step and "
-            "ExponentialDecay "
+            "schedules are Constant, Ramp, SigmoidRamp, CosineDecay, "
+            "WarmupCosine, Step and ExponentialDecay "
             "(DESIGN.md §6)."
         )
     return Constant(float(weight))
@@ -380,5 +434,6 @@ __all__ = [
     "Schedule",
     "SigmoidRamp",
     "Step",
+    "WarmupCosine",
     "as_schedule",
 ]

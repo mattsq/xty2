@@ -38,6 +38,7 @@ from xty2.core.batch import XTYBatch
 from xty2.core.card_keys import card_hyperparameters
 from xty2.core.data import (
     ExternalBatches,
+    QuotaSampler,
     TrainingPopulation,
     sampler_lines,
 )
@@ -138,6 +139,14 @@ class _ObjectiveWithPlanDetails(Protocol):
     """Optional stable mechanics an objective needs the plan to fingerprint."""
 
     def plan_details(self) -> tuple[str, ...]: ...
+
+
+@runtime_checkable
+class _ObjectiveWithSupportRows(Protocol):
+    """An objective that reads a declared auxiliary row population."""
+
+    @property
+    def support_rows(self) -> Rows: ...
 
 
 @dataclass(frozen=True)
@@ -347,7 +356,9 @@ class ExecutionPlan:
         elif compiled.action is not None:
             lines.append(f"  action: array fit {compiled.action.name}")
             lines.append(f"  action rows: {_rows(compiled.action_rows or ('all',))}")
-        sampler = sampler_lines(compiled.stage.sampler)
+        sampler = sampler_lines(
+            compiled.stage.sampler, treatment_cardinality=self.treatments
+        )
         lines.append(f"  sampler: {sampler[0]}")
         lines += [f"    {line.strip()}" for line in sampler[1:]]
         if compiled.objectives:
@@ -681,6 +692,13 @@ def _compile_stage(
     for weighted in stage.objectives:
         objective = weighted.objective
         rows = _effective_rows(stage, objective, where)
+        if isinstance(objective, _ObjectiveWithSupportRows):
+            _intersect_rows(
+                stage.rows,
+                objective.support_rows,
+                item=f"objective {objective.name!r} support rows",
+                where=where,
+            )
         for port, realisation in _sorted_requirements(objective):
             _check_port(graph, port, objective, where)
             _check_realisation(realisation, realisable, objective, where)
@@ -1223,12 +1241,13 @@ def _hyperparameters(
                 f"the optimiser of {stage_label}",
                 scope=stage.name if scoped else None,
             )
-        _merge_owner(
+        _merge_sampler(
             resolved,
             owners,
             stage.sampler,
             f"the sampler of {stage_label}",
             scope=stage.name if scoped else None,
+            treatment_cardinality=recipe.schema.treatment_cardinality,
         )
         if stage.teacher is not None:
             _merge_owner(
@@ -1358,6 +1377,30 @@ def _merge_owner(
     scope: str | None,
 ) -> None:
     for key, value in card_hyperparameters(owner).items():
+        if scope is None:
+            _merge_value(resolved, owners, key, value, label)
+        else:
+            _merge_scoped_value(resolved, owners, key, scope, value, label)
+
+
+def _merge_sampler(
+    resolved: dict[str, Any],
+    owners: dict[str, str],
+    sampler: object,
+    label: str,
+    *,
+    scope: str | None,
+    treatment_cardinality: int,
+) -> None:
+    """Merge sampler bindings after resolving stratified quotas against `K`."""
+    values = card_hyperparameters(sampler)
+    if isinstance(sampler, QuotaSampler):
+        values["optimisation.batch_size"] = sampler.resolved_batch_size(
+            treatment_cardinality
+        )
+        ratio = sampler.resolved_labelled_unlabelled_ratio(treatment_cardinality)
+        values["optimisation.labelled_unlabelled_ratio"] = ratio
+    for key, value in values.items():
         if scope is None:
             _merge_value(resolved, owners, key, value, label)
         else:
