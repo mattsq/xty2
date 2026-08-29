@@ -366,6 +366,8 @@ def _short(recipe: Recipe) -> Recipe:
     stage = recipe.program[0]
     schedule = stage.optimiser.lr_schedule
     assert isinstance(schedule, CosineDecay)
+    data = recipe.data
+    assert data is not None
     return replace(
         recipe,
         program=Program(
@@ -385,10 +387,7 @@ def _short(recipe: Recipe) -> Recipe:
                 ),
             )
         ),
-        data=replace(
-            recipe.data,  # type: ignore[arg-type]
-            missingness=replace(recipe.data.missingness, observed=16),  # type: ignore[union-attr]
-        ),
+        data=replace(data, missingness=replace(data.missingness, observed=16)),
     )
 
 

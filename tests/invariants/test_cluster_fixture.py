@@ -11,54 +11,83 @@ The property that makes the family worth having is asserted first and hardest:
 "a comparable world" — the same draws, from the same seed, in the same order.
 Everything a sweep across `K` reports is therefore anchored to a fixture whose
 numbers five cards already carry, and `two_cluster_population` delegating to it
-cannot have moved anything. The digests below were taken from the *pre*-refactor
-implementation and are what would catch it if it had.
+cannot have moved anything.
+
+`_reference_two_cluster` is how that is checked, and it is deliberately a second
+*implementation* rather than a stored fingerprint. The first version of this file
+hashed the pre-refactor draws and compared the digest, which was wrong twice
+over: torch guarantees its RNG stream only within a release, so the digests
+failed on CI's torch while passing locally, and the delegation test beside them
+compared `two_cluster_population` against the very call it now forwards to — a
+tautology. A transcription of the original arithmetic fixes both. It is portable
+because both sides draw from the same generator on the same machine, and it is
+not vacuous because it is genuinely different code.
 """
 
 from __future__ import annotations
 
-import hashlib
-
 import pytest
 import torch
+from xty2.core import XTYBatch
 from xty2.evaluation.benchmarks.common import (
     CLUSTER_SEPARATION,
     CLUSTER_SIGNAL,
     SIGNAL_COLUMNS,
+    ClusterPopulation,
     cluster_centres,
     cluster_population,
     two_cluster_population,
 )
 
 ROWS = 1_024
-FROZEN_DRAWS = {
-    (90_001, 0.02): "efd5a31a3fe25893e6df0d80a6e32c31",
-    (90_001, 0.15): "06bb8d4b25089b8338ccae89d0d67c17",
-    (90_003, 0.02): "473984de71b6194f51731c92eb85d685",
-    (90_003, 0.15): "b7f9d4171bb2a74626b51fc26f784790",
-}
-"""SHA-256 prefixes of `two_cluster_population`'s draws, taken *before* it was
-expressed in terms of `cluster_population`.
-
-A digest rather than a re-implementation on purpose: a second copy of the
-arithmetic would drift with the first, where a hash of the numbers the old code
-actually produced cannot. Five cards' §6 results rest on these draws.
-"""
-
 SUPPORTED = (2, 3, 4, 5)
 
 
-def _digest(seed: int, low: float) -> str:
-    population = two_cluster_population(ROWS, seed=seed, row_offset=0, low=low)
-    running = hashlib.sha256()
-    for tensor in (
-        population.batch.x,
-        population.batch.y,
-        population.true_effect,
-    ):
-        running.update(tensor.to(torch.float64).numpy().tobytes())
-    running.update(population.batch.t.numpy().tobytes())
-    return running.hexdigest()[:32]
+def _reference_two_cluster(
+    rows: int, *, seed: int, row_offset: int, low: float = 0.02
+) -> ClusterPopulation:
+    """The two-cluster DGP as it was written before `cluster_population` existed.
+
+    A verbatim transcription of the pre-refactor `two_cluster_population` body,
+    kept here as an independent implementation. Five cards' §6 numbers were
+    measured on the rows this produces, so what the tests below assert is that
+    generalising the generator over `K` left those rows alone.
+
+    Deliberately duplicated rather than imported, **constants included**: a
+    check that shares its code with the thing it checks proves nothing, and this
+    file has now made that mistake twice — once by comparing
+    `two_cluster_population` against the call it forwards to, and once by
+    transcribing the arithmetic but importing `CLUSTER_SIGNAL`, so that
+    perturbing the signal moved both sides together and the test stayed green.
+    Every number below is a literal for that reason.
+    """
+    signal, noise, features = 0.45, 0.6, 6
+    generator = torch.Generator().manual_seed(seed)
+    u_c = torch.rand(rows, generator=generator)
+    epsilon_x = torch.randn(rows, features, generator=generator)
+    u_t = torch.rand(rows, generator=generator)
+    epsilon_y = torch.randn(rows, generator=generator)
+
+    cluster = (u_c < 0.5).float()
+    sign = 2.0 * cluster - 1.0
+    x = epsilon_x.clone()
+    x[:, :4] = signal * sign[:, None] + noise * epsilon_x[:, :4]
+    propensity = low + (1.0 - 2.0 * low) * cluster
+    treatment = (u_t < propensity).long()
+    baseline = 0.5 * x[:, 0] - 0.3 * x[:, 1] + 0.2 * (x[:, 4].square() - 1.0)
+    true_effect = 1.0 + 0.5 * torch.tanh(x[:, 2])
+    y = baseline + treatment * true_effect + 0.5 * epsilon_y
+    return ClusterPopulation(
+        batch=XTYBatch(
+            x=x,
+            t=treatment,
+            y=y,
+            t_observed=torch.ones(rows, dtype=torch.bool),
+            y_observed=torch.ones(rows, dtype=torch.bool),
+            row_id=torch.arange(row_offset, row_offset + rows),
+        ),
+        true_effect=true_effect,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -66,22 +95,32 @@ def _digest(seed: int, low: float) -> str:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("seed", "low"), sorted(FROZEN_DRAWS))
+@pytest.mark.parametrize("seed", [90_001, 90_003])
+@pytest.mark.parametrize("low", [0.02, 0.15])
 def test_the_two_class_draws_are_the_ones_five_cards_were_measured_on(
     seed: int, low: float
 ) -> None:
     """The whole safety argument for generalising in place, as one assertion."""
-    assert _digest(seed, low) == FROZEN_DRAWS[(seed, low)], (
-        "the two-cluster DGP's draws moved. Every §6 number in fixmatch, "
-        "scarf, flexmatch, doublematch and freematch was measured on these "
-        "rows; a change here invalidates all of them."
-    )
+    theirs = _reference_two_cluster(ROWS, seed=seed, row_offset=0, low=low)
+    ours = two_cluster_population(ROWS, seed=seed, row_offset=0, low=low)
+    for field in ("x", "t", "y", "row_id"):
+        assert torch.equal(getattr(theirs.batch, field), getattr(ours.batch, field)), (
+            f"the two-cluster DGP's {field} moved. Every §6 number in fixmatch, "
+            "scarf, flexmatch, doublematch and freematch was measured on these "
+            "rows; a change here invalidates all of them."
+        )
+    assert torch.equal(theirs.true_effect, ours.true_effect)
 
 
 def test_the_generalisation_at_two_classes_is_that_fixture_exactly() -> None:
-    """`cluster_population(classes=2)` and `two_cluster_population` agree."""
+    """`cluster_population(classes=2)` against the original arithmetic.
+
+    `two_cluster_population` forwards to `cluster_population` now, so comparing
+    those two would compare a call with itself. The reference implementation is
+    what makes this say something.
+    """
     for seed in (90_001, 90_003):
-        theirs = two_cluster_population(ROWS, seed=seed, row_offset=0)
+        theirs = _reference_two_cluster(ROWS, seed=seed, row_offset=0)
         ours = cluster_population(ROWS, seed=seed, row_offset=0, classes=2)
         assert torch.equal(theirs.batch.x, ours.batch.x)
         assert torch.equal(theirs.batch.t, ours.batch.t)

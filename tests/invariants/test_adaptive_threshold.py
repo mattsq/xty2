@@ -239,9 +239,13 @@ def test_an_empty_batch_leaves_the_state_free_to_be_written_later() -> None:
     """A term with no eligible rows must not consume the step's one update."""
     state = _fresh()
     state.observe(1, torch.zeros(0, NUM_TREATMENTS))
-    assert state.last_observed_step is None
+    # Read into locals: the property is `int | None`, and a type checker that
+    # narrowed it on the first assertion would treat the second as dead.
+    after_empty = state.last_observed_step
     state.observe(1, torch.softmax(_inputs()[0], dim=-1))
-    assert state.last_observed_step == 1
+    after_rows = state.last_observed_step
+    assert after_empty is None
+    assert after_rows == 1
     assert state.tau != pytest.approx(1.0 / NUM_TREATMENTS)
 
 
@@ -517,7 +521,7 @@ def test_the_fairness_term_trains_through_the_strong_view() -> None:
         _rows(),
         _context({SAT_NAME: shared}, 2),
     )
-    term.value.backward()
+    term.value.backward()  # type: ignore[no-untyped-call]
     assert prediction_logits.grad is not None
     assert float(prediction_logits.grad.abs().sum()) > 0.0
 
