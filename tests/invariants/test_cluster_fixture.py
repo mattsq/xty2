@@ -301,3 +301,112 @@ def test_the_strong_view_stays_label_preserving_relative_to_what_is_achievable(
         f"labels against an achievable {bayes_error:.3f}"
     )
     assert weak_flips / bayes_error < 0.5
+
+
+# ---------------------------------------------------------------------------
+# Class adjacency: unequal confidence at equal frequency
+# ---------------------------------------------------------------------------
+
+ADJACENT = {"groups": (3, 1), "within": 0.5}
+"""`freematch.md` §6.4's `k4_adjacent`: three crowded classes and one apart."""
+
+
+def _bayes_confidence(classes: int, **centres: object) -> tuple[float, ...]:
+    """Mean Bayes posterior of the predicted class, per class, uniform prior."""
+    deviation, rows = 0.6, 120_000
+    generator = torch.Generator().manual_seed(90_001)
+    means = cluster_centres(classes, **centres).double()  # type: ignore[arg-type]
+    labels = torch.randint(classes, (rows,), generator=generator)
+    x = means[labels] + deviation * torch.randn(
+        rows, SIGNAL_COLUMNS, generator=generator, dtype=torch.float64
+    )
+    squared = ((x[:, None, :] - means[None]) ** 2).sum(-1)
+    posterior = (-squared / (2.0 * deviation**2)).softmax(-1)
+    predicted = posterior.argmax(-1)
+    return tuple(
+        float(posterior[predicted == level].max(-1).values.mean())
+        for level in range(classes)
+    )
+
+
+def test_groups_of_one_are_the_regular_simplex_every_caller_already_gets() -> None:
+    """The regression guard: adjacency is opt-in and changes nothing by default."""
+    for classes in SUPPORTED:
+        assert torch.equal(
+            cluster_centres(classes), cluster_centres(classes, groups=(1,) * classes)
+        )
+
+
+def test_adjacency_crowds_one_group_and_isolates_the_other() -> None:
+    """`groups=(3, 1)` at `within=0.5`: a tight triangle and a distant fourth."""
+    centres = cluster_centres(4, **ADJACENT).double()  # type: ignore[arg-type]
+    distances = torch.cdist(centres, centres)
+    crowded = distances[:3, :3][~torch.eye(3, dtype=torch.bool)]
+    assert torch.allclose(
+        crowded, torch.full_like(crowded, 0.5 * CLUSTER_SEPARATION), atol=1e-5
+    )
+    isolated = distances[3, :3]
+    assert float(isolated.min()) > 2.0 * float(crowded.max())
+
+
+def test_adjacency_gives_unequal_confidence_at_equal_frequency() -> None:
+    """The property the fixture exists for, and the contrast that proves it.
+
+    A regular simplex has every class equally confident, so a mechanism reading
+    per-class confidence has nothing to read however many classes there are or
+    however skewed the prior is — `freematch.md` §6.4 measures exactly that.
+    Crowding three classes and isolating a fourth separates confidence from
+    frequency, which is the one arrangement eq. (9)'s `p_bar / h_bar` responds
+    to.
+    """
+    regular = _bayes_confidence(4)
+    assert max(regular) - min(regular) < 0.01, (
+        f"the regular simplex should be confidence-flat, got {regular!r}"
+    )
+
+    adjacent = _bayes_confidence(4, **ADJACENT)
+    crowded, isolated = adjacent[:3], adjacent[3]
+    assert max(crowded) - min(crowded) < 0.02, (
+        f"the crowded classes should match each other, got {crowded!r}"
+    )
+    assert isolated - max(crowded) > 0.15, (
+        f"the isolated class should be markedly more confident, got {adjacent!r}"
+    )
+
+
+def test_adjacency_leaves_the_class_frequencies_alone() -> None:
+    """Equal frequency is the whole point; the prior is a separate argument."""
+    population = cluster_population(
+        40_000,
+        seed=5,
+        row_offset=0,
+        classes=4,
+        low=0.02,
+        **ADJACENT,  # type: ignore[arg-type]
+    )
+    shares = torch.bincount(population.batch.t, minlength=4).float()
+    shares /= shares.sum()
+    assert torch.allclose(shares, torch.full((4,), 0.25), atol=0.02), shares.tolist()
+
+
+def test_the_adjacency_fixture_keeps_the_signal_redundant() -> None:
+    magnitude = cluster_centres(4, **ADJACENT).abs().mean(dim=0)  # type: ignore[arg-type]
+    assert float(magnitude.min()) > 0.5 * float(magnitude.max())
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"groups": (3, 2)},
+        {"groups": (0, 4)},
+        {"groups": (-1, 5)},
+        {"within": 0.0},
+        {"within": 1.5},
+        {"groups": (5, 1)},
+    ],
+)
+def test_an_ill_formed_adjacency_declaration_is_refused(
+    kwargs: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError):
+        cluster_centres(4, **kwargs)  # type: ignore[arg-type]

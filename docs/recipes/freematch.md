@@ -604,6 +604,19 @@ cards' primary numbers are directly comparable.
 | `sat` | this recipe with `w_f = 0` | SAT alone, which is the paper's own §5.3 ablation |
 | `freematch` | this recipe as declared, `w_f = 0.05` | SAT + SAF |
 | `literal` | this recipe with `w_f = -0.05` | eq. (11) exactly as printed; deviation 7's alternative, expressible with no code change |
+| `amplified` | this recipe with `w_f = +1.0` | the same term at twenty times the paper's weight |
+| `amplified_literal` | this recipe with `w_f = -1.0` | eq. (11) as printed, likewise amplified |
+
+The last two arms are §6.4's, not §6's, and they exist because of an asymmetry
+in the two readings rather than to tune anything. Deviation 7's sign is bounded
+below — `H(A, B)` is minimised at `B = A` — and eq. (11)'s printed sign is not:
+minimising `-H(A, B)` rewards driving `B` towards a corner of the simplex without
+limit. At `w_f = 0.05` the two are within each other's error bars on the primary
+fixture, so the question is unresolvable there whatever the sign. At a weight
+where the term can actually move the optimisation, a bounded objective and an
+unbounded one must behave differently, and *that* is a measurement rather than
+an argument. A recipe declaring `w_f = 1.0` is not FreeMatch and is not offered
+as one; it is the instrument.
 
 The `literal` arm is not a target. It exists because deviation 7 is an argument
 about a sign, and an argument about a sign that could have been a measurement is
@@ -623,8 +636,19 @@ joined. So the primary fixture is not a neighbour of the sweep below; it is its
 | **primary (§6.1)** | 2 | `(0.5, 0.5)` | 0.067 | 0.705 | 0.026 | 0.075 |
 | `k4` | 4 | `(0.25, 0.25, 0.25, 0.25)` | 0.154 | 0.424 | 0.064 | 0.181 |
 | `k4_skewed` | 4 | `(0.55, 0.25, 0.13, 0.07)` | 0.123 | 0.521 | 0.047 | 0.129 |
+| `k4_adjacent` | 4 | `(0.25, 0.25, 0.25, 0.25)` | 0.306 | 0.155 | 0.076 | 0.202 |
 
-Every cluster centre is a vertex of a regular simplex at a fixed pairwise
+`k4_adjacent` is the exception to the sentence below and the reason it is
+declared last: its classes are **not** equidistant. Classes 0-2 sit in one tight
+group 0.9 apart and class 3 sits 1.87 from all three, so the Bayes-optimal
+confidence is 0.632/0.632/0.634 on the crowded classes and **0.872** on the
+isolated one — an unequal per-class confidence at a *uniform* class frequency.
+That is the "class adjacency" FreeMatch §4.1 gives as a reason to want a
+per-class threshold, and §6.4 needs it for a reason that only became clear once
+`k4_skewed` had been run. Tier 0 asserts both halves: that the regular simplex
+is confidence-flat, and that this one is not.
+
+Every other cluster centre is a vertex of a regular simplex at a fixed pairwise
 separation of 1.8 — the primary fixture's — rotated so each class's signal is
 spread across all four signal columns. Equidistance is what makes `K` the only
 thing the sweep varies; the rotation is what keeps a masked column from
@@ -659,12 +683,26 @@ which §6.2 established this card's primary fixture cannot answer:
 
 1. **Does SAF do anything when the class marginal is not already uniform?**
    §6.2 bounded its effect at `-0.0001 +- 0.0012` and showed why — the term
-   sits at its own floor. `k4_skewed` is the fixture where it does not.
+   sits at its own floor. `k4_skewed` is the fixture that was expected to
+   change that.
 2. **Is deviation 7's sign question measurable?** The `literal` arm on a fixture
    where SAF is live is the experiment §6.2 said was needed and could not run.
+   `k4_adjacent` and the two amplified arms are what make it decidable if the
+   first two fixtures leave it at the noise floor.
 3. **Does the `k4` / `k4_skewed` contrast separate "more classes" from
    "skewed marginal"?** SAT's local half has more to differentiate at `K = 4`
-   whatever the prior; SAF's has something to move only under skew.
+   whatever the prior; SAF's was expected to move only under skew.
+
+**Question 1's premise turned out to be wrong, and `k4_adjacent` is the
+correction rather than a fourth guess.** Eq. (9) divides mean probability mass
+by predicted-label frequency, so `p_bar / h_bar` is the mean confidence *per
+predicted class*. Skewing the prior moves numerator and denominator together —
+a rare class collects disproportionate spill from other rows, which pushes the
+ratio up, and is predicted less confidently, which pushes it down — and on a
+fixture where rarity and low confidence coincide, as they generally do, the two
+cancel. What the ratio responds to is per-class *confidence* at fixed
+*frequency*, which is what `k4_adjacent` supplies and what no amount of skew
+can. §6.4 records the closed form and the measurement together.
 
 A result on (1) or (2) is a **direction on five seeds**, never a target
 (deviation 10). A null on (2) at a fixture where §6.4 can show the term is

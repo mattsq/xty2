@@ -254,7 +254,22 @@ def _helmert(classes: int) -> Tensor:
     return torch.stack(columns, dim=1)
 
 
-def cluster_centres(classes: int, *, separation: float = CLUSTER_SEPARATION) -> Tensor:
+def _simplex(vertices: int) -> Tensor:
+    """`[n, n-1]` regular simplex vertices at unit pairwise distance."""
+    if vertices == 1:
+        return torch.zeros(1, 0, dtype=torch.float64)
+    centred = torch.eye(vertices, dtype=torch.float64) - 1.0 / vertices
+    raw = -(centred @ _helmert(vertices))
+    return raw / torch.cdist(raw, raw)[0, 1]
+
+
+def cluster_centres(
+    classes: int,
+    *,
+    separation: float = CLUSTER_SEPARATION,
+    groups: Sequence[int] | None = None,
+    within: float = 1.0,
+) -> Tensor:
     """`[K, 4]` cluster centres: a regular simplex, rotated to fill four columns.
 
     Three properties, and each is a requirement rather than an aesthetic:
@@ -278,6 +293,24 @@ def cluster_centres(classes: int, *, separation: float = CLUSTER_SEPARATION) -> 
     `K <= 5` because a regular simplex on `K` vertices needs `K - 1` dimensions
     and there are four signal columns. A card wanting more levels needs more
     signal columns, which is a different fixture and a different §6.
+
+    **`groups` breaks the equidistance on purpose**, and it is the one thing
+    here that is not a regular simplex. `groups=(3, 1)` at `K = 4` puts classes
+    0-2 in one tight cluster and class 3 on its own: the *group* centres are a
+    regular simplex at `separation`, and each group's members are a regular
+    simplex at `within * separation` around theirs, laid out in dimensions the
+    group axis does not use. Every class stays equally *frequent* — the prior is
+    a separate argument — while a class in a crowded group is predicted less
+    confidently than an isolated one.
+
+    That is the "class adjacency" FreeMatch §4.1 names as a reason to want a
+    per-class threshold, and `freematch.md` §6.4 needs it for a sharper reason:
+    eq. (9)'s `p_bar / h_bar` divides mean probability mass by predicted-label
+    frequency, so a fixture that varies only the *prior* moves numerator and
+    denominator together and leaves the ratio flat. Varying confidence at fixed
+    frequency is the one arrangement that gives that ratio something to say.
+    `groups=None` is all-singletons, which is the plain regular simplex and what
+    every existing caller gets.
     """
     if not 2 <= classes <= SIGNAL_COLUMNS + 1:
         raise ValueError(
@@ -287,12 +320,37 @@ def cluster_centres(classes: int, *, separation: float = CLUSTER_SEPARATION) -> 
         )
     if not separation > 0.0:
         raise ValueError(f"separation must be positive, got {separation}")
-    centred = torch.eye(classes, dtype=torch.float64) - 1.0 / classes
-    vertices = -(centred @ _helmert(classes))
-    vertices = torch.nn.functional.pad(vertices, (0, SIGNAL_COLUMNS - (classes - 1)))
-    scale = separation / float(torch.cdist(vertices, vertices)[0, 1])
+    sizes = tuple(groups) if groups is not None else (1,) * classes
+    if sum(sizes) != classes or any(size < 1 for size in sizes):
+        raise ValueError(
+            f"groups must be positive sizes summing to K = {classes}, got {sizes!r}"
+        )
+    if not 0.0 < within <= 1.0:
+        raise ValueError(
+            f"within is the ratio of within-group to between-group separation "
+            f"and must be in (0, 1], got {within}. At 1 the groups are not "
+            "groups; above 1 the 'tight' cluster would be the loose one."
+        )
+    group_axes = max(len(sizes) - 1, 0)
+    member_axes = max(max(sizes) - 1, 0)
+    if group_axes + member_axes > SIGNAL_COLUMNS:
+        raise ValueError(
+            f"groups {sizes!r} need {group_axes} + {member_axes} dimensions and "
+            f"this DGP has {SIGNAL_COLUMNS} signal columns"
+        )
+    group_centres = _simplex(len(sizes)) * separation
+    vertices = torch.zeros(classes, SIGNAL_COLUMNS, dtype=torch.float64)
+    index = 0
+    for group, size in enumerate(sizes):
+        members = _simplex(size) * (within * separation)
+        for member in range(size):
+            if group_axes:
+                vertices[index, :group_axes] = group_centres[group]
+            if size > 1:
+                vertices[index, group_axes : group_axes + size - 1] = members[member]
+            index += 1
     hadamard = torch.tensor(_HADAMARD_4, dtype=torch.float64) / 2.0
-    return (vertices * scale @ hadamard.T).to(torch.float32)
+    return (vertices @ hadamard.T).to(torch.float32)
 
 
 def _inverse_cdf(uniform: Tensor, probabilities: Tensor, classes: int) -> Tensor:
@@ -316,6 +374,8 @@ def cluster_population(
     classes: int = 2,
     prior: Sequence[float] | None = None,
     effects: Sequence[float] | None = None,
+    groups: Sequence[int] | None = None,
+    within: float = 1.0,
 ) -> ClusterPopulation:
     """The `K`-cluster generalisation of `fixmatch.md` §6.1's DGP.
 
@@ -337,6 +397,11 @@ def cluster_population(
             `K = 2` is the original fair coin. A skewed prior is how a card
             asks whether a mechanism that acts on the *class marginal* has
             anything to act on (`freematch.md` §6.4).
+        groups: Class adjacency — the sizes of the groups classes are packed
+            into, summing to `K`. `None` is all-singletons, the plain regular
+            simplex every existing caller gets. See `cluster_centres`.
+        within: Within-group separation as a fraction of the between-group one.
+            Ignored when every group is a singleton.
         effects: The outcome multiplier per treatment level, length `K`; `y =
             baseline + effect * effects[t]`. `None` is `(0, 1, 1, ...)`, which
             at `K = 2` is the original `y = baseline + t * effect`. Deliberately
@@ -385,7 +450,8 @@ def cluster_population(
     cluster = _inverse_cdf(u_c, weights.expand(rows, classes), classes)
     x = epsilon_x.clone()
     x[:, :SIGNAL_COLUMNS] = (
-        cluster_centres(classes)[cluster] + 0.6 * epsilon_x[:, :SIGNAL_COLUMNS]
+        cluster_centres(classes, groups=groups, within=within)[cluster]
+        + 0.6 * epsilon_x[:, :SIGNAL_COLUMNS]
     )
     assignment = torch.full((rows, classes), low / (classes - 1))
     assignment[torch.arange(rows), cluster] = 1.0 - low
