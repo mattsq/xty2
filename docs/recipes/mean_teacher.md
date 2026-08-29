@@ -3,6 +3,9 @@
 **Status:** `reproduced`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
+> **Agent route:** read §2–§5 to implement or audit fidelity;
+> §6 only for benchmark/reporting work. Historical diagnosis lives in Git.
+
 ---
 
 ## 1. Provenance
@@ -16,36 +19,11 @@
 | Reference implementation | [`CuriousAI/mean-teacher` @ `546348ff863c998c26be4339021425df973b4a36`](https://github.com/CuriousAI/mean-teacher/tree/546348ff863c998c26be4339021425df973b4a36), especially [`pytorch/main.py`](https://github.com/CuriousAI/mean-teacher/blob/546348ff863c998c26be4339021425df973b4a36/pytorch/main.py), [`losses.py`](https://github.com/CuriousAI/mean-teacher/blob/546348ff863c998c26be4339021425df973b4a36/pytorch/mean_teacher/losses.py), and [`ramps.py`](https://github.com/CuriousAI/mean-teacher/blob/546348ff863c998c26be4339021425df973b4a36/pytorch/mean_teacher/ramps.py). Project-local predecessor: [`mattsq/XTYLearner` `mean_teacher.py` @ `35734ec2d5a62d54a59eca38d1e31423da31e1ea`](https://github.com/mattsq/XTYLearner/blob/35734ec2d5a62d54a59eca38d1e31423da31e1ea/xtylearner/models/mean_teacher.py). |
 | Reference impl. runnable? | Not attempted in the P9 card pass. Both repositories were inspected at the pinned commits; the official code targets an obsolete PyTorch/CUDA stack and the project-local source carries unrelated legacy dependencies. |
 
-The authority order is deliberate. Tarvainen and Valpola define the method;
-their pinned implementation resolves operational details that the paper leaves
-implicit. The old XTYLearner module is evidence for the intended project-local
-use -- semi-supervised treatment inference -- but it is not allowed to add
-unreviewed mechanisms to Mean Teacher. In particular, its `q(t | x, y)` input,
-OOD confidence weighting, continuous-treatment variance branch and dual-head
-logit penalty are separate methods or later extensions, not part of P9.
-
 ## 2. Estimand and claim
 
-- **Estimand:** The Mean Teacher part estimates the categorical propensity
-  distribution `p(t | x)`. The surrounding causal stack also estimates the
-  treatment-conditional outcome distribution `p(y | x, t=k)` and its means
-  `mu_k(x)`. Under consistency, positivity and conditional exchangeability,
-  contrasts of those means identify conditional treatment effects.
-- **Claim:** Mean Teacher regularises a classifier by matching a student's
-  prediction under one perturbation to an exponential-moving-average teacher's
-  prediction under an independent perturbation. The paper reports better
-  semi-supervised image-classification error than its Pi-model and Temporal
-  Ensembling baselines, and shows that the teacher is normally a better final
-  predictor than the unaveraged student. P9 claims only that this mechanism is
-  faithfully assembled around `p(t | x)` and improves held-out perturbation
-  consistency without materially damaging propensity or treatment-effect
-  metrics on the fixed project-local target in section 6.
-- **Not claimed:** The paper does not study tabular data, treatment assignment,
-  missing treatment labels, outcome models or causal identification. Consistency
-  does not repair confounding, non-overlap, MNAR labels or an augmentation that
-  changes semantics. P9 does not claim the paper's SVHN/CIFAR/ImageNet numbers,
-  does not use `y` to predict `t`, and does not provide out-of-fold protection;
-  the posterior and leakage guard first have consumers in P10-P11.
+- **Estimand:** categorical treatment probabilities and treatment-specific outcome means used for causal contrasts.
+- **Method claim:** a student learns from observed treatment labels while an EMA teacher supplies a stop-gradient consistency target under an independent feature perturbation.
+- **Scope:** the paper studies image classification. Outcome likelihood, missing-treatment marginalisation, feature masks, and the TARNet stack are project-local adaptations.
 
 ## 3. Equations and mapping
 
@@ -97,53 +75,7 @@ per-row class mean used by xty2's existing `ConsistencyLoss(divergence="mse")`.
 
 ### 3.2 Mapping to xty2
 
-Let
-
-```text
-r_s = Realisation(view="student_x", params="student")
-r_T = Realisation(view="teacher_x", params="teacher")
-r_0 = Realisation(view="identity", params="student")
-```
-
-The two named views independently apply the same schema-aware feature mask.
-For `K` treatments, P9 uses the lower end of the reference implementation's
-recommended MSE range and sets the final consistency coefficient to `K`:
-
-$$
-\lambda_s
-= K\,r(s;40).
-$$
-
-The single stage minimises
-
-$$
-\mathcal L_{\mathrm{P9}}
-= \mathcal L_y^{r_0}
- + \mathcal L_t^{r_s}
- + \lambda_{\mathrm{marg},s}\mathcal L_{\mathrm{marg}}^{r_0}
- + \lambda_s\mathcal L_{\mathrm{cons}}^{r_s,r_T},
-$$
-
-where the first three terms are the reviewed P5 likelihood assembly,
-`lambda_marg,s` is the reviewed linear ramp from `0` to `0.5` over 1,000
-optimiser steps, and
-
-$$
-\mathcal L_{\mathrm{cons}}^{r_s,r_T}
-= \frac{1}{B}\sum_{i=1}^B
-  \frac{1}{K}\sum_{k=0}^{K-1}
-  \left[
-    p_{\theta}(t=k\mid \widetilde x_i^{(s)})
-    -p_{\theta'}(t=k\mid \widetilde x_i^{(T)})
-  \right]^2.
-$$
-
-The teacher probability is detached. `population` reduction makes every term
-use `1/B`, including supervised terms whose ineligible rows contribute zero;
-this matches the reference implementation's division by total minibatch size.
-The supervised treatment loss consumes `r_s`, not `r_0`, so P9 is the second
-consumer that justifies adding an explicit `realisation` field to
-`ObservedTreatmentNLL`. Its default remains `r_0`, preserving P5 and P7.
+The student and teacher are two realisations of one graph. Independent `FeatureMask(p=0.1)` views feed a probability-MSE consistency loss; `SigmoidRamp` weights it and the executor updates the teacher after each student step.
 
 | Paper / P9 symbol | Meaning | xty2 Port | xty2 Objective / Component / View |
 |---|---|---|---|
@@ -161,11 +93,9 @@ consumer that justifies adding an explicit `realisation` field to
 | `lambda_s` | Gaussian/sigmoid consistency ramp | n/a | new `SigmoidRamp(end=K, steps=40)` schedule with the exact formula above |
 | `alpha` | Teacher parameter EMA | every graph component's parameters | existing `TeacherSpec`; executor updates after the student optimiser step |
 
-No posterior `T_GIVEN_XY`, pseudo-label artifact, confidence gate, OOD score,
-continuous-treatment branch, dual classifier head, logit-distance objective,
-outcome view or second stage belongs in P9.
-
 ## 4. Mechanics checklist
+
+This YAML is the executable fidelity contract. Keep its keys synchronized with the recipe and tests.
 
 ```yaml
 gradients:
@@ -251,31 +181,6 @@ data:
   missingness_mechanism: n/a                    # section 6 fixes treatment MCAR; recipe consumes t_observed
 ```
 
-The recipe declares two distinct `ViewSpec` instances. Each contains exactly
-`FeatureMask(p=0.1, columns=None, value=0.0)` and preserves `t`, `y`,
-`t_observed`, `y_observed`, `row_id`, `fold_id` and `weight`. It does not claim
-to preserve `x`. `columns=None` means all mutable features; immutable columns
-remain bit-identical and schema bounds are enforced. A schema with derived
-features must provide the recompute rules required by `DESIGN.md` section 5 or
-the view is rejected at compile time -- stale derived values are never accepted
-as an implicit approximation.
-`mean_teacher(schema, recompute_rules=(...))` supplies the same explicit rules
-to both views; the empty tuple is valid only when masking cannot stale a derived
-column.
-
-The stage also declares `TeacherSpec(role="consistency_target")`. That field
-arrived with `fixmatch`, whose EMA is a reporting device no objective reads;
-this recipe's is a target the consistency term reads, and the compiler now
-checks each declaration against the passes it planned. It binds no card key and
-changes no arithmetic — only the plan's teacher line and therefore its digest,
-so the section 6 numbers below stand as measured.
-
-The batching and preprocessing `n/a` entries are executable boundaries, not
-missing research. P9 does not add a sampler merely to copy the image
-reference's labelled/unlabelled minibatch ratio. The fixed smoke and validation
-runners record their external batches, masks and transformations alongside the
-result.
-
 ## 5. Deviations from the paper and project-local source
 
 | # | Kind | Blocked on | What we do differently | Why | Expected effect on the section 6 metric |
@@ -293,117 +198,11 @@ result.
 
 ### 5.1 Framework additions made for this card
 
-One framework concept was added while revisiting this card, with **one
-consumer — this one** (`DESIGN.md` section 11.2). It is not in the load-bearing
-quadrant, so the named second consumer is evidence rather than a requirement.
-
-| Added | Quadrant (section 11.2) | Consumers today | Named second consumer | Why it was taken now |
-|---|---|---|---|---|
-| `TeacherSpec.decay` accepts a `Schedule`, not only a number | fidelity-bearing, reversible | This card, which declares `Constant(0.99)`; `fixmatch` declares a constant `0.999` | `fixmatch`'s own EMA, and any FlexMatch/FreeMatch descendant that anneals the teacher alongside its threshold | Deviation 7 was a framework limitation wearing the clothes of a choice: the paper raises decay after ramp-up in the evaluation it reports from, and P8's contract took one number, so the card could not state the published method even to reject it. It can now, and it still rejects it — for the reason deviation 7 gives, which is a reason about Mean Teacher rather than about xty2. Reversibility is asserted rather than assumed: a bare number normalises to `Constant`, `describe()` prints the plain decay for a constant, and `tests/invariants/test_teacher.py` compares the plan line, the card binding and dataclass equality against the number they replaced, so every plan, digest and recorded result predating the field stands unchanged. |
+`SigmoidRamp` supplies the paper's consistency schedule while the existing `TeacherSpec`, realisation, and objective contracts handle the rest.
 
 ## 6. Reproduction target
 
-The published SVHN, CIFAR-10 and ImageNet results cannot honestly validate this
-tabular causal adaptation: their inputs, labels, architectures and metrics are
-all different. P12 must instead run the completely fixed project-local
-mechanism target below. Passing it supports the limited P9 claim in section 2;
-it must not be called a reproduction of Tarvainen and Valpola.
-
-### 6.1 Fixed clustered DGP
-
-Run ten paired replicates indexed by `r in {0, ..., 9}` with base seed
-`s_r = 90000 + 100*r`. All generation uses CPU `torch.Generator` instances and
-`float32`. Independent train, validation and test populations contain 4,096,
-2,048 and 4,096 rows and use seeds `s_r+1`, `s_r+2` and `s_r+3`. Within each
-population draw, in order, `U_C`, `epsilon_X`, `U_T` and `epsilon_Y`.
-The two uniform tensors are independent draws with
-`U_C, U_T ~ Uniform(0, 1)`. The six entries of `epsilon_X` and the scalar
-`epsilon_Y` are independent `Normal(0, 1)` draws. All of these variables are
-mutually independent within a row and independent across rows.
-
-For each row, set `C = 1{U_C < 0.5}` and `S = 2C-1`. Define redundant cluster
-features
-
-$$
-X_j = 0.8S + 0.6\epsilon_j,\quad j=1,\ldots,4,
-\qquad X_5=\epsilon_5,\quad X_6=\epsilon_6.
-$$
-
-Treatment has overlap within both clusters,
-
-$$
-e(C)=0.15+0.70C,
-\qquad T=\mathbb 1\{U_T<e(C)\},
-$$
-
-and the continuous outcome is
-
-$$
-b(X)=0.5X_1-0.3X_2+0.2(X_5^2-1),
-\qquad \tau(X)=1+0.5\tanh(X_3),
-$$
-
-$$
-Y=b(X)+T\tau(X)+0.5\epsilon_Y.
-$$
-
-Every outcome is observed. In the training population only, generate
-`torch.randperm(4096)` with seed `s_r+4`; the first 205 indices have observed
-treatment and the remaining 3,891 have missing treatment. Validation and test
-treatments remain fully observed. This is an exactly fixed, approximately 5%
-treatment-labelled MCAR design. Use raw `X`. Compute the population mean and
-standard deviation of all training outcomes, including treatment-missing rows,
-standardise train/validation/test `Y` with those moments for fitting, and return
-predicted means to original outcome units for effect metrics. Supply no row
-weights.
-
-### 6.2 Fixed paired fit and evaluation
-
-Compare the section 4 recipe with a zero-consistency ablation. The ablation is
-identical -- graph, views, teacher, all four objectives, EMA, optimiser,
-initialisation, batches and RNG keys -- except its consistency schedule is
-`Constant(0.0)`. Keeping the zero-weight objective and teacher present isolates
-the effect of the scheduled consistency gradient rather than conflating it with
-EMA evaluation or extra forward passes.
-
-Reset the global CPU Torch RNG to `s_r+6`, initialise one graph, and copy its
-initial student and teacher state bit-for-bit to both fits. With seed `s_r+5`,
-precompute 3,000 batches; batch `j` is the first 256 indices of a fresh
-`torch.randperm(4096)`. Both fits consume the identical ordered index table and
-the same per-step `rng_key = s_r + 10000 + j`, so corresponding student and
-teacher views are bit-identical between fits but independent within a fit. Run
-on CPU with deterministic algorithms enabled for exactly 3,000 optimiser steps
-and evaluate final checkpoints. Validation is diagnostic only and cannot select
-a checkpoint or alter this protocol.
-
-On the test population, generate sixteen paired view realisations with keys
-`s_r+20000+q`, `q in {0, ..., 15}`. For fit `M`, define held-out perturbation
-disagreement
-
-$$
-C_M^{(r)}
-= \frac{1}{16\cdot4096\cdot K}
-  \sum_{q,i,k}
-  \left[
-    p_{M,\mathrm{student}}(k\mid v_s^{(q)}(X_i))
-    -p_{M,\mathrm{teacher}}(k\mid v_T^{(q)}(X_i))
-  \right]^2.
-$$
-
-The primary paired metric is `R_C^(r) = C_MT^(r) / C_zero^(r)`. Guardrails are
-the identity-view final-teacher treatment NLL and test `sqrt(PEHE)` against the
-analytic `tau(X)`. Define paired differences as Mean Teacher minus ablation.
-The target passes only when
-
-```text
-mean(R_C) <= 0.90
-mean(d_treatment_NLL) <= 0.02 nat/row
-mean(d_sqrt_PEHE) <= 0.10 outcome units.
-```
-
-Report each fit's mean, every paired metric, and sample standard errors across
-the ten replicates. If `C_zero` is exactly zero in any replicate, the target is
-invalid rather than automatically passing.
+The paired target compares the EMA-consistency recipe with its zero-consistency ablation on a fixed clustered DGP.
 
 ```yaml
 reproduction:
@@ -418,58 +217,53 @@ reproduction:
   report: per-fit means plus paired means and sample stderrs over 10 replicates
 ```
 
+### 6.1 Fixed clustered DGP
+
+For replicate `r = 0..9`, use base seed `90000 + 100r` and independent
+train/validation/test populations of 4,096/2,048/4,096 rows. Draw
+`C ~ Bernoulli(0.5)`, set `S=2C-1`, and define
+
+$$
+X_j=0.8S+0.6\epsilon_j\ (j=1,\ldots,4),\qquad
+X_5=\epsilon_5,\quad X_6=\epsilon_6,
+$$
+
+$$
+e(C)=0.15+0.70C,\qquad T=\mathbb 1\{U_T<e(C)\},
+$$
+
+$$
+b(X)=0.5X_1-0.3X_2+0.2(X_5^2-1),\quad
+\tau(X)=1+0.5\tanh(X_3),
+$$
+
+$$
+Y=b(X)+T\tau(X)+0.5\epsilon_Y.
+$$
+
+Exactly 205 training treatments are observed under a seeded MCAR permutation;
+validation/test treatments and every outcome are observed. Use raw `X` and
+population-standardise `Y` from all training outcomes.
+
+### 6.2 Fixed paired fit and evidence
+
+Compare the declared recipe with a `Constant(0)` consistency ablation while
+retaining the same graph, teacher, views, objectives, initial state, 3,000
+ordered 256-row batches, and view RNG keys. Evaluate the final checkpoint on
+16 held-out paired perturbations. The primary metric is the ratio of
+student/teacher probability MSEs; final-teacher treatment NLL and analytic
+`sqrt(PEHE)` are guardrails. The immutable ten-replicate result at commit
+`40265928e87a` was ratio `0.316756 +/- 0.0303`,
+`d_NLL = -0.00555395 +/- 0.00797`, and
+`d_PEHE = 0.054138 +/- 0.00626`, satisfying the predeclared thresholds.
+
 ### 6.3 Result ledger
+
 
 | Date | Commit | Metric | Value +/- stderr | Within tolerance? |
 |---|---|---|---|---|
 | 2026-08-24 | `d060df351f2fe8bac6d951c3757506c684d8b408` | consistency_MSE_ratio<br>paired_d_treatment_NLL<br>paired_d_sqrt_PEHE | 0.316756 +/- 0.0303<br>-0.00555395 +/- 0.00797 nat/row<br>0.054138 +/- 0.00626 outcome units | yes |
 | 2026-08-27 | `40265928e87a` | consistency_MSE_ratio<br>paired_d_treatment_NLL<br>paired_d_sqrt_PEHE | 0.316756 +/- 0.0303<br>-0.00555395 +/- 0.00797 nat/row<br>0.054138 +/- 0.00626 outcome units | yes |
-
-### 6.4 P9 acceptance
-
-1. The graph contains exactly the reviewed P5 `mlp_encoder`, `tarnet_head` and
-   `categorical_propensity`. The recipe contains declarations only. It declares
-   exactly `student_x` and `teacher_x`, with the transforms and preservation
-   sets in section 4; a fixed key yields reproducible views and the two names
-   yield independent RNG streams.
-2. The compiled stage plans exactly three realisations: identity/student for
-   outcome and marginal likelihood, `student_x`/student for supervised
-   treatment plus consistency, and `teacher_x`/teacher for consistency. No
-   objective re-invokes the graph and no fourth forward pass appears.
-3. `joint_fit` contains exactly the four objectives, row scopes, reductions and
-   schedules in section 4. `ObservedTreatmentNLL(realisation=...)` is the only
-   supervised-objective surface added; its default-realisation behaviour and
-   P5/P7 plans remain byte-stable.
-4. The teacher begins as an exact student copy, has `requires_grad=False`,
-   receives no gradient, uses the explicit parameter/buffer/mode policy, and is
-   updated only after each student optimiser step. Candidate and identity
-   evaluation work for both parameter sets.
-5. A named Tier 1 mutation test replaces the reviewed 40-step consistency
-   schedule with `SigmoidRamp(end=K, steps=400)`. The smoke trace asserts the
-   realised consistency weights at steps `0`, `20` and `40` are respectively
-   `K*exp(-5)`, `K*exp(-1.25)` and `K`, as well as asserting the plan's
-   40-step description. The real recipe passes and the 400-step mutant fails
-   that assertion. This is the required proof that the ramp length came from
-   this card rather than a default; a loss-decrease assertion alone is not a
-   substitute.
-6. One non-CI P9 smoke run enables `GradientProbe.periodic(200)`. The
-   implementation PR body records the resulting per-objective gradient norms
-   and pairwise cosines at every probed step, including the treatment versus
-   consistency and marginal versus consistency pairs. The probe remains off by
-   default in the recipe and normal CI.
-7. The Tier 1 analytic fixture shows total loss decreases, propensity beats the
-   held-out marginal-frequency baseline, treatment contrasts remain in the
-   declared wide analytic band, and the scheduled fit has lower held-out
-   perturbation disagreement than the zero-consistency paired ablation. These
-   are wiring assertions, not the ten-seed section 6 target.
-8. The card-to-plan cross-check covers every non-`n/a` section 4 key, both view
-   descriptions, every realisation, teacher policy, component-scoped
-   architecture, and exact schedule formula/length. Mutations removing either
-   view, detaching the student, EMA-updating buffers or using the identity view
-   on both sides fail named invariants.
-9. Tier 0 and Tier 1, `ruff check .`, `ruff format --check .`, `mypy --strict`
-   and `git diff --check` are green. The card may then move to
-   `smoke-passing`; section 6 remains queued for P12.
 
 ## 7. Unknowns
 

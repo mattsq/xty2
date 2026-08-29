@@ -3,6 +3,9 @@
 **Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
+> **Agent route:** read §2–§5 to implement or audit fidelity;
+> §6 only for benchmark/reporting work. Historical diagnosis lives in Git.
+
 ---
 
 ## 1. Provenance
@@ -16,27 +19,11 @@
 | Reference implementation | [`clinicalml/cfrnet` @ `0377b0c8c822845d335540d4be6003024a65d3c8`](https://github.com/clinicalml/cfrnet/tree/0377b0c8c822845d335540d4be6003024a65d3c8), the last commit before the ICML publication |
 | Reference impl. runnable? | Not attempted. It targets Python 2, TensorFlow 0.12.0-rc1 and NumPy 1.11.3. |
 
-The paper is the authority for the estimand, TARNet architecture and reported
-number. The pinned implementation is the authority where the paper gives only a
-range or a qualitative description. The semi-supervised likelihood introduced
-below is an xty2 P5 extension, not a claim about the published method.
-
 ## 2. Estimand and claim
 
-- **Estimand:** For the paper's binary treatment,
-  `tau(x) = E[Y(1) - Y(0) | X=x] = m_1(x) - m_0(x)`. The P5 component contract
-  generalises this to `K` categorical treatments by estimating every
-  `m_k(x) = E[Y(k) | X=x]`; effects are contrasts of candidate-treatment means.
-- **Claim:** TARNet jointly learns a shared representation and treatment-specific
-  outcome heads from factual outcomes. It is the `alpha = 0` ablation of CFR,
-  without an IPM balance penalty. On IHDP, the paper reports within-sample
-  `sqrt(PEHE) = 0.88 +/- 0.02` and out-of-sample `0.95 +/- 0.02` over 1,000
-  outcome realisations (Table 1).
-- **Not claimed:** The paper does not model `p(t | x)`, does not train when
-  treatment is missing, does not give a categorical-`K` result, and does not
-  claim that TARNet is balanced or that its effects are identified without
-  consistency, overlap and strong ignorability. The P5 propensity head and
-  exact missing-treatment likelihood are xty2 additions.
+- **Estimand:** treatment-specific means `m_k(x) = E[Y(k) | X=x]`; pairwise contrasts are CATEs under the usual causal assumptions.
+- **Method claim:** TARNet shares an encoder across treatment-specific outcome heads. The published binary model is the `alpha = 0` CFR ablation.
+- **xty2 extension:** a categorical propensity and exact missing-treatment likelihood make the model trainable when `t` is absent. The paper does not claim this extension, categorical `K`, or identification without consistency, overlap, and exchangeability.
 
 ## 3. Equations and mapping
 
@@ -76,51 +63,7 @@ observed treatment (paper section 4 and Figure 1).
 
 ### 3.2 Mapping to xty2
 
-#### P5 semi-supervised extension
-
-Let `m_i` indicate that treatment is observed. P5 fits the following three
-terms in one stage. These equations are xty2's observed-data likelihood, not
-equations from Shalit et al.:
-
-$$
-\mathcal L_y
-= -\frac{1}{B}\sum_{i:m_i=1}
-  w_i\log p_\phi(y_i\mid x_i,t_i),
-$$
-
-$$
-\mathcal L_t
-= -\frac{1}{B}\sum_{i:m_i=1}
-  \log p_\theta(t_i\mid x_i),
-$$
-
-$$
-\mathcal L_{\mathrm{marg}}
-= -\frac{1}{B}\sum_{i:m_i=0}
-  \log\sum_{k=0}^{K-1}
-  p_\theta(t=k\mid x_i)\,
-  p_\phi(y_i\mid x_i,t=k),
-$$
-
-with
-
-$$
-\mathcal L_{\mathrm{P5}}(s)
-= \mathcal L_y + \mathcal L_t
-+ \lambda_{\mathrm{marg}}(s)\mathcal L_{\mathrm{marg}},
-\qquad
-\lambda_{\mathrm{marg}}(s)
-= 0.5\min\!\left(\frac{s}{1000},1\right).
-$$
-
-`population` reduction supplies the `1/B` factors. The marginal term has no
-stop-gradient: it trains the encoder, outcome heads and propensity head. For
-`K=2`, the paper's group weights are carried on observed rows by
-`XTYBatch.weight`; for general `K`, use `w_i = 1 / (K p(t_i))`. A missing row's
-arbitrary stored treatment value is never used to construct either weights or
-candidate treatments.
-
-#### Component and objective mapping
+xty2 keeps the shared encoder and candidate-treatment heads, represents each head as a unit-scale Gaussian, and adds propensity, observed-treatment, and missing-treatment objectives. The stage is single-pass and has no views, teachers, or posterior artifact.
 
 | Paper / P5 symbol | Meaning | xty2 Port | xty2 Objective / Component |
 |---|---|---|---|
@@ -133,10 +76,9 @@ candidate treatments.
 | `w_i` | Treatment-group sample weight on complete cases | n/a (batch field) | `XTYBatch.weight`, applied inside `ObservedOutcomeNLL` before `population` reduction |
 | `L_P5` | Single weighted objective mix | both predicted ports | stage `joint_fit` with three `Weighted` objectives |
 
-No view, posterior, balance loss, representation penalty, teacher, second
-realisation or second stage belongs in P5.
-
 ## 4. Mechanics checklist
+
+This YAML is the executable fidelity contract. Keep its keys synchronized with the recipe and tests.
 
 ```yaml
 gradients:
@@ -217,15 +159,6 @@ data:
   missingness_mechanism: observed: the dataset's own t_observed mask, unchanged  # TARNet's data arrives labelled
 ```
 
-Five of these keys were `n/a` until the loader existed, and the two that still
-are say something about the *method* rather than about xty2: `UniformSampler`
-enforces no labelled/unlabelled quota because TARNet has no unlabelled stream,
-and the treatment encoding is the `XTYBatch` contract's. Deviation 5 records
-what the change cost and bought; the standardisation is now fitted on the `fit`
-assignment by the compiled program, and
-`TrainingPopulation.fitted_on_row_ids` is checked against it at run time rather
-than described in this paragraph.
-
 ## 5. Deviations from the paper
 
 | # | Kind | Blocked on | What we do differently | Why | Expected effect on the section 6 metric |
@@ -238,17 +171,21 @@ than described in this paragraph.
 
 ### 5.1 Framework additions made for this card
 
-| Added | Quadrant (§11.2) | Consumers today | Named second consumer | Why now |
-|---|---|---|---|---|
-| `DataSpec` on `Recipe` — split, standardisation and missingness as declarations the compiler reads | fidelity-bearing, **load-bearing vocabulary** | This card, `scarf` and `fixmatch` | **VIME** (`BACKLOG.md` §5.2), whose protocol standardises on the training split before masking, and whose corruption then reads the same population. The shape was checked against it in one place: the policy names the *split* the statistics are fitted on rather than carrying the statistics, so a second consumer fitting a different statistic on the same split adds a field rather than a concept | Three of this card's §4 keys were `n/a` with the reason "xty2 has no loader" written beside them, and deviation 5 recorded the guarantee that cost: the standardisation a published number depends on was enforced by the fixture, so a runner could fit it on the wrong split and nothing in the plan would say so. That is §11.2 Q1 answered yes by three cards at once |
-| `Dataset` and `TrainingPopulation` — the rows a caller supplies, and what the policy makes of them | fidelity-bearing, **load-bearing vocabulary** | The three cards above | **repeated cross-fitting** (`DESIGN.md` §11.4, paid for by `ssdml` §5.6): `Dataset.assignments` is a mapping of named subsets rather than one `split` field precisely so a second partition over the same rows is additive. That row is amended, not discharged — the artifact contract still assumes one assignment | A `Recipe` is a declaration of a method, so the rows cannot live in it; a policy with nothing to apply it to cannot be checked. The pair is what lets the recipe declare and the caller supply. `fitted_on_row_ids` is `Checkpoint.trained_on_row_ids` applied to preprocessing, and it is what makes deviation 5's guarantee falsifiable rather than described |
-| `UniformSampler`, and `Stage.sampler` as a `REQUIRED` field | fidelity-bearing, reversible | The three cards above; the other four declare `ExternalBatches` | — (not required for this quadrant) | `optimisation.batch_size` was `n/a` here with "ref impl uses 100" written in the comment: the number was known and had nowhere to go. The sampler is *defined* as the scheme every fixture already used, which is what let seven recipes adopt it without re-basing onto new noise |
+`tarnet` introduced the declarative data boundary (`DataSpec`, `Dataset`, and
+`TrainingPopulation`) and `UniformSampler`. Runtime checks bind preprocessing to
+the declared fit rows and the batch stream to the recipe. **Named second
+consumer:** VIME, whose mask/impute statistics must be fitted on the declared
+training population rather than the current batch, checked the boundary's row
+identity and fitted-statistic shape. `UniformSampler` is reversible policy, not
+load-bearing vocabulary.
 
 ### Tier 2 outcome
 
 On 2026-08-27, commit `1a10fb039e5f` produced a `deviating` result: This evaluates the implemented TARNet extension against the IHDP within-sample estimand, with the paper's target retained unchanged. The pinned reference repository ships 100 of the declared 1,000 IHDP realisations. The reviewed card also requests only ten seeds, so P12 runs realisations 1-10 with one deterministic fit each. That cannot establish the published 1,000-realisation centre and is recorded as deviating even if its ten-run mean lies inside the numeric tolerance. Failed target(s): sqrt_PEHE_in_sample was 1.46891 +/- 0.117 outcome units against 0.78 <= mean <= 0.98 outcome units.
 
 ## 6. Reproduction target
+
+The nightly target is the published IHDP within-sample `sqrt(PEHE)` interval. The fixed contract below is authoritative.
 
 ```yaml
 reproduction:
@@ -263,49 +200,13 @@ reproduction:
   report: mean_and_stderr
 ```
 
-This target is queued for Tier 2; P5 does not claim it from a smoke fit. Because
-deviation 1 remains active even when treatment is fully observed, a miss
-outside tolerance must become `deviating` with an explanation unless the card is
-amended and reviewed before the run.
-
 ### 6.1 Result ledger
+
 
 | Date | Commit | Metric | Value +/- stderr | Within tolerance? |
 |---|---|---|---|---|
 | 2026-08-24 | `d060df351f2fe8bac6d951c3757506c684d8b408` | sqrt_PEHE_in_sample | 1.66989 +/- 0.178 outcome units | no |
 | 2026-08-27 | `1a10fb039e5f` | sqrt_PEHE_in_sample | 1.46891 +/- 0.117 outcome units | no |
-
-### 6.2 P5 single-stage acceptance
-
-The first implementation is deliberately one graph and one stage:
-
-1. The graph contains exactly `mlp_encoder` (`X_RAW -> X_REPR`),
-   `tarnet_head` (`X_REPR -> Y_GIVEN_XT`) and `categorical_propensity`
-   (`X_REPR -> T_GIVEN_X`). The compiled plan has one identity/student forward
-   pass in that topological order, with the two heads branching from
-   `mlp_encoder`.
-2. Stage `joint_fit` has `rows="all"`, trains all three components for 3,000
-   steps, and contains exactly the three objectives and row populations in
-   section 4. No view, second realisation, stage transition or conditional is
-   permitted.
-3. `tarnet_head` passes the full candidate-treatment conformance suite for
-   `log_prob`, `mean` and `sample` with `B != K`; `categorical_propensity`
-   passes normalisation and observed/candidate `log_prob` checks.
-4. On the Tier 1 analytic DGP, all four `FIDELITY.md` section 3 assertions pass:
-   loss decreases; propensity beats the held-out marginal-frequency baseline;
-   estimated treatment contrasts lie in the declared wide band around the
-   analytic ATEs; and, with 50% treatment MCAR, the marginal recipe beats the
-   otherwise identical complete-case ablation on held-out `sqrt(PEHE)`. The
-   comparison uses the same data, initial parameters, optimiser steps and seeds;
-   only `MissingTreatmentMarginalNLL` is removed from the ablation.
-5. The card-to-plan test checks every non-`n/a` section 4 key against
-   `plan.hyperparameters`. A mutation deleting one real binding from the recipe
-   must fail and name the missing canonical key. Architecture mappings must be
-   rendered component-by-component so the plan diff shows all three modules,
-   rather than collapsing them to one opaque value.
-6. Tier 0 and Tier 1, `ruff check .`, `ruff format --check .` and
-   `mypy --strict` are green. The card may then move to `smoke-passing`; Tier 2
-   remains queued.
 
 ## 7. Unknowns
 

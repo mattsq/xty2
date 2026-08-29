@@ -3,6 +3,9 @@
 **Status:** `draft`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
+> **Agent route:** read §2–§5 to implement or audit fidelity;
+> §6 only for benchmark/reporting work. Historical diagnosis lives in Git.
+
 > Written card-first, before any code, per `CLAUDE.md` rule 1.
 >
 > This is the card `flexmatch.md` §5.1 named in advance. That card took objective

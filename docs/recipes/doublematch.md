@@ -3,26 +3,8 @@
 **Status:** `draft`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
-> The recipe, the objective and the Tier 0/Tier 1 tests exist and pass, so the
-> *code* is at what this vocabulary calls `smoke-passing`. The status stays
-> `draft` because §8 is unsigned.
->
-> `CLAUDE.md` rule 1 was **not** followed, and it is worth being precise about
-> what that cost. The card was written before the code, but no reviewer read it
-> in between, and the implementation pass then rewrote 198 lines of it —
-> including adding an architecture change, which is exactly the decision the
-> rule exists to put in front of an independent reader. An
-> adversarial review was run against the finished packet instead, and it
-> overturned three claims this card had made about its own central measurement:
-> that the collapse was caused by the unit-sphere geometry (it is caused by the
-> initialisation scale — §5.10 is the withdrawn row and §5.9 what replaced it),
-> that the recipe it then declared does not collapse (it does, for 135 steps),
-> and that the Tier 1 test guarding the difference could tell the two
-> architectures apart (it could not). All three are corrected below and
-> attributed where they were wrong, and the architecture the packet first
-> shipped is `§5.10`, kept and struck through. A card whose
-> load-bearing judgement needed an adversarial pass to survive is a card whose
-> §8 should be signed by someone who was not in that loop.
+> **Agent route:** read §2–§5 to implement or audit fidelity;
+> §6 only for benchmark/reporting work. Historical diagnosis lives in Git.
 
 ---
 
@@ -37,88 +19,11 @@
 | Reference implementation | [`walline/doublematch`](https://github.com/walline/doublematch) @ `6ea49949a5f412b2c4cb0bf078320751cad543e9`, **read directly** in the session that wrote this card: `doublematch.py` (the whole method), `libml/models.py` (what `embeds` is), and `README.md` (the per-dataset flags the paper's §IV-D states in prose). Built on the FixMatch codebase, and the parts this recipe inherits are the parts `fixmatch.md` describes. |
 | Reference impl. runnable? | Not attempted. TensorFlow 1.x compat, CTAugment, and a CIFAR-scale WideResNet; nothing about the tabular port turns on running it. |
 
-Reading the implementation settled four things the paper's prose leaves open,
-and each is marked `ref impl` in §7 rather than folded into the transcription:
-the projection head is a biased `tf.layers.dense` with a Glorot-normal kernel;
-its parameters live inside the `classify` variable scope, so eq. (6)'s weight
-decay reaches them exactly as the paper says; the implemented self-supervised
-loss is `1 - cos` where eq. (3) is `-cos`; and `embeds` is the
-global-average-pooled penultimate activation, with the classifier being one
-dense layer on top of it — which is the structure this port maps onto.
-
 ## 2. Estimand and claim
 
-- **Estimand:** unchanged from `fixmatch.md`. The FixMatch half estimates the
-  categorical propensity `p(t | x)`; the retained causal stack estimates
-  `p(y | x, t=k)` and its means `mu_k(x)`, whose contrasts identify conditional
-  treatment effects under consistency, positivity and conditional
-  exchangeability. **The self-supervised term estimates nothing.** It is a
-  regulariser on `X_REPR`, and it is the only term in this recipe with no
-  statistical quantity of its own — which is precisely why it can be applied to
-  rows no likelihood is entitled to.
-- **Claim:** DoubleMatch adds a third loss to FixMatch: the strongly-augmented
-  row's penultimate features, passed through a trainable linear head, are
-  trained to point in the same direction as the *weakly* augmented row's
-  detached features (eq. 3), on **every** unlabelled row rather than only the
-  ones the confidence gate retains. The paper claims this reaches higher
-  accuracy in roughly a third of FixMatch's training steps, that it is new
-  state of the art on CIFAR-100 at every label budget, and — §V-B — that with
-  enough labels the *pseudo-label* term can be dropped entirely at almost no
-  cost. This card claims only that the mechanism is faithfully assembled around
-  `p(t | x)` and `X_REPR` in xty2, and that on the fixed project-local target in
-  §6 the term does what eq. (3) says it does — it reaches a real alignment on
-  every row, including the ones the gate rejects, without the representation
-  collapsing at any point in the run. That last clause is a trajectory-wide
-  measurement (§6.2) and it took two attempts to earn: the architecture an
-  earlier version of this card declared spends 135 steps at a concentration
-  above 0.99 before recovering, and the Tier 1 test guarding it averaged the
-  last hundred steps of a 3,000-step run and reported no collapse at all. An
-  adversarial review of this packet caught both, and §5 deviation 9 is what
-  replaced the wrong fix. Whether the term *improves* held-out treatment
-  prediction over the same fit with `w_s = 0` (which is FixMatch's loss, by the
-  paper's own sentence in §III, on this recipe's encoder) is **not** claimed on
-  the evidence in §6.2: two initialisation draws of the declared architecture
-  put the EMA comparison on opposite sides of 1.0, and that is a ten-seed
-  question.
-- **Not claimed:** no image number is claimed, and no training-time claim is
-  made at all: §6 fixes the step budget for attributability (deviation 3), so
-  "reaches the same accuracy in a third of the steps" is a claim this protocol
-  is built not to be able to test. Nor is it claimed that this recipe beats
-  `fixmatch` — measured on §6.1's fixture it does not, because the encoder
-  initialisation eq. (3) needs (deviation 9) is worse for the propensity head
-  than CFRNet's, by more than eq. (3) recovers (§6.2). The
-  claim is about the term inside the architecture the term requires.
-
-Three things worth stating before the mechanics, because they are why this
-recipe was picked rather than the next one in the sequence.
-
-**This is the row-population test `BACKLOG.md` §2.6 asks for, and the framework
-answers it with nothing new.** The backlog's sketch is three terms with three
-different eligible sets, and the semantic test is that "row eligibility for one
-loss must not determine eligibility for all losses". `Objective.rows` has been
-per-objective since P3, so the recipe below states it directly. What
-DoubleMatch actually cost was one objective — no port, no executor, no row
-population, no schedule type (§5.1).
-
-**It is the natural follow-up to `scarf.md` §6.2, not merely the next
-composite.** SCARF's port found that contrastive pretraining learned a
-representation whose frozen probe carried treatment structure, while the
-end-to-end gain the paper's protocol predicts was absent at every fine-tuning
-budget tried — with the mechanism diagnosed as instance discrimination
-spending its capacity pushing apart exactly the same-treatment rows the
-propensity head wants together. Eq. (3) is the same family of idea with that
-term deleted: it has **no negatives**. If the SCARF diagnosis is right, a
-negative-free feature-consistency loss should not pay the same cost. §6.2
-records how far the measurement got: the term learns without collapsing the
-representation, and the propensity comparison it was supposed to settle came
-out mixed.
-
-**The two structural limitations of `fixmatch.md` §2 are inherited unchanged**,
-because this recipe inherits eqs. (1) and (2) unchanged. The confidence gate is
-still in tension with positivity and still does not fail safe under overlap;
-the EMA is still a reporting device whose number can improve while the network
-it averages gets worse. DoubleMatch narrows neither. What it changes is what
-happens to the rejected rows, and only that.
+- **Estimand:** categorical treatment probabilities plus treatment-specific outcome means for causal contrasts.
+- **Method claim:** DoubleMatch adds detached weak-feature versus projected strong-feature cosine consistency to FixMatch's supervised and pseudo-label losses.
+- **Scope:** the image architecture and published benchmark are not reproduced. The TARNet outcome stack and tabular views are project-local.
 
 ## 3. Equations and mapping
 
@@ -173,6 +78,8 @@ Two notes on the transcription, both from reading the reference:
 
 ### 3.2 Mapping to xty2
 
+The recipe reuses FixMatch's weak/strong views, gate, sampler, optimiser, and EMA. `ProjectionHead` consumes strong features while `CosineFeatureConsistency` compares them with detached weak features from the same two forward passes.
+
 | Paper symbol | Meaning | xty2 Port | xty2 Objective / Component |
 |---|---|---|---|
 | `f` | backbone, up to the penultimate layer | `X_RAW -> X_REPR` | `MLPEncoder`, the shared P5 backbone, at torch's default initialisation rather than CFRNet's (deviation 9) |
@@ -195,44 +102,9 @@ Two notes on the transcription, both from reading the reference:
 | — (project-local) | outcome likelihood | `Y_GIVEN_XT` | `ObservedOutcomeNLL`, rows `t_observed` |
 | — (project-local) | exact marginalisation over missing `t` | `T_GIVEN_X`, `Y_GIVEN_XT` | `MissingTreatmentMarginalNLL(grad_path="both")`, rows `t_missing` |
 
-Four mapping decisions carry the fidelity of this port.
-
-**`z_i` is the same weak pass the pseudo-label reads, not a third view.**
-Algorithm 1 computes `z_i = f(alpha(x~_i))` once and derives both `w_i` and
-eq. (3)'s target from it. The recipe therefore points `CosineFeatureConsistency`
-at draw 0 of `weak_x` — the draw `PseudoLabelTreatmentNLL` already targets — so
-the two terms share one forward pass, which is what makes the paper's overhead
-claim true here as well. Pointing it at draw 1 would compile, cost a pass, and
-silently be a different method.
-
-**`h` is applied to the strong branch only, and that asymmetry is the loss.**
-Eq. (3) is not symmetric: gradient flows through `h(v_i)` and stops at `z_i`.
-So `CosineFeatureConsistency` names a `prediction_port` and a `target_port`
-separately — it is the first objective in the repository whose two sides are
-different ports — and derives `detaches` from `stop_grad` in the usual way.
-Without the predictor the term would be an ordinary consistency loss with a
-known failure mode: `SimSiam`'s ablation, which the paper cites for exactly this
-design, is that dropping the predictor collapses the representation.
-
-**Rows for eq. (2) and eq. (3) are both `all`.** FixMatch's footnote 2 puts every
-labelled row into `U` as well, without its label, and DoubleMatch inherits the
-framework and the codebase. Both unlabelled terms therefore average over the
-same population, which keeps their two denominators equal to each other, as
-they are in the paper. Both are `(1 + mu) B = 512` rather than `mu B = 448`,
-because in xty2 one batch holds both populations: the ratio `l_p : l_s` is the
-paper's exactly, and `w_s l_s : l_l` is off by `512/448 = 1.14`. Inherited from
-`fixmatch.md`'s reading of footnote 2 and applied to both unlabelled terms
-identically, so it is one convention rather than two.
-
-**Eq. (3) needs no gate, and that is the whole method.** The paper's title claim
-is that the rejected rows still train something. In xty2 that is not a mechanism
-at all: `PseudoLabelTreatmentNLL` masks per row inside its own arithmetic,
-`CosineFeatureConsistency` does not, and both are handed the same `RowIndex`.
-`BACKLOG.md` §2.6 predicted this would be the interesting test; it is the
-uninteresting one, and §5.1 records that as the result rather than as an
-absence.
-
 ## 4. Mechanics checklist
+
+This YAML is the executable fidelity contract. Keep its keys synchronized with the recipe and tests.
 
 ```yaml
 gradients:
@@ -330,34 +202,6 @@ data:
   missingness_mechanism: treatment MCAR to a budget of 64 labelled rows, keyed by row_id  # deviation 7
 ```
 
-`architecture.activation[projection_head]` is declared and inert: §III's `h` is
-one layer, and a head of one layer inserts no activation module, so the field
-names a transform that never runs. It is declared rather than left to a default
-because §9.1 admits no silent defaults, and Tier 0 asserts the built module is a
-single `nn.Linear` so the declaration cannot quietly become load-bearing. This
-is not a §7 unknown — the paper is explicit that `h` is linear — and it is not a
-deviation, because the computed function is exactly the paper's.
-
-One line of that block is the only place this recipe departs from the shared
-P5 backbone, and it is deviation 9: `mlp_encoder` is initialised at torch's
-default rather than CFRNet's. Everything else — widths, activation,
-normalisation, dropout, the outcome head, the propensity head — is the stack
-`fixmatch` and `tarnet` run.
-
-The two `ViewSpec`s are `fixmatch`'s: §III-A says "We follow one of the
-augmentation schemes used in FixMatch". Their *scalars* are imported —
-`WEAK_MASK_RATE`, `STRONG_MASK_RATE` and `PRESERVED_FIELDS` have one home — but
-the two `ViewSpec` constructions, the transform ordering and `draws=2` are
-restated here, so there are two places to edit one reviewed decision. Tier 0
-compares the compiled plans of the two recipes line by line, which is what
-catches a divergence; exporting the specs themselves would be better and is not
-done.
-`weak_x` is `FeatureMask(p=0.1)` with two draws; `strong_x` is that transform
-with `FeatureMask(p=0.5)` layered on. Both preserve `t`, `y`, `t_observed`,
-`y_observed`, `row_id`, `fold_id` and `weight`, and neither claims to preserve
-`x`. A schema with derived features must supply recompute rules or the views are
-rejected at compile time.
-
 ## 5. Deviations from the paper
 
 | # | Kind | Blocked on | What we do differently | Why | Expected effect on the §6 metric |
@@ -375,61 +219,11 @@ rejected at compile time.
 
 ### 5.1 Framework additions made for this card
 
-**One objective, and nothing else.** `CosineFeatureConsistency`
-(`xty2/objectives/feature_consistency.py`) is the only thing this recipe added
-to the repository. No port, no component, no view transform, no schedule type,
-no executor, no row population, no card key. An objective is the extension
-point `DESIGN.md` §11 names for exactly this case — step 4 of `BACKLOG.md`'s
-post-P12 workflow, "add the smallest missing component/objective/view if
-necessary" — rather than a framework concept, so this section's table is
-**None.** by its own definition, and the paragraphs below are the answer.
-
-The one shape decision inside it is worth recording because it is new
-vocabulary in a small way: the objective names `prediction_port` and
-`target_port` **separately**, where `ConsistencyLoss` and `InfoNCEContrastive`
-each take one `port` and two realisations. Eq. (3) forces it — the two sides of
-the cosine are `X_PROJ` and `X_REPR`, and no rearrangement of one port over two
-realisations expresses that. It stays inside the objective, so nothing else in
-the framework has to be written against it.
-
-Two things this card was expected to need and did not, recorded because the
-expectation is in `BACKLOG.md` and a silent absence would read as an oversight:
-
-* **A row-population mechanism for "rejected by the gate".** §2.6 sketches
-  `t_missing & confident` as a row selector. It is not one here, for the same
-  reason `fixmatch.md` gives: the gate is a per-row mask *inside*
-  `PseudoLabelTreatmentNLL`, so eq. (2)'s denominator can keep counting the
-  rows it rejects (which the reference does, and which makes the gate act as
-  the curriculum §2.2 of FixMatch says it does). A `confident` population
-  would be a second, contradictory implementation of the same gate.
-* **A second projection-head component.** `ProjectionHead` was built for SCARF
-  with `widths`, `activation`, `normalisation` and `dropout` as declared
-  fields. DoubleMatch's `h` is `widths=(200,)`, `normalisation="none"`, and the
-  activation is inert at one layer. That is a component reused across two
-  recipes with different papers behind them, which is the outcome §11.2 hopes
-  for; the inert field is the price and §7 records it.
+`CosineFeatureConsistency` is a recipe-local objective over existing ports. The draft remains unsigned; its diagnostic history is recoverable from Git rather than carried in the active card.
 
 ## 6. Reproduction target
 
-**This target is measured without two mechanics the paper states** (§5.6,
-CTAugment; §5.7, the 40-label budget), and neither can be discharged from this
-card — both are ledger debts shared with `fixmatch`. Neither touches eq. (3),
-which is the term under test.
-
-No published number can validate this port: the inputs, the labels, the
-architecture, the budget and the metric all differ, and the estimand is a
-treatment assignment rather than an image class. The target is a fixed
-project-local *mechanism* target.
-
-The DGP is `fixmatch.md` §6.1's, unchanged and reused deliberately: same
-fixture, same budget, same seeds, same optimiser, same quota. The `w_s = 0` arm
-of this pair is this recipe with eq. (3) switched off, which §III of the paper
-says is FixMatch — "our loss function is identical to that used in FixMatch when
-`w_s = 0`" — and Tier 0 asserts exactly how far that goes: dropping the term and
-the projection head leaves a plan that differs from `fixmatch`'s in five lines.
-Four are identity — its name, its card, and one sentence of prose about the
-fixture that the plan prints twice. The fifth is deviation 9. The pair is therefore *within* this recipe rather
-than across the two, and eq. (3) is the only thing that varies inside it.
+The planned pair changes only the feature-consistency weight from `0.5` to `0` and checks likelihood, gate, alignment, and collapse diagnostics.
 
 ```yaml
 reproduction:
@@ -446,144 +240,41 @@ reproduction:
 
 ### 6.1 Fixed DGP
 
-As `fixmatch.md` §6.1, in full and without modification: the two-cluster
-generator, the 0.02/0.98 cluster-conditional propensity, the 64-row MCAR
-treatment budget, the z-scored outcome fitted on the training rows, and the
-`B = 64` / `mu B = 448` quota per step. Replicates are indexed `r in {0..9}`
-with base seed `s_r = 90000 + 100 r`, and both arms share every stream.
+For `r = 0..9`, use base seed `90000 + 100r`, 1,024 training rows and 2,048
+fully labelled held-out rows. The generator is exactly:
 
-The one thing this card adds to that fixture is what it measures on it. Eq. (3)
-has no gate, so mask rate and impurity say nothing about whether it is working;
-the two diagnostics that do are the ones `CosineFeatureConsistency` emits:
+```text
+c          = 1[u_c < 0.5]
+x[0:4]     = 0.45 * (2c - 1) + 0.6 epsilon[0:4]
+x[4:6]     = epsilon[4:6]
+p(t=1 | c) = 0.02 + 0.96c
+t          = 1[u_t < p(t=1 | c)]
+baseline   = 0.5x0 - 0.3x1 + 0.2(x4^2 - 1)
+effect     = 1 + 0.5 tanh(x2)
+y          = baseline + t * effect + 0.5 epsilon_y
+```
 
-* **alignment** — mean `cos(h(v_i), z_i)` over the eligible rows. Not a
-  diagnostic at all: it is exactly `-value`, so the term's own logged number is
-  the alignment and a second copy of it would be noise.
-* **`prediction_concentration`** and **`target_concentration`** — the norm of
-  the mean unit vector on each side, and the objective's only two diagnostics.
-  This is the collapse detector, and it exists because the loss cannot be one:
-  a representation that maps every row to the same direction attains the *best
-  possible* `l_s`, and eq. (3) has no negatives to punish it. Isotropic
-  embeddings score about `1/sqrt(n)`; a fully collapsed batch scores 1. The
-  two sides are reported separately because they fail differently, and §6.2 is
-  where that stopped being a hypothetical.
+Exactly 64 training treatments are observed MCAR; outcomes are complete and
+training-population-standardised. Both arms share seeds and the ordered
+`B=64` observed / `448` missing quota stream. In addition to the declared NLL
+and outcome metrics, record feature alignment plus prediction/target
+concentration over the full trajectory; a terminal-only concentration can hide
+temporary collapse.
 
-### 6.2 What the Tier 1 fixture already shows
+### 6.2 Evidence summary
 
-Tier 1 is not Tier 2 and these are **single-seed** numbers, not a result. They
-are recorded because they wrote deviations 9 and 10, and because the way they
-were first read is a caution worth keeping.
-
-Provenance matters here and is stated per block, because an earlier version of
-this section mixed two of these paths without saying so. **Block A** is the
-recipe as `doublematch(schema)` builds it. **Block B** replaces the encoder
-after construction, which consumes RNG in a different order and therefore
-initialises everything differently; it is the only way to hold one encoder
-field fixed and vary another, so it is what the comparisons use. Numbers from
-the two blocks are comparable *within* a block and not across.
-
-**Block B — the measurement that chose the encoder.** Three encoder
-configurations, each paired against its own `w_s = 0` ablation, same fixture,
-same seeds, 3,000 steps:
-
-| encoder | `w_s` | EMA NLL | student NLL | `l_s` | max target conc. | steps above 0.99 |
-|---|---|---|---|---|---|---|
-| `row_l2` + CFRNet — the shared P5 backbone (600 steps, **Block A path**; the collapse is total by step 10, and Tier 1's 400-step Block B arm reproduces it) | 0.5 | 0.6962 | — | -1.0000 | 1.000 | every step |
-| `row_l2` + **torch** — *declared* | 0.5 | 0.3398 | 0.3703 | -0.640 | 0.666 | 0 |
-| `row_l2` + **torch** | 0 | 0.3540 | 0.4014 | -0.027 | 0.616 | 0 |
-| `none` + CFRNet — what deviation 10 shipped | 0.5 | 0.3213 | 0.4708 | -0.749 | **0.9999** | **135** |
-| `none` + CFRNet | 0 | 0.3514 | 0.5093 | -0.060 | 0.894 | 0 |
-| `none` + torch | 0.5 | 0.4035 | 0.4538 | -0.703 | 0.656 | 0 |
-| `none` + torch | 0 | 0.3876 | 0.4388 | -0.018 | 0.596 | 0 |
-
-The frequency baseline on this fixture is 0.6931, so the first row is a
-propensity that has learned nothing: `-log 2`. Four things are worth reading
-off that table rather than summarising away.
-
-* **The unit sphere is not what collapses the representation.** Holding
-  `row_l2` fixed and changing only the initialisation removes the collapse
-  completely — max concentration 0.666, never a step above 0.99. The claim
-  deviation 10 was built on ("a cosine target is the whole geometry of a
-  unit-sphere representation, so agreement and collapse are the same move")
-  does not survive that control, which nobody ran until an adversarial review
-  of this packet asked for it.
-* **What collapses it is scale.** Measured at initialisation on this fixture's
-  1,024 training rows: CFRNet's `0.1/sqrt(fan_in)` leaves the encoder's
-  pre-normalisation activations at a norm of **0.011**, torch's default at
-  **1.94**. `F.normalize`'s backward carries `1/\|\|.\|\|`, so under `row_l2`
-  the first configuration hands eq. (3)'s gradient to the encoder about ninety
-  times amplified. The paper never meets this because a batch-normalised
-  WideResNet's pooled activations are order 1 by construction.
-* **Dropping the normalisation does not fix it, it postpones it.** The
-  configuration deviation 10 shipped still reaches a concentration of 0.9999 by
-  step 43 and stays above 0.99 for 135 steps with the gate shut. It escapes
-  around step 180. A Tier 1 test that averaged the last hundred steps of a
-  3,000-step run reported that as "does not collapse"; the review caught both
-  the test and the sentence it was there to support.
-* **Eq. (3)'s benefit is architecture-dependent and small.** On the declared
-  encoder it is worth 4.0% (EMA) and 7.7% (student); on `none + CFRNet`, 8.6%
-  and 7.6%; on `none + torch` it *costs* 4.1% and 3.4%. One seed each. Nothing
-  here supports a claim about eq. (3) that does not name the encoder.
-
-**Block A — the recipe as declared**, built normally, same fixture and seeds,
-3,000 steps:
-
-| arm | EMA NLL | student NLL | outcome NLL | `l_s` | target conc. | pred. conc. | mask rate |
-|---|---|---|---|---|---|---|---|
-| `w_s = 0.5` | 0.3225 | **0.3556** | 1.1787 | -0.6131 | 0.194 | 0.410 | 0.745 |
-| `w_s = 0` | **0.3185** | 0.3807 | 1.1788 | +0.0066 | 0.246 | 0.880 | 0.746 |
-
-**The two readings disagree, and they disagree the other way round from
-Block B.** Here eq. (3) is 1.3% *worse* on the EMA and 6.6% better on the
-network under it; in Block B, on the same architecture and a different
-initialisation draw, it was 4.0% better on the EMA and 7.7% better on the
-student. Two draws, two orderings on the metric §6 declares. That is the
-strongest evidence in this card for the thing it keeps saying: at this budget,
-on this fixture, a single-seed directional claim about eq. (3) is not
-supportable, and §6's ten-seed mean with a standard error is the only thing
-that will settle it. Tier 1 asserts none of it.
-
-What *is* stable across every configuration measured: the term learns
-(alignment 0.61-0.75 where the same term left undescended sits within 0.07 of
-zero), the outcome likelihood is untouched to four decimal places, and the gate
-is unmoved (mask rate 0.745 against 0.746). Those are what Tier 1 asserts.
-
-Read the undescended arm's alignment for what it is, which an earlier draft did
-not: `h` is trained by eq. (3) and by nothing else, so at `w_s = 0` it keeps its
-initialisation, its output is dominated by its own random bias (§7), and
-`cos(h(v), z) ~ 0` is close to guaranteed. It shows the logging path is inert
-without the term, not that the other four terms would have failed to align the
-representation. The control that would show the latter has not been run.
-
-**The comparison this card is careful not to make.** The shared P5 stack —
-`row_l2` + CFRNet, `w_s = 0`, which is `fixmatch`'s recipe up to a weight-zero
-term — gives a held-out EMA NLL of **0.3066** on the same fixture and budget,
-better than either arm of Block A: 5.2% better than the declared recipe and
-3.9% better than its own ablation. Deviation 9's initialisation costs more than
-eq. (3) returns, so *DoubleMatch does not beat FixMatch here*. §2 claims the
-mechanism inside the architecture the mechanism requires, and not this. Every
-percentage in this section is relative to the arm being compared against, which
-an earlier draft got wrong in the one place where the other convention was the
-flattering one.
-
-**What this says about `scarf.md` §6.2, which is why the card picked this
-method.** SCARF's contrastive pretraining left the end-to-end gain absent at
-every budget tried, diagnosed as instance discrimination pushing apart the
-same-treatment rows the propensity head wants together. Eq. (3) is the same
-family with the negatives deleted, so the prediction was that it would not pay
-the same cost. What the tables support is weaker: the negative-free term learns
-without collapsing on the declared encoder, which is the failure such an
-objective is supposed to have. Whether deleting the negatives buys a better
-propensity is exactly the question the disagreeing readings leave open, and it
-needs the Tier 2 the ledger below says has not run.
+Tier 1 is diagnostic, not a result. With the original CFRNet-scale encoder,
+cosine consistency collapsed representations (`NLL ~= log 2`, concentration
+near 1). Holding `row_l2` fixed and using torch-scale initialisation removed
+that collapse; dropping `row_l2` merely delayed it. On the declared graph one
+initialisation draw gave `w_s=0.5` versus zero EMA NLL `0.3225` versus `0.3185`
+but student NLL `0.3556` versus `0.3807`; another draw reversed the EMA order.
+Alignment consistently moved while gate rate and outcome NLL did not. These
+mixed readings are why the ten-seed Tier 2 ledger remains unrun and the card
+stays draft.
 
 ### 6.3 Result ledger
 
-No Tier 2 runner exists for this card yet, so the target above has never been
-run at ten seeds and the status line stays where it is. That is the same
-sequence `scarf` and `fixmatch` went through — the recipe and its Tier 0/Tier 1
-tests land first, and the benchmark runner is its own packet — and §6.2 says
-what the single-seed evidence does and does not support in the meantime.
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
