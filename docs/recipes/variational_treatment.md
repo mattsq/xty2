@@ -1,6 +1,6 @@
 # Recipe spec card: variational_treatment
 
-**Status:** `reviewed`
+**Status:** `smoke-passing`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
@@ -22,10 +22,10 @@
 ## 2. Estimand and claim
 
 - **Estimand:** unchanged from `tarnet`: the treatment-specific means `m_k(x) = E[Y(k) | X=x]`, whose contrasts are CATEs under the usual assumptions, and the propensity `p(t | x)`. This card adds one quantity that is *not* an estimand: `q(t | x, y)`, an outcome-aware imputation distribution over an unobserved treatment.
-- **Mechanism under test (one sentence, falsifiable):** an amortised `q(t | x, y)` trained by eq. (7) and eq. (9) tracks the exact treatment posterior closely enough that its variational training objective has no material held-out marginal-likelihood cost against xty2's exact marginalisation, while producing a treatment imputer the exact objective does not produce at all.
+- **Mechanism under test (one sentence, falsifiable):** an amortised `q(t | x, y)` trained by eq. (7) and eq. (9) tracks the exact model posterior closely enough that replacing exact marginalisation with the variational objective has no material held-out marginal-likelihood cost, while exposing that posterior through a learned `T_GIVEN_XY` head.
 - **Method claim (the paper's):** a discrete label can be treated as a latent variable and marginalised under an amortised approximate posterior; eq. (9) is required because `q_φ(y|x)` appears only in the unlabelled term of eq. (8) and would otherwise never learn from labelled data (§3.1.2). Evidence is Table 1: M2 reaches `11.97% ± 1.71` MNIST test error at 100 labels against `25.81%` for a plain neural network, and `3.92% ± 0.63` at 3,000 labels.
 - **Nearest shipped baseline and the controlled difference:** `tarnet`. Both fit the same three serving-path components on the same rows; this card replaces `MissingTreatmentMarginalNLL` — the exact sum over candidate treatments — with eq. (7)'s variational bound plus eq. (9)'s posterior term. §6 runs that substitution as a pair.
-- **Not claimed:** no image benchmark is reproduced and no published number transfers (§5.3). For a *fixed* propensity/outcome state the variational bound cannot be below exact enumeration; that algebra does not order two separately fitted arms, which may generalise either way (§3.2). No identification claim is made from `q`: it is not a serving-time propensity, because it reads `y`. It must never be written back as a treatment label consumed by an in-sample outcome fit — that is the circularity `DESIGN.md` §7.2 rejects, and §3.2 states why an in-objective `q` is a different thing.
+- **Not claimed:** no image benchmark is reproduced and no published number transfers (§5.3). For a *fixed* propensity/outcome state the variational bound cannot be below exact enumeration; that algebra does not order two separately fitted arms, which may generalise either way (§3.2). No identification claim is made from `q`: it is not a serving-time propensity, because it reads `y`. It must never be written back as a treatment label consumed by an in-sample outcome fit — that is the circularity `DESIGN.md` §7.2 rejects, and §3.2 states why an in-objective `q` is a different thing. Because deviation 1 removes the continuous latent and this adaptation explicitly enumerates all `K` treatments, the exact arm can itself compute `p(t|x,y)` by normalising `p(t|x)p(y|x,t)`. The learned `q` is therefore an amortised posterior head, not an inference capability or a training-time computational shortcut unavailable to exact enumeration on this fixture.
 
 ## 3. Equations and mapping
 
@@ -119,9 +119,9 @@ $$
 \;\ge\; M(x, y),
 $$
 
-with equality exactly when `q` is the true posterior
-`p(t=k|x,y) ∝ p(t=k|x) p(y|x,t=k)`. Three things follow. The bound is on the
-*same* observed-data likelihood, so the per-state comparison is a fidelity
+with equality exactly when `q` is the exact posterior under that same model
+state, `p(t=k|x,y) ∝ p(t=k|x) p(y|x,t=k)`. Three things follow. The bound is on
+the *same* observed-data likelihood, so the per-state comparison is a fidelity
 check rather than a comparison of unrelated objectives. Its slack is one
 number, `KL(q ‖ posterior)`, which §6 measures directly. And for fixed
 `p(t|x)` and `p(y|x,t)`, the variational value cannot be below the exact value.
@@ -130,6 +130,13 @@ optimisation, regularisation and sampling can take them to different serving
 parameters, so either may have the lower held-out exact marginal NLL. §6's
 ratio is therefore an empirical cost/benefit comparison; Tier 0 and Tier 1 use
 the algebra only on the same state.
+
+Dropping `z` has a second consequence: arm B can compute that same model
+posterior directly from its propensity and outcome distributions, and both arms
+already enumerate all `K` candidates while training. The `q` head is therefore
+tested as an amortised representation of the posterior and as part of a
+variational training mechanism, not as a way to make an otherwise intractable
+posterior tractable in this project-local adaptation.
 
 **Why this is not the circularity of `DESIGN.md` §7.2.** `q` reads `y` and
 weights an outcome likelihood on the same rows, which looks like the rejected
@@ -261,7 +268,7 @@ data:
 | 4 | `judgement` | — | The posterior network takes the paper's *shape* — one hidden layer of 300 units, `run_2layer_ssl.py:13` — with ReLU rather than softplus and Torch's default Kaiming-uniform initialisation rather than `N(0, 0.001^2)`. The rest of the graph is the P5 TARNet backbone unchanged. | Holding the causal stack fixed is what makes an addition attributable (`scarf.md` §5.3, `fixmatch.md` §5.6, `paws.md` §5.5). `CategoricalPosterior` is the reviewed component `cycle_dual` already uses and it admits only ReLU; mixing one softplus module into an ELU/ReLU graph is not a difference this fixture could resolve, and the small-variance initialisation belongs to a 3,000-epoch budget this card does not run (deviation 5). Recorded rather than absorbed, because it is a departure from a stated setting. | On the head that produces `q` only. §6.2's amortisation gap and posterior advantage are the two numbers that would show it mattering. |
 | 5 | `judgement` | — | 3,000 optimiser steps, rather than the paper's 3,000 passes over 100 minibatches (300,000 updates). | Every card here fixes a project-local step budget so that a difference between arms is attributable to the arm (`scarf.md` §5.4, `paws.md` §5.6), and §6's pair gives both arms the same budget either way. | The bound is measured far short of convergence. §6's gap is a statement about this budget; no claim is made about its asymptote, and a gap that is still shrinking at step 3,000 is reported as such. |
 | 6 | `judgement` | — | Inherit `tarnet.md` §5.2 and §5.3 unchanged: `K` categorical outcome heads rather than two, each a unit-scale Gaussian trained by NLL rather than a squared-error point predictor. | Both are properties of the shared backbone this card holds fixed, not of M2. They are restated here because eq. (6) and eq. (7) both consume `log p_φ(y\|x,t)` and its scale sets the relative weight of the two terms of the ELBO. | Sets the scale of every likelihood in §4. Identical in both §6 arms, so it cannot move the ratios; it can move the absolute nats. |
-| 7 | `judgement` | — | Eq. (8) weights `L` and `U` equally and this card keeps that: the variational term runs at constant `1.0`, and §6's exact-marginal arm runs `MissingTreatmentMarginalNLL` at constant `1.0` too — not `tarnet.md` §4's `0.5` on a 1,000-step ramp. | Otherwise the pair would differ by an objective *and* by its weight and schedule, and §6 could not attribute either result. The paper has no ramp anywhere; `tarnet`'s is a reviewed P5 choice belonging to that card. | Both arms move away from `tarnet`'s published configuration, so neither is comparable to `tarnet.md` §6.1's ledger. The pair remains internally controlled, which is what §6 reports. |
+| 7 | `judgement` | — | Eq. (8) weights `L` and `U` equally and this card keeps that: the variational term runs at constant `1.0`, and §6's exact-marginal arm runs `MissingTreatmentMarginalNLL` at constant weight `1.0` too — not `tarnet.md` §4's `0.5` on a 1,000-step ramp. | Otherwise the pair would differ by an objective *and* by its weight and schedule, and §6 could not attribute either result. The paper has no ramp anywhere; `tarnet`'s is a reviewed P5 choice belonging to that card. | Both arms move away from `tarnet`'s published configuration, so neither is comparable to `tarnet.md` §6.1's ledger. The pair remains internally controlled, which is what §6 reports. |
 
 ### 5.1 Framework additions made for this card
 
@@ -301,7 +308,9 @@ recipe of §3–§4. Arm **B** (`exact`) is the same graph without
 reduction `population`, rows `t_missing` (deviation 7). The arms differ in
 parameter count, and only in parameters that produce `q`: nothing in A's
 serving path — encoder, outcome heads, propensity — is larger than B's, and `q`
-reaches them only through eq. (7)'s weights.
+reaches them only through eq. (7)'s weights. Arm B exposes no `T_GIVEN_XY`
+component, but its exact model posterior is still derivable by normalising
+`p(t|x)p(y|x,t)` across the same `K` candidates.
 
 Every metric is computed on the held-out population, where all treatments and
 outcomes are observed, and every likelihood is scored by the *exact* quantity
@@ -356,7 +365,9 @@ eq. (8).
 
 ### 6.2 Predeclared evidence
 
-Predeclared while the card was `draft`, before either arm was run.
+Predeclared while the card was `draft`, before either arm was run. Tier 0 and
+Tier 1 now pass at the implementation on PR #24; the ten-seed reproduction
+target remains unrun and §6.3 therefore stays empty.
 
 **Tier 0 (invariants),** in `tests/invariants/test_variational_treatment.py`:
 
@@ -407,6 +418,10 @@ Predeclared while the card was `draft`, before either arm was run.
    of each alongside the fitted heads, so a "posterior beats propensity" result
    is read against the gap that exists in the DGP rather than against zero.
 
+The smoke suite establishes these as wiring checks only. It does not execute
+the ten-seed mean-and-stderr target above, and no reproduction claim follows
+from its green status.
+
 ### 6.3 Result ledger
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
@@ -424,11 +439,12 @@ Predeclared while the card was `draft`, before either arm was run.
 | Whether the inference network shares the representation encoder. | It does not: `CategoricalPosterior` reads `X_RAW` and `Y_RAW` and owns its parameters. | `learn_yz_x_ss.py:146` builds `model_qy` as a separate `MLP_Categorical` with its own parameter set `u`. It also keeps §6's two arms comparable: no shared parameter changes size between them. |
 | Whether labelled rows also enter the unlabelled term. | They do not; §4's `eligible_rows` partitions `t_observed` and `t_missing`. | Eq. (8) sums `L` over `p̃_l` and `U` over `p̃_u`. This is the opposite of FixMatch's footnote 2 and worth stating, since both cards live in the same repository. |
 | Whether Table 1's reported error is the last epoch or the best validation epoch. | Not resolved, and not needed: deviation 3 declines the benchmark, and §6's budget is fixed rather than selected. | The hook logs validation and test error every pass (`learn_yz_x_ss.py:159-180`) and the function returns the last, but the paper does not say which the table carries. |
-| How `q` should be reported for a causal reader. | As an imputation distribution only. §6 scores it by held-out treatment NLL given `(x, y)` and never substitutes it for `p(t\|x)`. | `DESIGN.md` §7.2's separation of the three quantities. §2 refuses the serving claim, and Tier 0 item 7 checks that no staged path exists to make it accidentally. |
+| How `q` should be reported for a causal reader. | As an amortised imputation distribution only. The exact model posterior is also computable from `p(t|x)` and `p(y|x,t)` in this adaptation; `q` is the learned `T_GIVEN_XY` approximation to it. | `DESIGN.md` §7.2's separation of the three quantities. §2 refuses the serving claim, and Tier 0 item 7 checks that no staged path exists to make it accidentally. |
 
 ## 8. Review
 
 | | Who | Date |
 |---|---|---|
 | Card reviewed (status → `reviewed`) | GPT-5.6 Sol | 2026-08-29 |
-| Plan diffed against §3.2 and §4 | | |
+| Plan diffed against §3.2 and §4 | GPT-5.6 Sol | 2026-08-29 |
+| Implementation and Tier 1 audited (status → `smoke-passing`) | GPT-5.6 Sol | 2026-08-29 |
