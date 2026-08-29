@@ -202,12 +202,31 @@ quantities that move together is invisible to anything that moves both, however
 extreme. Neither of the first two versions of this note would have predicted the
 second case, and both were written with the measurement already in hand.
 
-A fourth question this family cannot settle, recorded so the next card does not
-rediscover it: none of these fixtures separates a self-adaptive threshold from
-the lower constant it converges to. `tau_t` ends between 0.78 and 0.84 against a
-comparison arm pinned at 0.95, and a constant-gate arm at 0.80 has not been run
-on any fixture. That is one cheap arm and it is the next measurement anyone
-extending this should take.
+**A fourth question, and this one has an answer worth carrying.** None of the
+above separates a self-adaptive threshold from the lower constant it converges
+to — `tau_t` ends between 0.78 and 0.92 against a comparison arm pinned at 0.95.
+One cheap arm settles it: a constant gate at exactly the `tau` each fixture's
+adaptive arm reached, which is the sceptical hypothesis in its strongest form.
+
+**Between a third and a half of the advantage is the threshold level.** The
+matched constant recovers 29% of the gap on the two-class fixture and 43-56% on
+the four-class ones. A card that never ran that arm would have been crediting
+the mechanism with about twice what it earns — which is the general lesson:
+whenever an adaptive quantity converges somewhere, the constant at its
+destination is the control, and it is one run.
+
+The rest does not reproduce. The adaptive arm still wins on every fixture,
+five seeds of five, by 3.6 to 6.2 standard errors, and the row statistics say
+how: it retains **more** rows at **lower** impurity than the matched constant
+(0.89 against 0.78 coverage at 0.061 against 0.080 impurity on the skewed
+fixture). A single threshold has to trade coverage against purity; a per-class
+one can lower the bar exactly where the model is weak. Per class it is a
+redistribution the constant does not perform — the rarest class goes 2.33
+(constant) → 1.99 (matched) → **1.50** (adaptive), paid for on the commonest.
+
+What is still confounded, for whoever wants it: the residual mixes the
+per-class spread with the *trajectory* from `1/K` upwards, and separating them
+needs an arm with the global EMA kept and the per-class normalisation disabled.
 
 **Step 4's neighbourhood has now been visited too, out of order and
 deliberately.** `flexmatch` is not step 4 - ReMixMatch is - but it is the

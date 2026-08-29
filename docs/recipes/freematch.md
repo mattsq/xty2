@@ -62,14 +62,15 @@ on the paper's own prose instead.
   above is supported on this fixture at half the declared seed count and
   `reproduced` is not available to it under `FIDELITY.md` §1.1 (§6.3).
 
-  Two things the numbers do **not** support, stated here rather than left in
-  §6.2 for a reader who stops early. The gain is **not** attributed to
-  self-adaptivity as against the lower threshold it produces — the terminal
-  `tau_t` is 0.922 where the comparison arm is fixed at 0.95, and a constant
-  gate at 0.92 was not run. And **self-adaptive fairness contributes nothing
-  measurable here**: the paper's own `w_f = 0` ablation is within 0.0001 ±
-  0.0012 of the full recipe, because on a near-balanced two-class fixture the
-  term sits at its own floor (§2's third limitation, measured in §6.2).
+  Two qualifications, stated here rather than left in §6.2 for a reader who
+  stops early. **Between a third and a half of the gain is the threshold level
+  rather than the adaptation**: §6.4's `matched` arm, a constant gate at the
+  `tau` SAT converges to, recovers 29% of the gap on this fixture and 43-56% on
+  the three `K = 4` ones — with `sat` still ahead of it everywhere, five seeds of
+  five, by 3.6 to 6.2 standard errors. And **self-adaptive fairness contributes
+  nothing measurable at the declared weight**: the paper's own `w_f = 0`
+  ablation is within 0.0001 ± 0.0012 of the full recipe here, and §6.4 explains
+  why and finds the fixture where it is not.
 - **Not claimed:** No image number is claimed. Five limitations are structural
   and are stated here rather than left to be discovered:
 
@@ -816,13 +817,14 @@ where the marginal is genuinely skewed. `flexmatch.md` §6.1's class-imbalanced
 variant (`p(t = 1) ≈ 0.16`) is the obvious candidate and is not run here; §7's
 first row is where that debt lives.
 
-**One thing this section deliberately does not say.** It does not claim the
-gain is FreeMatch's *self-adaptivity* rather than the lower effective threshold
-it happens to produce. The terminal `tau_t` is 0.922 against the constant arm's
-0.95, and a constant gate at 0.92 was not run. Separating "the threshold
-adapts" from "0.92 beats 0.95 on this fixture" needs a third constant-gate arm,
-and `BACKLOG.md`'s note on this card is where that is recorded as the next
-measurement rather than as a result.
+**One thing this section deliberately did not say, and §6.4 has since
+measured.** It did not claim the gain is FreeMatch's *self-adaptivity* rather
+than the lower effective threshold it happens to produce: `tau_t` ends at 0.922
+against the constant arm's 0.95. §6.4's `matched` arm is that constant gate at
+0.92, and on this fixture it recovers **29%** of the gap — leaving `sat` ahead of
+it by 0.972 ± 0.005, five seeds of five. So the caveat was worth making and the
+mechanism survives it; the numbers above understate the level's contribution and
+overstate nothing.
 
 ### 6.3 Result ledger
 
@@ -938,11 +940,51 @@ would have to come from, and there it is `-0.0016 ± 0.0013`: a hair in the
 corrected sign's favour, still inside the noise this card can resolve at five
 seeds.
 
-**What is still not claimed.** Nothing here separates SAT's adaptivity from the
-lower threshold it produces — `tau_t` ends between 0.78 and 0.84 across the
-three fixtures against the constant arm's 0.95, and a constant gate at 0.80 was
-not run on any of them. That remains §6.2's outstanding attribution question and
-it is now outstanding on four fixtures rather than one.
+**The attribution question, answered.** §6.2 and the first version of this
+section both left the same hole: `tau_t` converges to 0.78-0.92 while the
+comparison arm is pinned at 0.95, so none of the numbers above separated
+*adapting* from *arriving at a lower constant*. The `matched` arm is a constant
+gate at exactly the `tau` each fixture's own `sat` arm converged to — the rival
+hypothesis in its strongest form, since it is handed the number SAT found.
+
+| fixture | `tau*` | constant @ 0.95 | `matched` @ `tau*` | `sat` | `sat` / `matched` | share of the gap the level explains |
+|---|---|---|---|---|---|---|
+| primary | 0.92 | 0.3161 ± 0.0087 | 0.3125 ± 0.0087 | 0.3038 ± 0.0088 | 0.972 ± 0.005 | 29% |
+| `k4` | 0.83 | 0.7386 ± 0.0256 | 0.6846 ± 0.0207 | 0.6426 ± 0.0180 | 0.939 ± 0.014 | 56% |
+| `k4_skewed` | 0.84 | 0.6391 ± 0.0293 | 0.5885 ± 0.0220 | 0.5336 ± 0.0122 | 0.909 ± 0.015 | 48% |
+| `k4_adjacent` | 0.78 | 1.4718 ± 0.0581 | 1.3727 ± 0.0596 | 1.2422 ± 0.0609 | 0.906 ± 0.026 | 43% |
+
+**The threshold level is between a third and a half of it, and the rest is not
+reproducible by any constant.** A well-chosen constant recovers 29-56% of SAT's
+advantage — so the sceptical reading was partly right, and a card that had never
+run this arm would have been overstating the mechanism by about a factor of two.
+But `sat` still beats `matched` on every fixture, ahead five seeds of five,
+by 3.6 to 6.2 standard errors. Self-adaptivity is doing something a number
+cannot.
+
+What it is doing is visible in the row statistics, and it is the same thing on
+all three `K = 4` fixtures: **SAT retains more rows at lower impurity than the
+matched constant.** On `k4_skewed`, coverage 0.892 against 0.781 at an impurity
+of 0.061 against 0.080; on `k4_adjacent`, 0.782 against 0.705 at 0.205 against
+0.257. A single threshold has to trade those against each other. A per-class one
+does not: it can lower the bar exactly where the model is weak, and the rows it
+lets in are good ones.
+
+Per class, that is a redistribution the constant does not perform. On
+`k4_skewed` the matched arm keeps the commonest class where the constant arm had
+it (0.194 against 0.190) and improves the rarest only from 2.331 to 1.988, where
+`sat` reaches **1.502** and pays 0.190 → 0.280 on the commonest to do it. The
+same shape holds on `k4_adjacent`, where `sat` beats `matched` on both crowded
+classes (1.609 against 1.898, 1.413 against 1.699) and is marginally worse on
+the third.
+
+**What is still not separated.** Two things a constant cannot reproduce are
+confounded in the residual: eq. (7)'s per-class spread, and the *trajectory*
+from `1/K` upwards. The per-class NLL redistribution above is evidence that the
+spread is at least part of it, but an arm with the global EMA and `MaxNorm`
+disabled would be needed to say how much — and that is a field
+`SelfAdaptiveThreshold` does not have and would not gain for a diagnostic. It is
+recorded here as the next question rather than answered.
 
 ## 7. Unknowns
 
