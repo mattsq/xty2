@@ -28,7 +28,7 @@ from xty2.core import (
 )
 from xty2.objectives import MissingTreatmentMarginalNLL
 from xty2.recipes import variational_treatment
-from xty2.training import StageResult, run_stage
+from xty2.training import ObjectiveLog, StageResult, run_stage
 
 FEATURES = 6
 TRAIN_ROWS = 1_024
@@ -36,7 +36,6 @@ TEST_ROWS = 2_048
 STEPS = 3_000
 CLUSTER_SIGNAL = 0.45
 LOW_PROPENSITY = 0.25
-OBSERVED_TREATMENTS = 64
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -105,9 +104,13 @@ def _dataset(train: XTYBatch) -> Dataset:
 
 
 def _exact_arm(recipe: Recipe) -> Recipe:
-    """Same serving graph and fit, replacing q's two terms by exact marginalisation."""
+    """Replace q's two terms by exact marginalisation on the same serving graph."""
     graph = ComponentGraph(
-        [component for component in recipe.system.components if component.name != "categorical_posterior"]
+        [
+            component
+            for component in recipe.system.components
+            if component.name != "categorical_posterior"
+        ]
     )
     stage = recipe.program[0]
     exact = Weighted(
@@ -126,10 +129,11 @@ def _exact_arm(recipe: Recipe) -> Recipe:
 def _alpha_zero(recipe: Recipe) -> Recipe:
     stage = recipe.program[0]
     posterior = replace(stage.objectives[-1], weight=Constant(0.0))
-    return replace(
-        recipe,
-        program=Program((replace(stage, objectives=(*stage.objectives[:-1], posterior)),)),
+    changed_stage = replace(
+        stage,
+        objectives=(*stage.objectives[:-1], posterior),
     )
+    return replace(recipe, program=Program((changed_stage,)))
 
 
 def _scaled_test(test: XTYBatch, result: StageResult) -> XTYBatch:
@@ -140,13 +144,13 @@ def _scaled_test(test: XTYBatch, result: StageResult) -> XTYBatch:
     return test.replace(y=(test.y - location) / scale)
 
 
-def _term(result: StageResult, step: int, name: str) -> object:
+def _term(result: StageResult, step: int, name: str) -> ObjectiveLog:
     return next(term for term in result.records[step].terms if term.name == name)
 
 
 def _gap(result: StageResult, step: int) -> float:
     term = _term(result, step, "variational_treatment_elbo")
-    return float(term.diagnostics["amortisation_gap"])  # type: ignore[attr-defined]
+    return float(term.diagnostics["amortisation_gap"])
 
 
 @dataclass(frozen=True)
@@ -163,7 +167,11 @@ class _Metrics:
 def _evaluate(run: CompiledRun, result: StageResult, test: XTYBatch) -> _Metrics:
     scaled = _scaled_test(test, result)
     with torch.no_grad():
-        values = run.graph.evaluate(scaled, schema=run.recipe.schema, only=run.graph.names)
+        values = run.graph.evaluate(
+            scaled,
+            schema=run.recipe.schema,
+            only=run.graph.names,
+        )
         propensity = values[Port.T_GIVEN_X]
         outcome = values[Port.Y_GIVEN_XT]
         assert isinstance(propensity, CategoricalTreatment)
@@ -229,12 +237,10 @@ def fits() -> _Fits:
     torch.manual_seed(94_006)
     alpha_zero_recipe = _alpha_zero(variational_treatment(schema))
 
-    serving = {"mlp_encoder", "tarnet_head", "categorical_propensity"}
     variational_state = variational_recipe.system.state_dict()
     exact_state = exact_recipe.system.state_dict()
-    for name, value in variational_state.items():
-        if name.split(".", 1)[0] in serving:
-            assert torch.equal(value, exact_state[name])
+    for name, value in exact_state.items():
+        assert torch.equal(value, variational_state[name])
 
     return _Fits(
         variational=_fit(variational_recipe, train.batch, test.batch),
@@ -254,15 +260,20 @@ def test_both_paired_arms_reduce_their_mixed_training_loss(fits: _Fits) -> None:
 def test_the_bound_holds_on_every_logged_training_step(fits: _Fits) -> None:
     for step in range(STEPS):
         term = _term(fits.variational.result, step, "variational_treatment_elbo")
-        exact = float(term.diagnostics["exact_marginal_nll"])  # type: ignore[attr-defined]
-        gap = float(term.diagnostics["amortisation_gap"])  # type: ignore[attr-defined]
-        assert float(term.value) + 1e-6 >= exact  # type: ignore[attr-defined]
+        exact = float(term.diagnostics["exact_marginal_nll"])
+        gap = float(term.diagnostics["amortisation_gap"])
+        assert term.value + 1e-6 >= exact
         assert gap >= -1e-6
 
 
-def test_the_amortisation_gap_is_finite_and_learns_over_the_run(fits: _Fits) -> None:
+def test_the_amortisation_gap_is_finite_and_learns_over_the_run(
+    fits: _Fits,
+) -> None:
     first = sum(_gap(fits.variational.result, step) for step in range(50)) / 50
-    last = sum(_gap(fits.variational.result, step) for step in range(STEPS - 50, STEPS)) / 50
+    last = sum(
+        _gap(fits.variational.result, step)
+        for step in range(STEPS - 50, STEPS)
+    ) / 50
     heldout = fits.variational.amortisation_gap
     assert heldout is not None
     assert math.isfinite(first) and math.isfinite(last) and math.isfinite(heldout)
@@ -288,7 +299,11 @@ def test_overlap_fixture_has_a_real_bayes_posterior_advantage(fits: _Fits) -> No
         dim=-1,
     )
     residual = (batch.y[:, None] - means) / 0.5
-    log_py = -0.5 * residual.square() - math.log(0.5) - 0.5 * math.log(2.0 * math.pi)
+    log_py = (
+        -0.5 * residual.square()
+        - math.log(0.5)
+        - 0.5 * math.log(2.0 * math.pi)
+    )
     log_joint = propensity.log() + log_py
     posterior = torch.softmax(log_joint, dim=-1)
 
@@ -298,7 +313,9 @@ def test_overlap_fixture_has_a_real_bayes_posterior_advantage(fits: _Fits) -> No
     assert posterior_nll < propensity_nll - 0.05
 
 
-def test_variational_and_exact_serving_fits_remain_in_the_same_regime(fits: _Fits) -> None:
+def test_variational_and_exact_serving_fits_remain_in_the_same_regime(
+    fits: _Fits,
+) -> None:
     ratio = fits.variational.marginal_nll / fits.exact.marginal_nll
     assert math.isfinite(ratio)
     assert 0.5 < ratio < 1.5
