@@ -16,11 +16,7 @@ its evidence. The status line inside each card is authoritative.
 | [`flexmatch.md`](recipes/flexmatch.md) | `flexmatch` | stateful class-adaptive confidence thresholds |
 | [`freematch.md`](recipes/freematch.md) | `freematch` | shared self-adaptive thresholds and fairness |
 | [`paws.md`](recipes/paws.md) | `paws` | class-stratified support sets and non-parametric soft pseudo-labels |
-
-Drafts awaiting review, with no recipe module yet:
-[`variational_treatment.md`](recipes/variational_treatment.md) — M2's
-discrete-latent ELBO over a missing treatment, composing `p(t|x)`, `q(t|x,y)`
-and `p(y|x,t)` in one objective.
+| [`variational_treatment.md`](recipes/variational_treatment.md) | `variational_treatment` | amortised treatment posterior and discrete-latent ELBO |
 
 Use [`_TEMPLATE.md`](recipes/_TEMPLATE.md) for a new method and stop for review
 before implementation.
