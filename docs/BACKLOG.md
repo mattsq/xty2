@@ -34,7 +34,9 @@ Git retains the exploratory chronology removed from this active queue.
 | Explicit treatment-observation model | promotes label availability to a statistical variable | missingness semantics |
 
 Already present: SCARF is deviating, FixMatch is reproduced, DoubleMatch,
-FlexMatch and FreeMatch are drafts, and PAWS is implemented and smoke-passing. Read
+FlexMatch and FreeMatch are drafts, and PAWS is implemented and smoke-passing.
+The variational latent treatment now has a drafted card awaiting review,
+`docs/recipes/variational_treatment.md`; see §3.4 below. Read
 their cards before proposing a close relative; their active ledgers supersede
 the historical notes once carried here.
 
@@ -177,7 +179,12 @@ streams.
 
 Entropy minimisation, EM, and ELBOs are useful because xty2 already exposes
 p(t\|x), q(t\|x,y), and p(y\|x,t). Require a single written probabilistic
-objective before composing terms.
+objective before composing terms. `docs/recipes/variational_treatment.md` is
+the first such card: it ports M2's eq. (7) and eq. (9) (Kingma et al., 2014) as
+one bound on the same observed-data likelihood `MissingTreatmentMarginalNLL`
+computes exactly, so its slack is a single measurable `KL(q ‖ posterior)` and
+its §6 is a paired substitution against exact marginalisation rather than a
+benchmark.
 
 ### 3.5 Multi-model SSL
 
