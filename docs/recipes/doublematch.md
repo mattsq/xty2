@@ -3,7 +3,7 @@
 **Status:** `draft`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
-> **Agent route:** read §2, §3.2, and §4 to implement; §5 for departures;
+> **Agent route:** read §2–§5 to implement or audit fidelity;
 > §6 only for benchmark/reporting work. Historical diagnosis lives in Git.
 
 ---
@@ -217,7 +217,7 @@ data:
 | 9 | `judgement` | — | Initialise the encoder at torch's `nn.Linear` default rather than CFRNet's `normal std=0.1/sqrt(fan_in)`, which `fixmatch`, `tarnet` and `mean_teacher` all keep. Its `row_l2` output normalisation is **retained**, unchanged. | Eq. (3)'s gradient carries a `1/\|\|.\|\|` factor — `F.normalize`'s backward does, on whichever side is trained — so the term is only as well-scaled as the representation it is handed. The paper hands it a batch-normalised WideResNet's pooled activations, which are order 1 by construction. CFRNet's initialisation leaves this encoder's pre-normalisation activations at a norm of **0.011**, and `row_l2` passes `1/0.011` upstream: the term arrives about ninety times louder than the paper's, drives every row to one direction inside ten steps, and the run never recovers (§6.2). Torch's default puts the representation back at order 1 and the pathology disappears. This is the minimal change that restores the scale the mechanic is written for; it is *not* what an earlier version of this card did (see the row below). | It is the one place the causal stack is not held fixed against P5, so `fixmatch`'s and `tarnet`'s recorded numbers are **not** comparable to §6's — the same cost `fixmatch.md` deviation 9 records for adopting the paper's optimiser. It is not free either: at `w_s = 0` this initialisation is worse for the propensity than CFRNet's on this fixture (§6.2), so the recipe pays for a representation eq. (3) can use. §6's pair is within this recipe, so eq. (3) stays attributable. |
 | 10 | `withdrawn` | — | ~~Drop CFRNet's `row_l2` from the encoder's output, on the grounds that a cosine target is the whole geometry of a unit-sphere representation and the term therefore takes the shortest route to collapse.~~ **Withdrawn.** The diagnosis was wrong and an adversarial review of this packet caught it. Holding `row_l2` fixed and changing only the initialisation removes the collapse entirely (§6.2), so the unit sphere is not what causes it; and the unnormalised encoder this row shipped *still* enters full collapse — concentration 0.9999 by step 43, 135 steps above 0.99 — and merely climbs back out around step 180. It fixed the symptom late rather than the cause. | The mechanism is scale, not geometry, and the row above is what replaced this one. Kept, struck through, because the wrong version was pushed and because the way it failed is the useful part: a plausible mechanism was written into a `judgement`, into `BACKLOG.md` as guidance for five later cards, and into a library docstring, without the one control — hold the geometry, change the scale — that would have refuted it. | The numbers this row was justified by are still in §6.2, labelled, next to the ones that refute it. |
 
-### 5.1 Framework impact
+### 5.1 Framework additions made for this card
 
 `CosineFeatureConsistency` is a recipe-local objective over existing ports. The draft remains unsigned; its diagnostic history is recoverable from Git rather than carried in the active card.
 
@@ -237,6 +237,41 @@ reproduction:
   seeds: 10
   report: mean_and_stderr
 ```
+
+### 6.1 Fixed DGP
+
+For `r = 0..9`, use base seed `90000 + 100r`, 1,024 training rows and 2,048
+fully labelled held-out rows. The generator is exactly:
+
+```text
+c          = 1[u_c < 0.5]
+x[0:4]     = 0.45 * (2c - 1) + 0.6 epsilon[0:4]
+x[4:6]     = epsilon[4:6]
+p(t=1 | c) = 0.02 + 0.96c
+t          = 1[u_t < p(t=1 | c)]
+baseline   = 0.5x0 - 0.3x1 + 0.2(x4^2 - 1)
+effect     = 1 + 0.5 tanh(x2)
+y          = baseline + t * effect + 0.5 epsilon_y
+```
+
+Exactly 64 training treatments are observed MCAR; outcomes are complete and
+training-population-standardised. Both arms share seeds and the ordered
+`B=64` observed / `448` missing quota stream. In addition to the declared NLL
+and outcome metrics, record feature alignment plus prediction/target
+concentration over the full trajectory; a terminal-only concentration can hide
+temporary collapse.
+
+### 6.2 Evidence summary
+
+Tier 1 is diagnostic, not a result. With the original CFRNet-scale encoder,
+cosine consistency collapsed representations (`NLL ~= log 2`, concentration
+near 1). Holding `row_l2` fixed and using torch-scale initialisation removed
+that collapse; dropping `row_l2` merely delayed it. On the declared graph one
+initialisation draw gave `w_s=0.5` versus zero EMA NLL `0.3225` versus `0.3185`
+but student NLL `0.3556` versus `0.3807`; another draw reversed the EMA order.
+Alignment consistently moved while gate rate and outcome NLL did not. These
+mixed readings are why the ten-seed Tier 2 ledger remains unrun and the card
+stays draft.
 
 ### 6.3 Result ledger
 

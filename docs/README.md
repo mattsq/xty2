@@ -8,7 +8,7 @@ wasteful and makes historical rationale look like current scope.
 
 | Task | Read first | Then inspect |
 |---|---|---|
-| Fix or extend an existing recipe | `recipes/<name>.md` §3–§5 | `xty2/recipes/<name>.py` and matching Tier 0/Tier 1 tests |
+| Fix or extend an existing recipe | `recipes/<name>.md` §2–§5 | `xty2/recipes/<name>.py` and matching Tier 0/Tier 1 tests |
 | Investigate a recipe result | the card §4–§7 | benchmark runner, result artifact, source paper/code |
 | Add a recipe | `recipes/_TEMPLATE.md`, then `FIDELITY.md` §1–§2 | stop after drafting the card for review |
 | Change a core contract | the relevant `DESIGN.md` section | owning module and invariant tests |
@@ -21,16 +21,20 @@ specified recipe unless its card names a specific dependency there.
 
 ## Authority
 
-When sources disagree, use this order:
+Intended fidelity comes from the method source and reviewed specification:
 
-1. Code and tests define the executable contract.
-2. A recipe card defines method-specific choices and evidence.
-3. `DESIGN.md` and `FIDELITY.md` define repository-wide contracts.
-4. `proposals/loader.md` records one accepted design decision.
-5. `PLAN.md`, `BACKLOG.md`, and `PRIOR_ART.md` are historical or exploratory.
+1. The cited paper version and pinned reference implementation define the
+   published method.
+2. The reviewed recipe card defines xty2's method-specific mapping, declared
+   departures, and evidence contract.
+3. `DESIGN.md` and `FIDELITY.md` define repository-wide contracts;
+   `proposals/loader.md` records one accepted boundary decision.
 
-A conflict between levels 1–3 is a defect. Amend the card or normative document
-in the same change rather than choosing whichever version makes the diff easier.
+Code and tests describe observed repository behaviour. They are evidence of
+agreement with the card, not higher authority over the source method or reviewed
+specification. A disagreement triggers an audit: fix the implementation or amend
+and re-review the card and normative documents. `PLAN.md`, `BACKLOG.md`, and
+`PRIOR_ART.md` remain historical or exploratory.
 
 ## Document roles
 

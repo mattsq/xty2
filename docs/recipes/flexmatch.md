@@ -3,7 +3,7 @@
 **Status:** `draft`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
-> **Agent route:** read §2, §3.2, and §4 to implement; §5 for departures;
+> **Agent route:** read §2–§5 to implement or audit fidelity;
 > §6 only for benchmark/reporting work. Historical diagnosis lives in Git.
 
 ---
@@ -292,9 +292,15 @@ data:
 | 8 | `framework-limitation` | `batch-row-repetition` | Set the §6 label budget to 64 rather than a scarcer regime, holding `B = 64` and `mu = 7` at the paper's values. | `XTYBatch.row_id` must be unique (`DESIGN.md` §7.1), so a labelled quota of `B` cannot be drawn from a population smaller than `B` without repeating a row, and the scarcest budget expressible is `B` itself. The alternative — lowering `B` — would deviate from a number the paper states. | Slightly more supervision than the label-scarce regime where §4.1 reports FlexMatch's largest gains, which is the regime this card would most like to be in. It moves both arms of the pair equally. |
 | 9 | `judgement` | — | Record §6.1's imbalanced variant as a §6.3 measurement rather than a second Tier 2 target or a second Tier 1 arm. | It exists to exercise the half of CPL the primary fixture leaves inert — with `K = 2` and a balanced assignment both classes reach `beta = 1` together (§2's third limitation). Making it a reproduction target would double the nightly cost of a recipe whose declared claim is the paired one; making it a Tier 1 arm would add minutes of CI on every PR for a number `FIDELITY.md` §3 says is not a result anyway. | None on the §6 metric. It is what §6.3 is allowed to claim that changes: a direction on a few seeds, not a target. |
 
-### 5.1 Framework impact
+### 5.1 Framework additions made for this card
 
-`StatefulObjective` adds a per-stage lifecycle; `CurriculumPseudoLabelTreatmentNLL`, `CurriculumThreshold`, and `CurriculumStatus` keep the FlexMatch mechanism local. Existing recipes receive an empty state mapping and are unchanged.
+`StatefulObjective` adds a per-stage lifecycle;
+`CurriculumPseudoLabelTreatmentNLL`, `CurriculumThreshold`, and
+`CurriculumStatus` keep the FlexMatch mechanism local. **Named second consumer:**
+FreeMatch uses the same executor-owned reset boundary and validates the
+`TrainingPopulation | None` initialisation shape, while extending its own SAT
+and SAF objectives to share one named sibling state. Existing stateless recipes
+receive an empty state mapping and are unchanged.
 
 ### 5.2 Strong-view measurement
 
@@ -326,6 +332,39 @@ reproduction:
   seeds: 10
   report: mean_and_stderr
 ```
+
+### 6.1 Fixed DGPs
+
+The primary pair uses the same 1,024/2,048-row, 64-label MCAR fixture and seed
+streams as `fixmatch.md` §6.1, restated here so this contract is self-contained:
+
+```text
+c          = 1[u_c < 0.5]
+x[0:4]     = 0.45 * (2c - 1) + 0.6 epsilon[0:4]
+x[4:6]     = epsilon[4:6]
+p(t=1 | c) = 0.02 + 0.96c
+t          = 1[u_t < p(t=1 | c)]
+baseline   = 0.5x0 - 0.3x1 + 0.2(x4^2 - 1)
+effect     = 1 + 0.5 tanh(x2)
+y          = baseline + t * effect + 0.5 epsilon_y
+```
+
+Use base seed `90000 + 100r` for `r=0..9`, training-population outcome
+standardisation, and the paired `B=64` observed / `448` missing quota stream.
+The diagnostic-only imbalanced variant changes only
+`c = 1[u_c < 0.15]`; it is not a second Tier 2 target.
+
+### 6.2 Evidence summary
+
+At the declared 3,000-step budget over five seeds, curriculum gating achieved
+EMA treatment-NLL ratio `0.977 +/- 0.014` against the constant gate and led in
+four seeds. Every declared-view run laid its first mark between steps 32 and 76,
+ended with 0.98–1.00 of rows marked, and reached the maximum threshold `tau`.
+Using FixMatch's stronger 0.5 view trapped three of five seeds at the ungated
+warm-up; a `tau=1` permanently ungated ablation isolated the view, rather than
+ungated self-training itself, as the cause. These script-level five-seed
+measurements motivate the guardrails but cannot set status; the Tier 2 ledger
+below remains unrun.
 
 ### 6.3 Result ledger
 

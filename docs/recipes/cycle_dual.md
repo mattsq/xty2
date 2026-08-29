@@ -3,7 +3,7 @@
 **Status:** `reproduced`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
-> **Agent route:** read §2, §3.2, and §4 to implement; §5 for departures;
+> **Agent route:** read §2–§5 to implement or audit fidelity;
 > §6 only for benchmark/reporting work. Historical diagnosis lives in Git.
 
 ---
@@ -197,7 +197,7 @@ data:
 | 5 | `judgement` | — | Support categorical treatment only. | Continuous treatment is outside xty2 v1 scope. | No categorical effect for the declared benchmark; legacy continuous-treatment behaviour is absent. |
 | 6 | `judgement` | — | Use all hard pseudo-labels with no entropy or confidence threshold. | Neither paper states a confidence gate, and section 4 accordingly marks `losses.confidence_threshold` as `n/a` — so no paper mechanic is being dropped here, which is what `DESIGN.md` section 11.2 Q1 asks. That `PseudoLabelAction` emits argmax only is a consequence of the same absence rather than its cause; a gate has existed on the objective path since `fixmatch`, and this card still declines one. | Noisy labels can bias the outcome fit; the fixed benchmark is intended to reveal that rather than tune it away. |
 
-### 5.1 Framework impact
+### 5.1 Framework additions made for this card
 
 The card reuses the cross-fit executor, immutable artifact join, posterior component, and outcome stack. It adds no port or executor.
 
@@ -217,6 +217,35 @@ reproduction:
   seeds: 10
   report: mean_and_stderr
 ```
+
+### 6.1 Fixed posterior-imputation DGP
+
+For replicate `r = 0..9`, use base seed `110000 + 100r` and independent
+train/validation/test populations of 2,048/1,024/2,048 rows. Draw four
+independent standard-normal covariates and
+
+$$
+e(x)=\operatorname{sigmoid}(0.8x_1-0.5x_2+0.25x_3),\qquad
+T=\mathbb 1\{U_T<e(x)\},
+$$
+
+$$
+\mu_0(x)=0.5x_1-0.25x_2+0.25(x_3^2-1),\qquad
+\tau(x)=1.5+0.5\tanh(x_1),
+$$
+
+$$
+Y=\mu_0(X)+T\tau(X)+0.5\epsilon_Y.
+$$
+
+The analytic ATE is 1.5. Training treatment is MCAR with
+`P(t_observed)=0.30`; evaluator-only validation/test treatments remain fully
+available. Set `fold_id = row_id mod 5`. Standardise `X` and `Y` using only the
+training population and inverse-transform candidate outcome means before
+computing absolute ATE error. Guardrails require out-of-fold, `used_y=true`
+label provenance, hidden-treatment accuracy at least 0.75, compile-time refusal
+of the unsafe executor, preservation of observed treatments, and no source-batch
+mutation.
 
 ### 6.2 Result ledger
 

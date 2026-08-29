@@ -385,8 +385,10 @@ class CurriculumPseudoLabelTreatmentNLL:
         `T(c)` is read from marks laid down by *previous* steps and the current
         batch's marks are written afterwards, so splitting a batch in two
         changes which rows are marked when, but never one row's gate given the
-        state it meets. A threshold computed from *this* batch's confidences —
-        FreeMatch's self-adaptive one — would answer true.
+        state it meets. A threshold computed from *this* batch's confidences
+        answers true, and FreeMatch's does: its algorithm 1 folds the batch into
+        `tau_t` at line 3 and gates that same batch at line 9
+        (`SelfAdaptiveThresholdTreatmentNLL`, `docs/recipes/freematch.md` §3.1).
         """
         return False
 

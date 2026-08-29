@@ -14,6 +14,7 @@ its evidence. The status line inside each card is authoritative.
 | [`scarf.md`](recipes/scarf.md) | `scarf` | corruption-based contrastive pretraining |
 | [`doublematch.md`](recipes/doublematch.md) | `doublematch` | FixMatch plus representation consistency |
 | [`flexmatch.md`](recipes/flexmatch.md) | `flexmatch` | stateful class-adaptive confidence thresholds |
+| [`freematch.md`](recipes/freematch.md) | `freematch` | shared self-adaptive thresholds and fairness |
 
 Use [`_TEMPLATE.md`](recipes/_TEMPLATE.md) for a new method and stop for review
 before implementation.
@@ -28,5 +29,5 @@ before implementation.
 - §7: choices forced by source ambiguity.
 - §8: review record.
 
-For an ordinary implementation change, read §3–§5 first. Read the full card
+For an ordinary implementation change, read §2–§5 first. Read the full card
 when auditing fidelity or interpreting a benchmark.

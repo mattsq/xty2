@@ -3,7 +3,7 @@
 **Status:** `reproduced`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
-> **Agent route:** read §2, §3.2, and §4 to implement; §5 for departures;
+> **Agent route:** read §2–§5 to implement or audit fidelity;
 > §6 only for benchmark/reporting work. Historical diagnosis lives in Git.
 
 ---
@@ -225,9 +225,15 @@ data:
 | 12 | `framework-limitation` | `batch-row-repetition` | Set the section 6 label budget to 64 rather than the paper's smallest regime of 40, holding `B` and `mu` at the paper's values. | Section 4's smallest CIFAR-10 setting is 40 labels *in total* against `B = 64` per step: the reference iterates the labelled set as an endlessly repeating shuffle, so one step sees some labelled rows twice. `XTYBatch.row_id` must be unique because artifacts and provenance are keyed by it (`DESIGN.md` section 7.1), so a repeated row cannot go in a batch and the scarcest budget expressible here is `B` itself. The alternative — lowering `B` to fit the budget — would deviate from a number the paper reports rather than from a number this card chose. | Slightly more supervision than the paper's scarcest regime, on a fixture whose numbers were never comparable to CIFAR-10 anyway (deviation 1). It moves the section 6 paired comparison, and it moves both arms equally: the ablation shares the budget. What it does not touch is the mechanism under test, since the gate reads the model's confidence rather than the label count. |
 | 11 | `judgement` | — | Four separate forward passes (identity, two draws of weak, strong) rather than one concatenated and interleaved pass. | The reference fuses the three streams into a single call and interleaves them first, so that each device's BatchNorm population sees a mixture rather than one stream. That is a BatchNorm/multi-GPU device trick, not part of the objective. xty2 plans one pass per realisation, which is arithmetically identical **only while no component holds batch-coupled state**. | None for the declared architecture: `row_l2` normalises each row on its own and the graph carries no buffers at all, which `tests/invariants/test_fixmatch.py` asserts rather than assumes. A component that later grows a running statistic would silently make the two schemes differ, and that test is what would fail first. |
 
-### 5.1 Framework impact
+### 5.1 Framework additions made for this card
 
-`fixmatch` introduced multi-draw views, `PseudoLabelTreatmentNLL`, `QuotaSampler`, cosine scheduling, and evaluation-only teacher EMA. The exact additions and unresolved abstraction debts remain in the deviation ledger.
+`fixmatch` introduced multi-draw views, `PseudoLabelTreatmentNLL`,
+`QuotaSampler`, cosine scheduling, and evaluation-only teacher EMA. **Named
+second consumer for the sampler shape:** PAWS needs a stratified labelled support
+set from the same scarce pool, which checks quota stratification independently
+of FixMatch's labelled/unlabelled split. The other additions are reversible
+fidelity choices. Exact unresolved abstraction debts remain in the deviation
+ledger.
 
 ## 6. Reproduction target
 
@@ -245,6 +251,40 @@ reproduction:
   seeds: 10
   report: mean_and_stderr
 ```
+
+### 6.1 Fixed DGP
+
+For replicate `r = 0..9`, use base seed `s_r = 90000 + 100r`; generate the
+1,024-row train population with `s_r+1`, the 2,048-row held-out population with
+`s_r+2`, initialise with `s_r+6`, and train with stage seed `s_r+10000`. Draw
+
+```text
+cluster c = 1[u_c < 0.5]
+x[0:4]   = 0.45 * (2c - 1) + 0.6 epsilon[0:4]
+x[4:6]   = epsilon[4:6]
+p(t=1|c) = 0.02 + 0.96c
+t         = 1[u_t < p(t=1|c)]
+baseline  = 0.5x0 - 0.3x1 + 0.2(x4^2 - 1)
+effect    = 1 + 0.5 tanh(x2)
+y         = baseline + t * effect + 0.5 epsilon_y
+```
+
+Exactly 64 training treatments are observed under a seeded MCAR permutation;
+all held-out treatments and every outcome are observed. Fit outcome
+standardisation on the complete training population. Every step uses the same
+paired Quota stream, `B=64` observed and `mu*B=448` missing rows, in both arms.
+
+### 6.2 Evidence summary
+
+The fixed ten-replicate run at immutable commit `1a10fb039e5f` produced EMA and
+student treatment-NLL ratios `0.886981 +/- 0.024` and
+`0.868972 +/- 0.0367`, terminal mask rate `0.78418 +/- 0.0158`, retained-label
+impurity `0.0518273 +/- 0.00233`, and outcome-NLL ratio
+`0.999837 +/- 0.000108`. Earlier Tier 1 diagnostics remain useful only as
+mechanism bounds: the clean fixture separated the pseudo-label arm before the
+loader existed, while an overlapping 0.15/0.85 treatment design exposed
+overconfidence and sensitivity to EMA horizon. The ledger below, not those
+single-seed diagnostics, determines status.
 
 ### 6.3 Result ledger
 

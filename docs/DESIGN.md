@@ -190,6 +190,12 @@ remains immutable, paired arms cannot share history, and the state is not a
 checkpointed artifact. Stateful objectives are currently incompatible with
 `cross_fit`, where reset semantics are unspecified.
 
+Two objectives may share one published mechanic by naming the state-owning
+sibling and reading it through `context.objective_state(owner, kind)`. The
+shared update must be idempotent within an optimiser step so declaration order
+cannot change the result. FreeMatch's adaptive-threshold state records its last
+observed step, and Tier 0 checks both objective orders.
+
 ### 4.1 The objective that motivates the whole design
 
 For a missing treatment and small `K`, xty2 evaluates
@@ -212,11 +218,15 @@ Current objectives are exported from `xty2/objectives/__init__.py`:
 | supervised likelihood | `ObservedOutcomeNLL`, `ObservedTreatmentNLL` |
 | missing-treatment likelihood | `MissingTreatmentMarginalNLL` |
 | consistency | `ConsistencyLoss`, `CosineFeatureConsistency` |
-| pseudo-labels | `PseudoLabelTreatmentNLL`, `CurriculumPseudoLabelTreatmentNLL` |
+| pseudo-labels | `PseudoLabelTreatmentNLL`, `CurriculumPseudoLabelTreatmentNLL`, `SelfAdaptiveThresholdTreatmentNLL`, `SelfAdaptiveFairness` |
 | contrastive | `InfoNCEContrastive` |
 
-The curriculum objective is the only stateful objective. Add new objectives
-with their first reviewed consumer rather than expanding a speculative family.
+FlexMatch's curriculum objective and FreeMatch's SAT/SAF pair are stateful.
+FreeMatch is the first pair to share one state. Its threshold is derived from
+the current batch and applied to that same batch, so both objectives are
+`batch_coupled=True`; FlexMatch's historical curriculum is not. Add new
+objectives with their first reviewed consumer rather than expanding a
+speculative family.
 
 ## 5. Views: augmentation separated from loss
 
@@ -362,9 +372,11 @@ Each sampled gradient stage declares one of:
 - `ExternalBatches()` when the caller intentionally owns batching.
 
 Quota-derived batch size and labelled/unlabelled ratio enter the plan. A
-batch-coupled objective cannot use `ExternalBatches`. Array and cross-fit stages
-consume one finite table and do not accept samplers. Samplers do not read model
-state; stateful sampling remains deferred in §11.4.
+batch-coupled objective cannot use `ExternalBatches`; InfoNCE was the first
+consumer of that guardrail, while FreeMatch SAT/SAF exercise it because their
+threshold is computed from the current batch. Array and cross-fit stages consume
+one finite table and do not accept samplers. Samplers do not read model state;
+stateful sampling remains deferred in §11.4.
 
 ## 8. Compiler
 
@@ -445,6 +457,7 @@ initial five proved the core architecture; later cards extended it under §11.2.
 | `scarf` | population-aware corruption and contrastive pretraining |
 | `doublematch` | representation consistency beside FixMatch |
 | `flexmatch` | stage-local objective state and adaptive thresholds |
+| `freematch` | shared state across batch-coupled adaptive objectives |
 
 ## 11. Overdesign guardrails
 
@@ -500,9 +513,9 @@ judgement explaining why the choice survives the capability.
 | `distributed` | distributed training | one required recipe no longer fits one process | — |
 | `out-of-core-data` | streaming or larger-than-memory datasets | a card's dataset does not fit in memory | — |
 | `stateful-sampler` | sampling driven by model or training state | a card states curriculum sampling, hard-negative mining, or acquisition | — |
-| `batch-row-repetition` | repeated `row_id` values inside one batch | a faithful protocol requires a quota larger than its source population and the shape is checked against PAWS-style support sampling | `fixmatch` §5.12; `doublematch` §5.7; `flexmatch` §5.8 |
+| `batch-row-repetition` | repeated `row_id` values inside one batch | a faithful protocol requires a quota larger than its source population and the shape is checked against PAWS-style support sampling | `fixmatch` §5.12; `doublematch` §5.7; `flexmatch` §5.8; `freematch` §5.9 |
 | `lr-schedules` | schedule families beyond the implemented types | a reviewed card names one | — |
-| `augmentation-vocabulary` | a shared augmentation vocabulary and adaptive controller | multiple useful operations and magnitudes exist | `fixmatch` §5.10; `doublematch` §5.6; `flexmatch` §5.7 |
+| `augmentation-vocabulary` | a shared augmentation vocabulary and adaptive controller | multiple useful operations and magnitudes exist | `fixmatch` §5.10; `doublematch` §5.6; `flexmatch` §5.7; `freematch` §5.8 |
 | `staged-gate` | confidence gating on staged pseudo-label writeback | a reviewed staged method names the gate | — |
 | `repeated-cross-fitting` | several fold assignments and aggregation | a reviewed estimator requires repeated splitting and a second consumer checks the artifact shape | `ssdml` §5.6 |
 | `early-stopping` | validation-metric stage termination | a reviewed protocol cannot be stated as a fixed step budget | — |

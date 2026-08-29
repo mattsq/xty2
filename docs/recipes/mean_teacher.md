@@ -3,7 +3,7 @@
 **Status:** `reproduced`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
-> **Agent route:** read §2, §3.2, and §4 to implement; §5 for departures;
+> **Agent route:** read §2–§5 to implement or audit fidelity;
 > §6 only for benchmark/reporting work. Historical diagnosis lives in Git.
 
 ---
@@ -196,7 +196,7 @@ data:
 | 9 | `judgement` | — | Omit OOD weighting, confidence thresholds, continuous-treatment variance, calibrated Gaussian noise and outcome perturbation from old XTYLearner. | They are later project additions with different claims and require new objective/view semantics. The reviewed card boundary is canonical Mean Teacher on categorical `p(t | x)`. | Removes possible robustness gains and failure modes; none is part of the P9 target. |
 | 10 | `judgement` | — | Reuse the P5 TARNet architecture, optimiser and 3,000-step budget rather than a ConvNet/ResNet image configuration. | Holding the causal stack fixed makes the P9 addition attributable and keeps the paired ablation meaningful. | The project-local result validates wiring, not paper-level image accuracy. |
 
-### 5.1 Framework impact
+### 5.1 Framework additions made for this card
 
 `SigmoidRamp` supplies the paper's consistency schedule while the existing `TeacherSpec`, realisation, and objective contracts handle the rest.
 
@@ -216,6 +216,46 @@ reproduction:
   seeds: r=0..9 with base 90000+100*r and fixed stream offsets in sections 6.1-6.2
   report: per-fit means plus paired means and sample stderrs over 10 replicates
 ```
+
+### 6.1 Fixed clustered DGP
+
+For replicate `r = 0..9`, use base seed `90000 + 100r` and independent
+train/validation/test populations of 4,096/2,048/4,096 rows. Draw
+`C ~ Bernoulli(0.5)`, set `S=2C-1`, and define
+
+$$
+X_j=0.8S+0.6\epsilon_j\ (j=1,\ldots,4),\qquad
+X_5=\epsilon_5,\quad X_6=\epsilon_6,
+$$
+
+$$
+e(C)=0.15+0.70C,\qquad T=\mathbb 1\{U_T<e(C)\},
+$$
+
+$$
+b(X)=0.5X_1-0.3X_2+0.2(X_5^2-1),\quad
+\tau(X)=1+0.5\tanh(X_3),
+$$
+
+$$
+Y=b(X)+T\tau(X)+0.5\epsilon_Y.
+$$
+
+Exactly 205 training treatments are observed under a seeded MCAR permutation;
+validation/test treatments and every outcome are observed. Use raw `X` and
+population-standardise `Y` from all training outcomes.
+
+### 6.2 Fixed paired fit and evidence
+
+Compare the declared recipe with a `Constant(0)` consistency ablation while
+retaining the same graph, teacher, views, objectives, initial state, 3,000
+ordered 256-row batches, and view RNG keys. Evaluate the final checkpoint on
+16 held-out paired perturbations. The primary metric is the ratio of
+student/teacher probability MSEs; final-teacher treatment NLL and analytic
+`sqrt(PEHE)` are guardrails. The immutable ten-replicate result at commit
+`40265928e87a` was ratio `0.316756 +/- 0.0303`,
+`d_NLL = -0.00555395 +/- 0.00797`, and
+`d_PEHE = 0.054138 +/- 0.00626`, satisfying the predeclared thresholds.
 
 ### 6.3 Result ledger
 

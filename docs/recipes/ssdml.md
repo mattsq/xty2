@@ -3,7 +3,7 @@
 **Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
-> **Agent route:** read §2, §3.2, and §4 to implement; §5 for departures;
+> **Agent route:** read §2–§5 to implement or audit fidelity;
 > §6 only for benchmark/reporting work. Historical diagnosis lives in Git.
 
 ---
@@ -175,7 +175,7 @@ data:
 | 6 | `framework-limitation` | `repeated-cross-fitting` | Run one fixed five-fold split and no repeated sample splitting. | Repeating the split and aggregating across repetitions is part of the estimator's recommended procedure, not an optional refinement, so this is a mechanic the source states and we do not implement. The framework is what stops us: an `XTYBatch` carries one `fold_id`, and the artifact contract, the fold-disjointness check and the checkpoint provenance are each written against a single fold assignment (`DESIGN.md` section 11.4, `repeated-cross-fitting`). | Higher Monte Carlo variance than repeated DML: the section 6 number is one draw of the split, and its stderr is over seeds rather than over partitions, so it understates the spread the published procedure averages out. |
 | 7 | `judgement` | — | Preserve observed treatments and hard-fill only missing rows. | This is the P10 functional join contract. | Avoids classifier error on gold labels; the semi-supervised gain/loss comes only from formerly missing rows. |
 
-### 5.1 Framework impact
+### 5.1 Framework additions made for this card
 
 `SSDMLATEAction` uses the existing array executor and returns portable tensor state. The open framework debt is repeated cross-fitting; one fixed five-fold assignment is used.
 
@@ -199,6 +199,42 @@ reproduction:
   seeds: 20
   report: mean_and_stderr
 ```
+
+### 6.1 Fixed staged-imputation IRM DGP
+
+For replicate `r = 0..19`, use base seed `120000 + 100r` and one independent
+4,000-row population. With six independent standard-normal covariates,
+
+$$
+e(x)=0.05+0.90\operatorname{sigmoid}
+(1.25x_1-0.75x_2+0.5x_3),\qquad
+T=\mathbb 1\{U_T<e(x)\},
+$$
+
+$$
+\mu_0(x)=x_1+0.5x_2-0.25x_3,\qquad
+\tau(x)=1+0.25x_4,
+$$
+
+$$
+Y=\mu_0(X)+T\tau(X)+\epsilon_Y,\qquad
+\epsilon_Y\sim\mathcal N(0,1).
+$$
+
+The analytic ATE is 1.0. Treatment is 50% MCAR and
+`fold_id = row_id mod 5`. Standardise `X` on each fold complement and do not
+standardise `Y`. The staged join is deliberately misspecified:
+
+$$
+\widetilde T=MT+(1-M)h(X),\qquad
+P(\widetilde T=1\mid X=x)=0.5e(x)+0.5h(x),
+$$
+
+which is generally not logistic-linear even before the joined outcome strata
+are considered. Score `|\hat\theta-1|`; require finite held-out predictions,
+propensities in `[0.025,0.975]`, verified out-of-fold `used_y=false` provenance,
+immutable source data, deterministic tensor state, and a generator-truth
+treatment ablation with mean absolute ATE error at most 0.10.
 
 ### 6.2 Result ledger
 

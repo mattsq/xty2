@@ -3,7 +3,7 @@
 **Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
-> **Agent route:** read §2, §3.2, and §4 to implement; §5 for departures;
+> **Agent route:** read §2–§5 to implement or audit fidelity;
 > §6 only for benchmark/reporting work. Historical diagnosis lives in Git.
 
 ---
@@ -169,9 +169,15 @@ data:
 | 4 | `judgement` | — | Simulate 50% treatment missing completely at random in Tier 1. | This is the P5 acceptance condition in `PLAN.md` and `FIDELITY.md`, not part of the paper. | Not applicable to the fully observed published target; load-bearing for the smoke comparison. |
 | 5 | `withdrawn` | — | ~~Declare the split, standardisation and missingness policy on this card and enforce it in the Tier 1 fixture and the P12 runner, rather than in the recipe.~~ **Withdrawn.** The recipe declares a `DataSpec`, `optimisation.batch_size` binds `100`, and the three `data.*` keys carry values in `plan.hyperparameters`. | The original entry was correct and is now paid: xty2 has a loader. What it bought is the guarantee this row said was missing — the standardisation is fitted on the declared `fit` assignment by the compiled program, and `TrainingPopulation.fitted_on_row_ids` is checked against that assignment at run time, so a runner that fitted it on the wrong split fails rather than passing silently. The 50% Tier 1 MCAR remains the *fixture's*, which is deviation 4's business and not a property of TARNet, so the recipe declares `mechanism: observed`. | The section 6 result below was measured under the pre-loader batch stream and is **invalidated** by this change, not merely re-labelled: the recipe now owns the batch size and its sampler seed is derived from the stage seed, so the stream moved. The sampling *scheme* is identical — one fresh permutation per step, first 100 rows, asserted against the old helper in `tests/invariants/test_loading.py` — so the number should move within its existing error bars, but that is a prediction and the nightly run is what settles it. |
 
-### 5.1 Framework impact
+### 5.1 Framework additions made for this card
 
-`tarnet` introduced the declarative data boundary (`DataSpec`, `Dataset`, and `TrainingPopulation`) and `UniformSampler`. Runtime checks bind preprocessing to the declared fit rows and bind the batch stream to the recipe.
+`tarnet` introduced the declarative data boundary (`DataSpec`, `Dataset`, and
+`TrainingPopulation`) and `UniformSampler`. Runtime checks bind preprocessing to
+the declared fit rows and the batch stream to the recipe. **Named second
+consumer:** VIME, whose mask/impute statistics must be fitted on the declared
+training population rather than the current batch, checked the boundary's row
+identity and fitted-statistic shape. `UniformSampler` is reversible policy, not
+load-bearing vocabulary.
 
 ### Tier 2 outcome
 

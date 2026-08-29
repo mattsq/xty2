@@ -3,7 +3,7 @@
 **Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
-> **Agent route:** read §2, §3.2, and §4 to implement; §5 for departures;
+> **Agent route:** read §2–§5 to implement or audit fidelity;
 > §6 only for benchmark/reporting work. Historical diagnosis lives in Git.
 
 ---
@@ -163,7 +163,7 @@ data:
 | 7 | `judgement` | — | Approximate `mean` with 100 fixed antithetic base draws rather than 100 fresh samples per prediction. | Candidate-treatment means must agree column-wise and evaluation must be reproducible. | Reduces Monte Carlo variance between calls; a small deterministic integration error remains. |
 | 8 | `judgement` | — | Do not expose the old likelihood-only `predict_treatment_proba(x,y)` as `T_GIVEN_XY`. | That quantity omits the treatment prior, and no P7 objective consumes a posterior. The real posterior component first has a consumer in P11. | None for the P7 graph or losses. |
 
-### 5.1 Framework impact
+### 5.1 Framework additions made for this card
 
 `conditional_flow` is a new `OutcomeDistribution` implementation behind the existing `Y_GIVEN_XT` port. No new port, objective protocol, or execution mode is required.
 
@@ -192,6 +192,58 @@ reproduction:
   seeds: r=0..9 with base 70000+100*r and fixed stream offsets from sections 6.1-6.2
   report: per-model means plus paired-difference means and sample stderrs over 10 replicates
 ```
+
+### 6.1 Fixed DGP
+
+For replicate `r = 0..9`, use base seed `70000 + 100r` and independent
+train/validation/test populations of 4,096/2,048/4,096 rows. Let
+`X_j iid ~ N(0,1)` for `j=1..6` and
+
+$$
+e(x)=0.1+0.8\operatorname{sigmoid}(1.25x_1-x_2+0.5x_3),\qquad
+T=\mathbb 1\{U_T<e(x)\},
+$$
+
+$$
+b(x)=0.8x_1+0.5(x_2^2-1)-0.6x_3x_4+0.3\sin(2x_5),\quad
+\tau(x)=1+0.5\tanh(x_1),
+$$
+
+$$
+q_t(x)=0.2+0.6\operatorname{sigmoid}(0.75x_5-0.5x_6+0.5t),\quad
+\sigma_t(x)=0.15+0.10\operatorname{sigmoid}(x_6)+0.05t,
+$$
+
+$$
+S=\mathbb 1\{U_S<q_T(x)\},\qquad
+Y=b(x)+T\tau(x)+1.5\{S-q_T(x)\}+\sigma_T(x)\epsilon.
+$$
+
+Thus `mu_t(x)=b(x)+t*tau(x)` and the exact conditional density is
+
+$$
+q_t\,\mathcal N(\mu_t+1.5(1-q_t),\sigma_t^2)
++(1-q_t)\,\mathcal N(\mu_t-1.5q_t,\sigma_t^2).
+$$
+
+Exactly 2,048 training treatments are missing under a seeded MCAR permutation;
+all outcomes and validation/test treatments are observed. Use raw `X` and
+population-standardise `Y` from all training outcomes, evaluating means and
+likelihoods back in original units.
+
+### 6.2 Fixed fit and evidence
+
+Compare the declared flow against the P5 three-layer Gaussian TARNet head while
+holding the encoder, propensity, objectives, optimiser, ordered 256-row batches,
+and shared initial parameters fixed. Train 3,000 deterministic CPU Adam steps;
+validation is diagnostic only and the final test checkpoint is fixed. The
+primary difference is conditional `p(Y|X,T)` NLL, with analytic-`tau(X)`
+`sqrt(PEHE)` as guardrail. The predeclared pass rule is
+`mean(d_NLL) <= -0.10` and `mean(d_PEHE) <= 0.10` over ten paired replicates.
+The immutable result at commit `d060df351f2fe8bac6d951c3757506c684d8b408`
+was `d_NLL = 1.88504 +/- 0.225` and
+`d_PEHE = -0.226847 +/- 0.0637`: better effect error did not offset the failed
+density target.
 
 ### 6.3 Result ledger
 

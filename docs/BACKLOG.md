@@ -33,8 +33,8 @@ Git retains the exploratory chronology removed from this active queue.
 | Variational latent treatment | uses q(t\|x,y), p(t\|x), and p(y\|x,t) together | ELBO composition |
 | Explicit treatment-observation model | promotes label availability to a statistical variable | missingness semantics |
 
-Already present: SCARF is deviating, FixMatch is reproduced, DoubleMatch is a
-draft, and FlexMatch is a draft. Read their cards before proposing a close
+Already present: SCARF is deviating, FixMatch is reproduced, and DoubleMatch,
+FlexMatch, and FreeMatch are drafts. Read their cards before proposing a close
 relative; their active ledgers supersede the historical notes once carried
 here.
 
@@ -77,10 +77,20 @@ schedules; its acceptance test should isolate TSA and sharpening.
 
 ### 2.5 FixMatch and adaptive descendants
 
-FixMatch and FlexMatch are shipped cards. FreeMatch, SoftMatch, and
-SequenceMatch are the next threshold-policy comparisons. Keep each objective's
-state local and explicit; generalise only after two cards demonstrate the same
-lifecycle and semantics.
+FixMatch, FlexMatch, and FreeMatch are shipped cards; SoftMatch and
+SequenceMatch remain the next threshold-policy comparisons. FreeMatch is the
+second stateful consumer and the first to share one stage-owned state between
+two objectives: SAT and SAF are batch-coupled, and sibling access names the
+owning objective explicitly.
+
+Its Tier 1 evidence also separates adaptation from threshold level. On the
+primary fixture the adaptive gate beats a matched constant arm in every seed;
+holding only its average threshold explains roughly 29–56% of the apparent
+gain, with the rest coming from per-class redistribution and trajectory. SAF is
+inactive under prior skew alone but becomes load-bearing on the declared
+class-adjacency fixture, where confidence and predicted frequency diverge.
+Keep future state local and explicit, and preserve paired batches when comparing
+threshold policies.
 
 ### 2.6 DoubleMatch
 

@@ -3,7 +3,7 @@
 **Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
-> **Agent route:** read §2, §3.2, and §4 to implement; §5 for departures;
+> **Agent route:** read §2–§5 to implement or audit fidelity;
 > §6 only for benchmark/reporting work. Historical diagnosis lives in Git.
 
 ---
@@ -225,9 +225,14 @@ data:
 | 6 | `withdrawn` | — | ~~Nothing enforces a batch size, and SCARF's loss depends on it: the number of negatives is `N - 1`.~~ **Withdrawn.** Both stages declare `UniformSampler(batch_size=128)` and `optimisation.batch_size` binds the paper's `N`. | xty2 has a loader. The guard is stronger than the binding on its own: `InfoNCEContrastive` declares itself `batch_coupled`, and a stage holding a batch-coupled term is *refused* the `ExternalBatches` declaration at compile time — so this recipe could not hand the number back to a caller even if a later edit tried. A caller feeding 16-row batches is no longer expressible. | The section 6 results below were measured under the pre-loader batch stream and are **invalidated pending re-measurement**: the recipe now draws its own batches from a seed-derived stream, and it also owns the 40-label budget and the outcome scaling the fixture used to apply. The sampling scheme is unchanged (`tests/invariants/test_loading.py` pins it), so the paired comparison should stand; that is a prediction, not a result. |
 | 7 | `judgement` | — | No label-noise and no OpenML-CC18 protocol; one fixed project-local DGP, in section 6. | The paper's evidence is 69 datasets under three label regimes. Reproducing that shape is a Tier 2 question about data plumbing, not about whether the mechanism is assembled correctly, and no dataset in it carries a treatment. | Section 6 is a mechanism target and says so. It is not evidence for the paper's claim, only against this port being miswired. |
 
-### 5.1 Framework impact
+### 5.1 Framework additions made for this card
 
-`scarf` introduced `X_PROJ`, `ProjectionHead`, `InfoNCEContrastive`, the required `batch_coupled` declaration, and population-aware feature corruption.
+`scarf` introduced `X_PROJ`, `ProjectionHead`, `InfoNCEContrastive`, the required
+`batch_coupled` declaration, and population-aware feature corruption. **Named
+second consumers:** CoMatch checks `X_PROJ` against a projected embedding that
+interacts with class probabilities, rather than SCARF's instance-only contrast;
+VIME checks the data boundary used by corruption because its mask/impute
+statistics also belong to the training population, not the active batch.
 
 ### Tier 2 outcome
 
@@ -249,6 +254,29 @@ reproduction:
   seeds: 10
   report: mean_and_stderr
 ```
+
+### 6.1 Fixed DGP
+
+Use `fixmatch.md` §6.1's generator and seed streams unchanged, except exactly 40
+of the 1,024 training treatments are observed and the batch size is 128. The
+pretraining and no-pretraining arms share the population, observed-treatment
+mask, fine-tuning batches, initial downstream graph, and evaluation stream.
+Outcome standardisation is fitted on the complete training population; all
+2,048 held-out treatments and every outcome are observed.
+
+### 6.2 Evidence summary
+
+The contrastive mechanism itself moves in the intended direction: its loss fell
+from about `-0.234` to `-0.370`; positive-pair similarity remained `0.479` while
+the cross-row similarity fell from `0.325` to `0.002`, widening their gap to
+`0.477`.
+But the pre-loader five-seed, 3,000-step downstream NLL ratio was `1.081`, and
+shorter budgets did not establish a stable benefit. A frozen-encoder probe over
+eight seeds gave mean treatment-NLL ratio `0.883`, showing that useful treatment
+structure existed before fine-tuning, while outcome NLL was worse in all eight.
+The immutable Tier 2 ledger at commit `40265928e87a` records the current
+deviating result (`0.999111 +/- 0.038` treatment-NLL ratio); diagnostic history
+does not override it.
 
 ### 6.3 Result ledger
 
