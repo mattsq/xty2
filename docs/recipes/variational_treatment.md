@@ -1,6 +1,6 @@
 # Recipe spec card: variational_treatment
 
-**Status:** `draft`
+**Status:** `reviewed`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
@@ -22,10 +22,10 @@
 ## 2. Estimand and claim
 
 - **Estimand:** unchanged from `tarnet`: the treatment-specific means `m_k(x) = E[Y(k) | X=x]`, whose contrasts are CATEs under the usual assumptions, and the propensity `p(t | x)`. This card adds one quantity that is *not* an estimand: `q(t | x, y)`, an outcome-aware imputation distribution over an unobserved treatment.
-- **Mechanism under test (one sentence, falsifiable):** an amortised `q(t | x, y)` trained by eq. (7) and eq. (9) tracks the exact treatment posterior closely enough that its variational bound costs no measurable held-out marginal likelihood against xty2's exact marginalisation, while producing a treatment imputer the exact objective does not produce at all.
+- **Mechanism under test (one sentence, falsifiable):** an amortised `q(t | x, y)` trained by eq. (7) and eq. (9) tracks the exact treatment posterior closely enough that its variational training objective has no material held-out marginal-likelihood cost against xty2's exact marginalisation, while producing a treatment imputer the exact objective does not produce at all.
 - **Method claim (the paper's):** a discrete label can be treated as a latent variable and marginalised under an amortised approximate posterior; eq. (9) is required because `q_φ(y|x)` appears only in the unlabelled term of eq. (8) and would otherwise never learn from labelled data (§3.1.2). Evidence is Table 1: M2 reaches `11.97% ± 1.71` MNIST test error at 100 labels against `25.81%` for a plain neural network, and `3.92% ± 0.63` at 3,000 labels.
-- **Nearest shipped baseline and the controlled difference:** `tarnet`. Both fit the same three components on the same rows; this card replaces `MissingTreatmentMarginalNLL` — the *exact* sum over candidate treatments — with eq. (7)'s variational bound plus eq. (9)'s posterior term. §6 runs that substitution as a pair.
-- **Not claimed:** no image benchmark is reproduced and no published number transfers (§5.3). **This card does not claim the bound beats exact enumeration**; §3.2 shows it cannot, and §6 is written to measure what it costs. No identification claim is made from `q`: it is not a serving-time propensity, because it reads `y`. It must never be written back as a treatment label consumed by an in-sample outcome fit — that is the circularity `DESIGN.md` §7.2 rejects, and §3.2 states why an in-objective `q` is a different thing.
+- **Nearest shipped baseline and the controlled difference:** `tarnet`. Both fit the same three serving-path components on the same rows; this card replaces `MissingTreatmentMarginalNLL` — the exact sum over candidate treatments — with eq. (7)'s variational bound plus eq. (9)'s posterior term. §6 runs that substitution as a pair.
+- **Not claimed:** no image benchmark is reproduced and no published number transfers (§5.3). For a *fixed* propensity/outcome state the variational bound cannot be below exact enumeration; that algebra does not order two separately fitted arms, which may generalise either way (§3.2). No identification claim is made from `q`: it is not a serving-time propensity, because it reads `y`. It must never be written back as a treatment label consumed by an in-sample outcome fit — that is the circularity `DESIGN.md` §7.2 rejects, and §3.2 states why an in-objective `q` is a different thing.
 
 ## 3. Equations and mapping
 
@@ -120,13 +120,16 @@ $$
 $$
 
 with equality exactly when `q` is the true posterior
-`p(t=k|x,y) ∝ p(t=k|x) p(y|x,t=k)`. Three things follow, and they are the whole
-design of this card. The bound is on the *same* observed-data likelihood, so
-this is a fidelity comparison and not two different objectives. Its slack is
-one number, `KL(q ‖ posterior)`, which §6 measures directly. And the variational
-arm cannot win on likelihood — `K` is small and xty2 sums exactly — so a claim
-that it does would be an error, which is why §2 refuses it in advance and §6's
-target is stated as a bounded *cost*.
+`p(t=k|x,y) ∝ p(t=k|x) p(y|x,t=k)`. Three things follow. The bound is on the
+*same* observed-data likelihood, so the per-state comparison is a fidelity
+check rather than a comparison of unrelated objectives. Its slack is one
+number, `KL(q ‖ posterior)`, which §6 measures directly. And for fixed
+`p(t|x)` and `p(y|x,t)`, the variational value cannot be below the exact value.
+That last inequality does **not** order the two fitted arms in §6: finite
+optimisation, regularisation and sampling can take them to different serving
+parameters, so either may have the lower held-out exact marginal NLL. §6's
+ratio is therefore an empirical cost/benefit comparison; Tier 0 and Tier 1 use
+the algebra only on the same state.
 
 **Why this is not the circularity of `DESIGN.md` §7.2.** `q` reads `y` and
 weights an outcome likelihood on the same rows, which looks like the rejected
@@ -273,7 +276,7 @@ rows, so no `row_id` repeats.
 
 | Added | Quadrant (§11.2) | Consumers today | Named second consumer | Why now |
 |---|---|---|---|---|
-| `VariationalTreatmentELBO` — eq. (7) on `t_missing` rows: `Σ_k q_k [-log p(t=k\|x) - log p(y\|x,t=k)] + Σ_k q_k log q_k`, requiring `T_GIVEN_X`, `Y_GIVEN_XT` and `T_GIVEN_XY`, detaching nothing | fidelity-bearing, reversible | `elbo_fit.variational_treatment_elbo` | not required (reversible) | No shipped objective takes an expectation under a *predicted* distribution: `MissingTreatmentMarginalNLL` sums exactly and every pseudo-label term reduces `q` to a label or a detached target first. `BACKLOG.md` §3.4 asks for "a single written probabilistic objective before composing terms", and eq. (7) is one. The entropy is computed from `CategoricalTreatment.log_probs` (`log_softmax`) rather than `probs.log()`, so no log floor is needed and `q_k -> 0` contributes exactly `0`, as `MissingTreatmentMarginalNLL` does the same thing for `log_prob`. |
+| `VariationalTreatmentELBO` — eq. (7) on `t_missing` rows: `Σ_k q_k [-log p(t=k\|x) - log p(y\|x,t=k)] + Σ_k q_k log q_k`, requiring `T_GIVEN_X`, `Y_GIVEN_XT` and `T_GIVEN_XY`, detaching nothing | fidelity-bearing, reversible | `elbo_fit.variational_treatment_elbo` | not required (reversible) | No shipped objective takes an expectation under a *predicted* distribution: `MissingTreatmentMarginalNLL` sums exactly and every pseudo-label term reduces `q` to a label or a detached target first. `BACKLOG.md` §3.4 asks for "a single written probabilistic objective before composing terms", and eq. (7) is one. `q`'s log probabilities are read through the `TreatmentDistribution.log_prob(candidate_treatments)` contract, so the computation stays in log space without depending on the concrete `CategoricalTreatment` implementation or taking `probs.log()`. |
 
 **A constraint, not an addition.** `CategoricalPosterior` binds
 `data.standardisation` and `data.outcome_scaling` (`xty2/components/posterior.py:37-38`)
@@ -329,16 +332,19 @@ p(t=1|c) = 0.25 + 0.5c
 ```
 
 rather than `0.02 + 0.96c`. The reason is specific to this card and is not a
-convenience. At `0.02 / 0.98` the propensity is nearly deterministic given `x`,
-so the exact posterior is nearly the propensity, `KL(q ‖ posterior)` is near
-zero for almost any `q`, and the mechanism §6 exists to measure would be
-unmeasurable — the card would pass by construction. At `0.25 / 0.75` the
-treatment is genuinely uncertain given `x` while the outcome shift
+convenience. At `0.02 / 0.98` the treatment is already almost determined by the
+cluster signal in `x`, so observing `y` has little room to improve treatment
+inference; the analytic Bayes posterior-minus-propensity treatment NLL gap that
+§6.2 item 5 exists to expose is correspondingly compressed. This says nothing
+about `KL(q ‖ posterior)` for an arbitrary `q`: disagreement with a nearly
+point-mass posterior can be very expensive. At `0.25 / 0.75` the treatment is
+genuinely uncertain given `x` while the outcome shift
 (`effect = 1 + 0.5 tanh(x2)` against noise `0.5`) keeps `y` informative about
-`t`, which is the regime where an outcome-aware posterior is worth having and
-where the bound's slack is real. Everything else is `fixmatch.md` §6.1's:
-outcome standardisation fitted on the complete training population, held-out
-treatments and outcomes all observed.
+`t`, giving the outcome-aware posterior a measurable target and making the
+amortisation gap meaningful rather than making the comparison pass by fixture
+design. Everything else is `fixmatch.md` §6.1's: outcome standardisation fitted
+on the complete training population, held-out treatments and outcomes all
+observed.
 
 **Batch composition.** Every step of both arms draws 8 rows from `t_observed`
 and 120 from `t_missing`. The quota is not free: `64 : 960` is the fixture's own
@@ -350,7 +356,7 @@ eq. (8).
 
 ### 6.2 Predeclared evidence
 
-Fixed while the card is `draft`, before any arm has been run.
+Predeclared while the card was `draft`, before either arm was run.
 
 **Tier 0 (invariants),** in `tests/invariants/test_variational_treatment.py`:
 
@@ -375,8 +381,10 @@ Fixed while the card is `draft`, before any arm has been run.
    `purpose="causal"`, every stage has `allow_leakage=False`, and no stage
    declares a `PseudoLabelAction` (§3.2).
 8. `plan.hyperparameters` matches every non-`n/a` key of §4, including the
-   derived `batch_size = 128` and `labelled_unlabelled_ratio = 15.0`, and the
-   four `data.*` keys agree between `DATA_POLICY` and `categorical_posterior`
+   derived `batch_size = 128` and `labelled_unlabelled_ratio = 15.0`.
+   `DATA_POLICY` and `categorical_posterior` agree on the two `data.*` keys they
+   both bind: `data.standardisation` and `data.outcome_scaling`; treatment
+   encoding is posterior-only, while split and missingness are policy-only
    (§5.1).
 
 **Tier 1 (smoke fit),** in `tests/smoke/test_variational_treatment.py`:
@@ -422,5 +430,5 @@ Fixed while the card is `draft`, before any arm has been run.
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status → `reviewed`) | | |
+| Card reviewed (status → `reviewed`) | GPT-5.6 Sol | 2026-08-29 |
 | Plan diffed against §3.2 and §4 | | |
