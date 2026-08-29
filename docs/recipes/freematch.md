@@ -454,6 +454,7 @@ stale on `flexmatch` once already.
 | 7 | `judgement` | — | Implement eq. (11) **without its leading minus**: `L_f = H(SumNorm(p~/h~), SumNorm(\bar p/\bar h))`, minimised. | The sign as written contradicts the purpose the paper states for the term in four places (§1 "encourage the model for diverse predictions", §2's summary, §4.2 "encourage the model to make diverse predictions for each class", §6's related work on entropy maximisation inducing fairness). The arithmetic settles it: with `A` detached and `B` on the simplex, `d/dB_1 [sum_c A_c log B_c]` vanishes at `B = A` and points *away* from it either side, so minimising `-H(A, B)` drives `B` to a corner — entropy minimisation of the marginal. Minimising `+H(A, B)` has `B = A` as its minimum, which is what §4.2's sentence "encourages the expectation of the output probability for each mini-batch to be close to a marginal class distribution of the model" describes. §7 records that a reference implementation would have settled this directly and was not consulted. | Bounded either way at this weight, but opposite in direction. **The literal reading needs no code**: `w_f = -0.05` on this objective is eq. (11) exactly as printed, so §6 declares it as a third arm rather than arguing about it. |
 | 8 | `framework-limitation` | `augmentation-vocabulary` | No adaptive augmentation and no RandAugment: the strong view's strength is a fixed scalar. | The argument is `fixmatch.md` deviation 10's and is not restated. FreeMatch adds nothing to the case either way — its contribution is the threshold and the fairness term, not the augmentation — and its §5.1 runs the same RandAugment the earlier cards already deviate from. | Removes whatever augmentation diversity buys, equally from both arms of §6's pair, so it is a limit on what the numbers describe rather than a confound within them. |
 | 9 | `framework-limitation` | `batch-row-repetition` | Set the §6 label budget to 64 rather than a scarcer regime, holding `B = 64` and `mu = 7` at the paper's values. | `XTYBatch.row_id` must be unique (`DESIGN.md` §7.1), so a labelled quota of `B` cannot be drawn from a population smaller than `B` without repeating a row, and the scarcest budget expressible is `B` itself. The alternative — lowering `B` — would deviate from a number the paper states. | This is the deviation that costs this card the most. §5.2's largest margins, and the setting §4.2 says SAF exists for ("especially under the settings where labeled data are rare"), are the 10-label and 40-label CIFAR-10 regimes. At 64 labels over `K = 2` the recipe is nowhere near barely supervised, so SAF is being measured outside the regime it was designed for. It moves both arms of the pair equally. |
+| 10 | `judgement` | — | Record §6.4's `K`-sweep and skewed fixtures as a diagnostic measurement rather than as a second Tier 2 target or a second Tier 1 arm. | They exist to exercise the half of FreeMatch the primary fixture leaves inert — §2's third limitation — and the same reasoning `flexmatch.md` deviation 9 applies to its imbalanced probe applies here: making them reproduction targets would multiply the nightly cost of a card whose declared claim is the paired one, and making them Tier 1 arms would add minutes of CI on every PR for a number `FIDELITY.md` §3 says is not a result anyway. | None on the §6 metric. What changes is what §6.4 is allowed to claim: a direction on five seeds, not a target. |
 
 ### 5.1 Framework additions made for this card
 
@@ -608,6 +609,69 @@ The `literal` arm is not a target. It exists because deviation 7 is an argument
 about a sign, and an argument about a sign that could have been a measurement is
 a bad trade in this repository.
 
+**Two diagnostic fixtures, §6.4 only.** §2's third limitation says a balanced
+two-class fixture leaves SAF with nothing to do, and §6.2 measured exactly that.
+`benchmarks/common.py`'s `cluster_population` generalises `fixmatch.md` §6.1's
+DGP over the number of clusters and over the cluster prior, and **at `K = 2`
+with a uniform prior it is that DGP bit-for-bit** — the same draws, from the
+same seed, in the same order, pinned by a digest taken before the two were
+joined. So the primary fixture is not a neighbour of the sweep below; it is its
+`K = 2` member, and Tier 0 asserts it.
+
+| Fixture | `K` | cluster prior | Bayes error | `P(max q >= 0.95)` | weak-view flips | strong-view flips |
+|---|---|---|---|---|---|---|
+| **primary (§6.1)** | 2 | `(0.5, 0.5)` | 0.067 | 0.705 | 0.026 | 0.075 |
+| `k4` | 4 | `(0.25, 0.25, 0.25, 0.25)` | 0.154 | 0.424 | 0.064 | 0.181 |
+| `k4_skewed` | 4 | `(0.55, 0.25, 0.13, 0.07)` | 0.123 | 0.521 | 0.047 | 0.129 |
+
+Every cluster centre is a vertex of a regular simplex at a fixed pairwise
+separation of 1.8 — the primary fixture's — rotated so each class's signal is
+spread across all four signal columns. Equidistance is what makes `K` the only
+thing the sweep varies; the rotation is what keeps a masked column from
+destroying the label, which `flexmatch.md` §5.2's argument depends on. The
+assignment is `p(t = c | c) = 0.98` with the remaining 0.02 split evenly, which
+at `K = 2` is that card's 0.02/0.98. The outcome multiplier at `K = 4` is
+`(0.0, 1.0, 0.4, 1.6)`, deliberately non-monotone in `t`: a multiplier rising
+with the treatment index would be a dose-response model wearing a categorical
+costume, and `BACKLOG.md` §15.9 puts that outside v1.
+
+**The declared views had to be re-justified, and the criterion they are judged
+against had to change.** `flexmatch.md` §5.2 requires a strong view to keep the
+Bayes-optimal label on at least **90%** of rows, and that card flags the 90% as
+"not robust to its own constant". It is not robust to `K` either: at a fixed
+separation the declared strong view flips 18% of Bayes labels at `K = 4`, and at
+`K = 5` **no** layered mask clears 10% at all — the weak view alone already
+flips 7.9%. That is not the view becoming careless. It is an absolute budget
+being a harsher standard the further chance-level sits from 100%, and holding it
+would have meant either a "strong" view barely stronger than the weak one, or a
+fixture so separated that the propensity is solved before the gate opens (the
+failure `fixmatch.md` §6.1 says it chose 0.45 to avoid).
+
+So the criterion is stated **relative to what is achievable**: the strong view's
+flip rate must stay within a quarter of the clean Bayes error. The primary
+fixture sits at 1.13, and the table above is 1.18 and 1.05 — so the views carry
+over across `K` unchanged, and are as label-preserving on each fixture as the
+one `flexmatch` reviewed. `tests/invariants/test_cluster_fixture.py` recomputes
+the whole column on every PR rather than quoting it.
+
+**What §6.4 is asking, declared before it was run.** Three questions, each of
+which §6.2 established this card's primary fixture cannot answer:
+
+1. **Does SAF do anything when the class marginal is not already uniform?**
+   §6.2 bounded its effect at `-0.0001 +- 0.0012` and showed why — the term
+   sits at its own floor. `k4_skewed` is the fixture where it does not.
+2. **Is deviation 7's sign question measurable?** The `literal` arm on a fixture
+   where SAF is live is the experiment §6.2 said was needed and could not run.
+3. **Does the `k4` / `k4_skewed` contrast separate "more classes" from
+   "skewed marginal"?** SAT's local half has more to differentiate at `K = 4`
+   whatever the prior; SAF's has something to move only under skew.
+
+A result on (1) or (2) is a **direction on five seeds**, never a target
+(deviation 10). A null on (2) at a fixture where §6.4 can show the term is
+*live* would be informative where §6.2's null was not — and that distinction is
+the whole reason the `fairness_support` and `marginal_entropy` diagnostics are
+logged.
+
 ### 6.2 What the Tier 1 fixture shows
 
 Tier 1 is not Tier 2 and none of this is a `reproduced` claim: there is no
@@ -722,6 +786,12 @@ module per recipe that has been Tier 2'd and none for this one, so §6's target
 is declared and unmeasured at the declared ten seeds — the position `doublematch`
 and `flexmatch` also ship in. The status line stays `draft` until it has one and
 a reviewer has signed §8.
+
+### 6.4 The diagnostic fixtures
+
+*Declared in §6.1 above and not yet measured. This section is written when the
+numbers exist; the questions it must answer are fixed before the run, and the
+answers are directions on five seeds rather than targets (deviation 10).*
 
 ## 7. Unknowns
 
