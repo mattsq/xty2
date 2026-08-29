@@ -105,12 +105,12 @@ def _state(
 def _terms(state: State, batch: XTYBatch) -> tuple[Tensor, Tensor]:
     rows = resolve_rows(batch, "t_missing")
     context = TrainContext(0, make_schema())
-    variational = VariationalTreatmentELBO().compute(
-        state, batch, rows, context
-    ).value
-    exact = MissingTreatmentMarginalNLL(grad_path="both").compute(
-        state, batch, rows, context
-    ).value
+    variational = VariationalTreatmentELBO().compute(state, batch, rows, context).value
+    exact = (
+        MissingTreatmentMarginalNLL(grad_path="both")
+        .compute(state, batch, rows, context)
+        .value
+    )
     return variational, exact
 
 
@@ -165,14 +165,14 @@ def test_uniform_q_contributes_exactly_negative_log_k_entropy() -> None:
     torch.manual_seed(14)
     batch = make_batch(y=torch.randn(BATCH_SIZE, dtype=torch.float64))
     state = _state(
-        posterior_logits=torch.zeros(
-            BATCH_SIZE, NUM_TREATMENTS, dtype=torch.float64
-        )
+        posterior_logits=torch.zeros(BATCH_SIZE, NUM_TREATMENTS, dtype=torch.float64)
     )
     rows = resolve_rows(batch, "t_missing")
-    value = VariationalTreatmentELBO().compute(
-        state, batch, rows, TrainContext(0, make_schema())
-    ).value
+    value = (
+        VariationalTreatmentELBO()
+        .compute(state, batch, rows, TrainContext(0, make_schema()))
+        .value
+    )
     candidates = torch.arange(NUM_TREATMENTS).expand(BATCH_SIZE, NUM_TREATMENTS)
     propensity = state.default[Port.T_GIVEN_X]
     outcome = state.default[Port.Y_GIVEN_XT]
@@ -193,9 +193,11 @@ def test_one_hot_q_reduces_to_the_selected_complete_case_term() -> None:
     probs[:, selected] = 1.0
     state = _state(posterior=_FixedTreatment(probs))
     rows = resolve_rows(batch, "t_missing")
-    value = VariationalTreatmentELBO().compute(
-        state, batch, rows, TrainContext(0, make_schema())
-    ).value
+    value = (
+        VariationalTreatmentELBO()
+        .compute(state, batch, rows, TrainContext(0, make_schema()))
+        .value
+    )
     candidates = torch.arange(NUM_TREATMENTS).expand(BATCH_SIZE, NUM_TREATMENTS)
     propensity = state.default[Port.T_GIVEN_X]
     outcome = state.default[Port.Y_GIVEN_XT]
