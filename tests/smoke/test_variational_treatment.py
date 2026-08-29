@@ -270,10 +270,10 @@ def test_the_amortisation_gap_is_finite_and_learns_over_the_run(
     fits: _Fits,
 ) -> None:
     first = sum(_gap(fits.variational.result, step) for step in range(50)) / 50
-    last = sum(
-        _gap(fits.variational.result, step)
-        for step in range(STEPS - 50, STEPS)
-    ) / 50
+    last = (
+        sum(_gap(fits.variational.result, step) for step in range(STEPS - 50, STEPS))
+        / 50
+    )
     heldout = fits.variational.amortisation_gap
     assert heldout is not None
     assert math.isfinite(first) and math.isfinite(last) and math.isfinite(heldout)
@@ -299,11 +299,7 @@ def test_overlap_fixture_has_a_real_bayes_posterior_advantage(fits: _Fits) -> No
         dim=-1,
     )
     residual = (batch.y[:, None] - means) / 0.5
-    log_py = (
-        -0.5 * residual.square()
-        - math.log(0.5)
-        - 0.5 * math.log(2.0 * math.pi)
-    )
+    log_py = -0.5 * residual.square() - math.log(0.5) - 0.5 * math.log(2.0 * math.pi)
     log_joint = propensity.log() + log_py
     posterior = torch.softmax(log_joint, dim=-1)
 
