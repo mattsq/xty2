@@ -76,7 +76,17 @@ class VariationalTreatmentELBO:
         log_py = outcome.log_prob(batch.y, candidates)
         q = posterior.probs
         per_row = (q * (-log_pt - log_py) + torch.xlogy(q, q)).sum(dim=-1)
-        return reduce_rows(per_row, rows)
+        exact_per_row = -torch.logsumexp(log_pt + log_py, dim=-1)
+        exact = reduce_rows(exact_per_row, rows)
+        gap = reduce_rows(per_row - exact_per_row, rows)
+        return reduce_rows(
+            per_row,
+            rows,
+            diagnostics={
+                "exact_marginal_nll": float(exact.value.detach()),
+                "amortisation_gap": float(gap.value.detach()),
+            },
+        )
 
 
 __all__ = ["VariationalTreatmentELBO"]
