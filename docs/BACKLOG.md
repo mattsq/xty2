@@ -157,6 +157,77 @@ whole batch to one direction inside ten steps at every `w_s` from 0.5 to 0.01
 only the normalisation does not, which is what the first version of that card
 got wrong and an adversarial review caught.
 
+**FreeMatch has landed too, and it is the first card in this repository whose
+framework addition was designed in advance by a *different* card.**
+`flexmatch.md` §5.1 named it as the second consumer of objective state and made
+two claims about the shape; §2.5 records which held.
+
+Its more transferable result is about **fixtures**, and it took three attempts
+to state correctly — the first two are kept here because the corrections are the
+content.
+
+The `K`-cluster family now lives in `benchmarks/common.py`
+(`cluster_population`), generalising `fixmatch.md` §6.1's DGP over the class
+count, the class prior and class *adjacency*, and reducing to that DGP
+bit-for-bit at `K = 2` with a uniform prior. Three questions had died on the
+original fixture; two are now answered.
+
+1. **"A balanced K = 2 fixture cannot measure a mechanism that acts on the class
+   marginal."** True, and the fix is worth more than expected: at `K = 4`
+   FreeMatch's self-adaptive threshold beats a constant gate by **0.87** where
+   the two-class fixture said 0.96, and the per-class thresholds separate by
+   0.17 instead of 0.06. Most of that is the class *count*; skewing the prior on
+   top adds a little more (0.87 → 0.84). A card whose mechanic is per-class
+   should declare more levels in its §6 before it is written.
+2. **"So declare a skewed prior."** ~~The advice this section gave first.~~
+   **Wrong for anything reading eq. (9)-style statistics, and `freematch.md`
+   §6.4 is the counter-example.** SAF stayed at the floor of its own loss on a
+   plainly skewed marginal, because `p_bar / h_bar` divides mean probability
+   mass by predicted-label frequency and therefore measures *confidence per
+   predicted class*. A rare class raises that ratio (it collects spill from
+   every other row) and lowers it (it is predicted less confidently), and since
+   rarity and poor learning coincide, the two cancel — closed form 0.0001,
+   measured 0.0002.
+3. **What actually wakes such a term is unequal per-class confidence at equal
+   frequency**, which is *class adjacency* — the thing FreeMatch §4.1 names when
+   it motivates a per-class threshold. `cluster_centres(groups=(3, 1),
+   within=0.5)` packs three classes together and isolates a fourth, giving Bayes
+   confidences of 0.63/0.63/0.63 against 0.87 at a uniform prior. On that
+   fixture the term is live and its two signs separate by 0.16 nats.
+
+The generalisable rule, third time of asking: **ask which statistic your
+mechanism reads, and vary that.** A per-class *threshold* reads class counts, so
+more levels and a skewed prior expose it. A term that reads a *ratio* of two
+quantities that move together is invisible to anything that moves both, however
+extreme. Neither of the first two versions of this note would have predicted the
+second case, and both were written with the measurement already in hand.
+
+**A fourth question, and this one has an answer worth carrying.** None of the
+above separates a self-adaptive threshold from the lower constant it converges
+to — `tau_t` ends between 0.78 and 0.92 against a comparison arm pinned at 0.95.
+One cheap arm settles it: a constant gate at exactly the `tau` each fixture's
+adaptive arm reached, which is the sceptical hypothesis in its strongest form.
+
+**Between a third and a half of the advantage is the threshold level.** The
+matched constant recovers 29% of the gap on the two-class fixture and 43-56% on
+the four-class ones. A card that never ran that arm would have been crediting
+the mechanism with about twice what it earns — which is the general lesson:
+whenever an adaptive quantity converges somewhere, the constant at its
+destination is the control, and it is one run.
+
+The rest does not reproduce. The adaptive arm still wins on every fixture,
+five seeds of five, by 3.6 to 6.2 standard errors, and the row statistics say
+how: it retains **more** rows at **lower** impurity than the matched constant
+(0.89 against 0.78 coverage at 0.061 against 0.080 impurity on the skewed
+fixture). A single threshold has to trade coverage against purity; a per-class
+one can lower the bar exactly where the model is weak. Per class it is a
+redistribution the constant does not perform — the rarest class goes 2.33
+(constant) → 1.99 (matched) → **1.50** (adaptive), paid for on the commonest.
+
+What is still confounded, for whoever wants it: the residual mixes the
+per-class spread with the *trajectory* from `1/K` upwards, and separating them
+needs an arm with the global EMA kept and the per-class normalisation disabled.
+
 **Step 4's neighbourhood has now been visited too, out of order and
 deliberately.** `flexmatch` is not step 4 - ReMixMatch is - but it is the
 cheapest available test of the same architectural claim the sequence was built
@@ -370,6 +441,86 @@ cross-entropy. Its descendants then modify or add mechanisms around that core:
 
 - **FreeMatch** — self-adaptive global and class-specific thresholds plus
   fairness/class-balancing regularisation.
+
+  > **Implemented.** `docs/recipes/freematch.md` and
+  > `xty2/recipes/freematch.py`. It cost **two objectives**
+  > (`SelfAdaptiveThresholdTreatmentNLL` for eq. (8) and `SelfAdaptiveFairness`
+  > for eq. (11), with their `SelfAdaptiveThreshold` policy and shared
+  > `SelfAdaptiveThresholds` state) and **one sentence of `DESIGN.md` §4 with no
+  > code**: an objective may read the state of a *named sibling* in the same
+  > stage. Eq. (12) gives the two terms separate weights, so they cannot be one
+  > objective without dropping `w_f` from the plan; eqs. (5), (6) and (10) are
+  > one set of statistics both read. `TrainContext.objective_state` already took
+  > a name, so the capability existed and only the contract had to say so. No
+  > new card key — `losses.confidence_threshold` holds the policy, which is now
+  > the *second* card to read that key as a rule rather than a number — no new
+  > port, view, schedule, row population or executor.
+  >
+  > **It was §15.2's stateful-mediation question, and the answer is still
+  > "wait".** There are now three gated pseudo-label objectives sharing an
+  > arg-max, a mask and a mean, which is real duplication at the third instance.
+  > `freematch.md` §5.3 declines a union anyway, on a specific ground: their
+  > gates are three different functions of three different things, and their
+  > `batch_coupled` answers differ — so a policy field would put a `bool` the
+  > *compiler* reads behind a value a recipe passes. SoftMatch's continuous
+  > weight is a fourth kind of gate and is the recipe that would settle it.
+  >
+  > **`flexmatch.md` §5.1's named-second-consumer prediction was half right, and
+  > checking it is the point of naming one.** The shape held exactly:
+  > FreeMatch's state is built from `K` alone and ignores the population, so
+  > `initial_state(population: TrainingPopulation | None)` was load-bearing on
+  > the first day it had a second consumer. The *ordering* claim was wrong.
+  > That card predicted the state would be "updated from each batch after that
+  > batch's gate is applied"; FreeMatch's Algorithm 1 updates `tau_t`, `p~_t`
+  > and `h~_t` from the current batch at lines 3-5 and gates that same batch at
+  > line 9. So both terms are `batch_coupled` where FlexMatch's is not, and a
+  > stage holding either is barred from `ExternalBatches`. The prediction that
+  > got it right was in `pseudo_label.py`'s own docstring, sitting beside the
+  > one that got it wrong.
+  >
+  > **Three results, and the second is the one to read before writing
+  > SoftMatch.** All six clauses of §6's declared tolerance are met at five of
+  > the declared ten seeds: the paired held-out `p(t|x)` NLL ratio against a
+  > constant gate at `tau = 0.95` is **0.961 ± 0.007** on the EMA and
+  > **0.952 ± 0.010** on the trained network, ahead on five of five on both, and
+  > the mask rate, impurity, outcome NLL and `tau_t` trajectory all clear their
+  > bounds. It is also the first card in this family whose EMA and trained
+  > readings agree rather than disagreeing (`fixmatch.md` §6.2,
+  > `doublematch.md` §6.2).
+  >
+  > **Self-adaptive fairness contributes nothing on the primary fixture, and
+  > §6.4 has since found out why.** The paper's own `w_f = 0` ablation is within
+  > `-0.0001 ± 0.0012` of the full recipe, against a SAT-versus-constant effect
+  > of `-0.0123`, and the term sits at the floor of its own loss all run. That
+  > survived a four-class fixture and a skewed prior unchanged; what moved it
+  > was **class adjacency** — unequal per-class confidence at equal frequency —
+  > for the reason in the sequence note above. **This was never "SAF does not
+  > help"**, and the distinction is the one `CLAUDE.md` says is most expensive
+  > to get wrong: three fixtures could not ask the question, and the fourth
+  > could. SoftMatch's distribution alignment and ReMixMatch's meet the same
+  > wall and should declare an adjacency fixture, not merely an imbalanced one.
+  >
+  > That wall also swallowed the card's one genuine paper-versus-paper
+  > disagreement, until §6.4 broke it. Eq. (11) prints `L_f = -H(A, B)` where
+  > the paper's prose asks for diverse predictions in four places; deviation 7
+  > implements the intent, and `w_f = -0.05` expresses the literal reading with
+  > no code change. On the primary fixture both signs were null — the sign of an
+  > inert term is unmeasurable — but on `k4_adjacent` at `w_f = ±1.0` they
+  > separate by 0.16 nats, **and the result refuted half of deviation 7's own
+  > argument.** That half said the printed sign is unbounded below and would run
+  > away at weight. It does not: it barely moves its objective at all, because
+  > pushing `B` away from `A` saturates against the simplex. The corrected sign
+  > is the active one — and at high weight the harmful one. The choice survives
+  > on the narrower ground that it is the reading under which eq. (11) is an
+  > objective at all, and at the paper's own `w_f` the two differ by 1.1
+  > standard errors, so the stakes are now known to be small. **An a-priori
+  > argument about a loss's boundedness lost to one fixture and thirty fits**,
+  > which is the cheapest lesson in this entry.
+  >
+  > One thing the card is careful not to claim, and the next measurement it
+  > wants: the gain is **not** attributed to self-adaptivity as against the
+  > lower threshold it happens to produce. `tau_t` ends at 0.922 where the
+  > comparison arm is fixed at 0.95, and a constant gate at 0.92 was not run.
 - **SoftMatch** — continuous confidence weighting rather than a binary gate,
   together with distribution alignment.
 - **ConMatch** — confidence estimation and multiple strong views.

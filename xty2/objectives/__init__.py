@@ -8,18 +8,30 @@ batch or parameters — weighting is the mixer's job (§6) and stepping is the
 executor's (§7). The one exception is state of its *own*: an objective may
 declare `initial_state` and read the result back through
 `TrainContext.objective_states`, which the executor builds once per stage
-execution (§4, `StatefulObjective`). `CurriculumPseudoLabelTreatmentNLL` is the
-first and so far only objective that does.
+execution (§4, `StatefulObjective`). `CurriculumPseudoLabelTreatmentNLL` and
+`SelfAdaptiveThresholdTreatmentNLL` are the two objectives that do, and the
+second is also the first whose state a *sibling* objective in the same stage
+reads: `SelfAdaptiveFairness` names it, because FreeMatch's eq. (8) and eq. (11)
+are two weighted terms over one set of statistics.
 
-Eight objectives exist so far: the three likelihood terms the first recipe
+Ten objectives exist so far: the three likelihood terms the first recipe
 needs (P3, P5), the view-keyed ``ConsistencyLoss`` (P6), the confidence-gated
 ``PseudoLabelTreatmentNLL`` that FixMatch is assembled from, the
 ``InfoNCEContrastive`` that SCARF is, the ``CosineFeatureConsistency``
-DoubleMatch adds to FixMatch, and the ``CurriculumPseudoLabelTreatmentNLL``
-FlexMatch replaces FixMatch's gate with. The rest arrive with the recipes that
-consume them; migration is lazy by design (§11).
+DoubleMatch adds to FixMatch, the ``CurriculumPseudoLabelTreatmentNLL``
+FlexMatch replaces FixMatch's gate with, and the
+``SelfAdaptiveThresholdTreatmentNLL`` / ``SelfAdaptiveFairness`` pair FreeMatch
+is. The rest arrive with the recipes that consume them; migration is lazy by
+design (§11).
 """
 
+from xty2.objectives.adaptive_threshold import (
+    LOG_FLOOR,
+    SelfAdaptiveFairness,
+    SelfAdaptiveThreshold,
+    SelfAdaptiveThresholds,
+    SelfAdaptiveThresholdTreatmentNLL,
+)
 from xty2.objectives.consistency import (
     CONSISTENCY_DIVERGENCES,
     STOP_GRADIENTS,
@@ -54,6 +66,7 @@ from xty2.objectives.supervised import ObservedOutcomeNLL, ObservedTreatmentNLL
 __all__ = [
     "CONSISTENCY_DIVERGENCES",
     "GRAD_PATHS",
+    "LOG_FLOOR",
     "STOP_GRADIENTS",
     "UNUSED",
     "ConsistencyDivergence",
@@ -71,6 +84,10 @@ __all__ = [
     "ObservedTreatmentNLL",
     "PseudoLabelStopGrad",
     "PseudoLabelTreatmentNLL",
+    "SelfAdaptiveFairness",
+    "SelfAdaptiveThreshold",
+    "SelfAdaptiveThresholdTreatmentNLL",
+    "SelfAdaptiveThresholds",
     "Sharpening",
     "StopGrad",
 ]

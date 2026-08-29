@@ -212,7 +212,11 @@ class Objective(Protocol):
 
         True for `InfoNCEContrastive`, whose negatives are the other `N - 1`
         rows, and false for every likelihood term, whose per-row value would be
-        unchanged if the batch were split in two. The distinction is what makes
+        unchanged if the batch were split in two. It is also true for
+        FreeMatch's two terms, and for a second reason worth distinguishing: no
+        pair of rows appears in one loss there, but the *threshold* a row is
+        gated at is an EMA that folded this batch's own confidences in first
+        (`docs/recipes/freematch.md` §3.1). The distinction is what makes
         `optimisation.batch_size` a paper-governed number rather than a
         deployment detail, and `compile()` uses it for exactly one rule: a
         stage that hands batch construction back to the caller
@@ -225,7 +229,7 @@ class Objective(Protocol):
         forgetting this one restores the hole `scarf.md` §5.6 was written
         about. Barlow Twins and VICReg — whose losses are computed from a
         cross-correlation or covariance over the batch axis — are the next
-        terms that will answer true.
+        terms of that shape that will answer true.
         """
 
     def compute(

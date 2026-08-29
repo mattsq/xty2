@@ -146,10 +146,13 @@ class TrainContext:
             objectives of this stage, built once per stage execution by the
             executor (`StatefulObjective`). Empty for every stage whose
             objectives are all stateless, which is every stage but
-            `flexmatch`'s today. Read it through `objective_state`, never by
-            indexing: the accessor is what turns "this objective declared no
-            state" and "the executor handed me somebody else's" into errors
-            that name the objective rather than a `KeyError` inside a loss.
+            `flexmatch`'s and `freematch`'s today. Read it through
+            `objective_state`, never by indexing: the accessor is what turns
+            "this objective declared no state" and "the executor handed me
+            somebody else's" into errors that name the objective rather than a
+            `KeyError` inside a loss. An objective may read a *named sibling's*
+            entry as well as its own; `objective_state` says when and on what
+            condition.
     """
 
     global_step: int
@@ -167,12 +170,24 @@ class TrainContext:
         )
 
     def objective_state(self, name: str, kind: type[StateT]) -> StateT:
-        """This objective's own state, narrowed to the type it created.
+        """The state built under `name`, narrowed to the type that created it.
 
-        `kind` is checked rather than cast. An objective asks for the state it
-        built in `initial_state`, so a mismatch means the executor and the
-        objective disagree about which stage is running — which is worth an
-        error naming both, not an `AttributeError` three lines later.
+        Usually an objective's own: it passes its `name` and gets back what its
+        `initial_state` returned. `kind` is checked rather than cast, so a
+        mismatch means the executor and the objective disagree about which stage
+        is running — worth an error naming both, not an `AttributeError` three
+        lines later.
+
+        It may also be a **named sibling's**, when two objectives in one stage
+        are two halves of one published mechanic over one set of statistics
+        (`DESIGN.md` §4). FreeMatch is the first: eq. (8)'s gate and eq. (11)'s
+        fairness term carry separate weights under eq. (12), so they cannot be
+        one objective, and they read one `tau_t`, `p~_t` and `h~_t`. The reader
+        declares the owner's name as an ordinary field, which is why this takes
+        a name rather than reading one off the caller. The rule that makes it
+        safe is on the *state*, not here: a shared update has to be idempotent
+        within a step, so the mixer's declaration order cannot change a number
+        (`docs/recipes/freematch.md` §5.1).
         """
         state = self.objective_states.get(name)
         if state is None:
