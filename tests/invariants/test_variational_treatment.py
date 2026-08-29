@@ -274,7 +274,7 @@ def test_empty_missing_population_is_zero_and_objective_is_not_batch_coupled() -
 def test_external_batches_are_accepted_for_the_uncoupled_objective() -> None:
     recipe = variational_treatment(make_schema())
     stage = replace(recipe.program[0], sampler=ExternalBatches())
-    changed = replace(recipe, program=Program((stage,)))
+    changed = replace(recipe, program=Program((stage,)), data=None)
     compile(changed)
 
 
@@ -309,9 +309,7 @@ def test_plan_matches_the_reviewed_card_and_shared_data_bindings() -> None:
     hyperparameters = plan.hyperparameters
     assert hyperparameters["optimisation.batch_size"] == 128
     assert hyperparameters["optimisation.labelled_unlabelled_ratio"] == 15.0
-    assert hyperparameters["optimisation.total_steps_or_epochs"] == (
-        "3000 optimiser steps"
-    )
+    assert hyperparameters["optimisation.total_steps_or_epochs"] == 3000
     assert hyperparameters["architecture.widths_depths"]["categorical_posterior"] == (
         "concat(X_RAW, Y_RAW) -> [300] -> K"
     )
