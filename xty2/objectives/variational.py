@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import torch
+
 from xty2.core.batch import XTYBatch
 from xty2.core.graph import DEFAULT, Realisation, State
 from xty2.core.loss import (
@@ -24,11 +26,12 @@ class VariationalTreatmentELBO:
 
     For every missing-treatment row this computes
 
-    ``sum_k q_k * (-log p(t=k|x) - log p(y|x,t=k) + log q_k)``.
+    ``sum_k q_k * (-log p(t=k|x) - log p(y|x,t=k)) + sum_k q_k log q_k``.
 
     The candidate treatments come from the schema, never from ``batch.t``.
     Nothing is detached: the term trains the propensity, outcome head and
-    outcome-aware posterior together.
+    outcome-aware posterior together. ``torch.xlogy`` gives the entropy its
+    exact limiting value ``0 * log(0) = 0``.
     """
 
     name: str = "variational_treatment_elbo"
@@ -71,9 +74,8 @@ class VariationalTreatmentELBO:
 
         log_pt = propensity.log_prob(candidates)
         log_py = outcome.log_prob(batch.y, candidates)
-        log_q = posterior.log_prob(candidates)
         q = posterior.probs
-        per_row = (q * (-log_pt - log_py + log_q)).sum(dim=-1)
+        per_row = (q * (-log_pt - log_py) + torch.xlogy(q, q)).sum(dim=-1)
         return reduce_rows(per_row, rows)
 
 
