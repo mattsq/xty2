@@ -48,6 +48,11 @@ from xty2.recipes.scarf import (
 )
 from xty2.recipes.ssdml import SSDML_ENCODER_WIDTHS, ssdml
 from xty2.recipes.tarnet import ENCODER_WIDTHS, OUTCOME_WIDTHS, tarnet
+from xty2.recipes.variational_treatment import (
+    POSTERIOR_WIDTHS,
+    VARIATIONAL_TREATMENT_STEPS,
+    variational_treatment,
+)
 
 __all__ = [
     "CNFLOW_ENCODER_WIDTHS",
@@ -69,6 +74,7 @@ __all__ = [
     "MISSING_ANCHORS",
     "OUTCOME_WIDTHS",
     "PAWS_SAMPLER",
+    "POSTERIOR_WIDTHS",
     "PRETRAIN_STEPS",
     "PROJECTION_WIDTHS",
     "SAT",
@@ -81,6 +87,7 @@ __all__ = [
     "TAU",
     "TEMPERATURE",
     "UNSUPERVISED_WEIGHT",
+    "VARIATIONAL_TREATMENT_STEPS",
     "WEAK_MASK_RATE",
     "cnflow",
     "cycle_dual",
@@ -93,4 +100,5 @@ __all__ = [
     "scarf",
     "ssdml",
     "tarnet",
+    "variational_treatment",
 ]

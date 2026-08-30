@@ -14,16 +14,11 @@ second is also the first whose state a *sibling* objective in the same stage
 reads: `SelfAdaptiveFairness` names it, because FreeMatch's eq. (8) and eq. (11)
 are two weighted terms over one set of statistics.
 
-Twelve objectives exist so far: the three likelihood terms the first recipe
-needs (P3, P5), the view-keyed ``ConsistencyLoss`` (P6), the confidence-gated
-``PseudoLabelTreatmentNLL`` that FixMatch is assembled from, the
-``InfoNCEContrastive`` that SCARF is, the ``CosineFeatureConsistency``
-DoubleMatch adds to FixMatch, the ``CurriculumPseudoLabelTreatmentNLL``
-FlexMatch replaces FixMatch's gate with, and the
-``SelfAdaptiveThresholdTreatmentNLL`` / ``SelfAdaptiveFairness`` pair FreeMatch
-is, and PAWS's support-set consistency and me-max terms. The rest arrive with
-the recipes that consume them; migration is lazy by
-design (§11).
+The objective catalogue grows lazily with reviewed recipes. The variational
+ treatment objective is the first term that keeps a predicted categorical
+ distribution soft while differentiating through its weights over candidate
+ treatments; exact marginalisation and pseudo-label objectives remain separate
+ objects because they express different source equations.
 """
 
 from xty2.objectives.adaptive_threshold import (
@@ -69,6 +64,7 @@ from xty2.objectives.support_set import (
     SupportSetPseudoLabelConsistency,
     TargetRole,
 )
+from xty2.objectives.variational import VariationalTreatmentELBO
 
 __all__ = [
     "CONSISTENCY_DIVERGENCES",
@@ -101,4 +97,5 @@ __all__ = [
     "SupportSetClassifier",
     "SupportSetPseudoLabelConsistency",
     "TargetRole",
+    "VariationalTreatmentELBO",
 ]
