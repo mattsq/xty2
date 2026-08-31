@@ -132,6 +132,55 @@ def test_multidimensional_outcomes_are_allowed() -> None:
     assert batch.y.shape == (BATCH_SIZE, 2)
 
 
+# -- structural operations -------------------------------------------------
+
+
+def test_index_select_gathers_every_present_field() -> None:
+    source = make_batch(
+        fold_id=torch.arange(BATCH_SIZE, dtype=torch.long) % 3,
+        weight=torch.arange(BATCH_SIZE, dtype=torch.float32) + 1.0,
+    )
+    rows = torch.tensor([5, 1, 3], dtype=torch.long)
+    selected = source.index_select(rows)
+
+    for name in (
+        "x",
+        "t",
+        "y",
+        "t_observed",
+        "y_observed",
+        "row_id",
+        "fold_id",
+        "weight",
+    ):
+        source_value = getattr(source, name)
+        selected_value = getattr(selected, name)
+        assert source_value is not None and selected_value is not None
+        assert torch.equal(selected_value, source_value.index_select(0, rows))
+
+
+def test_cat_round_trips_all_present_fields() -> None:
+    source = make_batch(
+        fold_id=torch.arange(BATCH_SIZE, dtype=torch.long) % 2,
+        weight=torch.arange(BATCH_SIZE, dtype=torch.float32) + 1.0,
+    )
+    split = BATCH_SIZE // 2
+    left = source.index_select(torch.arange(split, dtype=torch.long))
+    right = source.index_select(torch.arange(split, BATCH_SIZE, dtype=torch.long))
+
+    assert XTYBatch.cat((left, right)).equal_to(source)
+
+
+def test_cat_rejects_partial_optional_fields(batch: XTYBatch) -> None:
+    left = batch.index_select(torch.arange(BATCH_SIZE // 2, dtype=torch.long))
+    right = batch.index_select(
+        torch.arange(BATCH_SIZE // 2, BATCH_SIZE, dtype=torch.long)
+    ).replace(weight=torch.ones(BATCH_SIZE - BATCH_SIZE // 2))
+
+    with pytest.raises(BatchContractError, match="present for only part"):
+        XTYBatch.cat((left, right))
+
+
 # -- immutability -----------------------------------------------------------
 
 
