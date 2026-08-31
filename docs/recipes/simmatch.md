@@ -1,11 +1,13 @@
 # Recipe spec card: simmatch
 
-**Status:** `draft`
+**Status:** `implemented`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity; §6 only for
-> benchmark/reporting work. This card stops at the review boundary required by
-> `CLAUDE.md`; no SimMatch code belongs in this PR.
+> benchmark/reporting work. `xty2/recipes/simmatch.py` and
+> `xty2/objectives/simmatch.py` implement it; `tests/invariants/test_simmatch.py`
+> is the Tier 0 contract and `tests/smoke/test_simmatch.py` runs §6.2's first
+> Tier 1 arm.
 
 ---
 
@@ -168,19 +170,19 @@ loss.
 | `g` | nonlinear projection head | `X_REPR -> X_PROJ` | `ProjectionHead(widths=(200, 128), activation="relu", normalisation="row_l2")` |
 | `T_w` | weak augmentation | `weak_x` | `ViewSpec("weak_x", transforms=(FeatureMask(p=0.1),), draws=1)` |
 | `T_s` | strong augmentation | `strong_x` | `ViewSpec("strong_x", transforms=(FeatureMask(p=0.1), FeatureMask(p=0.5)), draws=1)` |
-| `p^w` | aligned weak semantic distribution | `T_GIVEN_X @ weak_x` | detached input to `SimilarityMatchingTreatmentNLL`; a 32-step moving average in its state performs DA |
+| `p^w` | aligned weak semantic distribution | `T_GIVEN_X @ weak_x` | detached input, declared and read by *both* objectives because either may prepare the shared state first; a 32-step moving average in that state performs DA |
 | `p^s` | strong semantic distribution | `T_GIVEN_X @ strong_x` | prediction side of that objective; gradient reaches encoder and propensity |
 | `z^w` | weak projected embedding | `X_PROJ @ weak_x` | detached for target construction; observed-row values are written to the labelled memory after both losses read it |
 | `z^s` | strong projected embedding | `X_PROJ @ strong_x` | prediction side of `LabeledMemoryInstanceConsistency`; gradient reaches encoder and projection head |
 | `Q_f, Q_l`, `K` | one feature slot and one immutable known label per observed training row | — | `LabeledSimilarityMemory`, initialised from `TrainingPopulation`; slots are keyed by sorted observed `row_id`, not FIFO |
-| equations (3), (4), `t_w=t_s=0.1` | weak/strong distributions over memory slots | — | `SimilarityMatchingSpec(instance_temperature=0.1, ...)`, shared by both objectives |
+| equations (3), (4), `t_w=t_s=0.1` | weak/strong distributions over memory slots | — | `SimilarityMatchingTemperatures(instance_weak=0.1, instance_strong=0.1)` inside one `SimilarityMatchingSpec`, shared by both objectives |
 | equations (7), (8) | semantic-to-instance unfolding and calibrated target | — | prepared in the shared state; consumed by `LabeledMemoryInstanceConsistency` |
 | equations (9), (10), `alpha=0.9` | instance-to-semantic aggregation and smoothed target | — | prepared in the same state; consumed by `SimilarityMatchingTreatmentNLL` |
 | equation (1) | labelled cross-entropy | `T_GIVEN_X @ weak_x` | `ObservedTreatmentNLL(realisation=weak_x)`, rows `t_observed`, `reduction="mean"` |
 | equation (2) | gated soft semantic consistency | `T_GIVEN_X @ weak_x,strong_x` | `SimilarityMatchingTreatmentNLL`, rows `t_missing`, threshold `0.95`, `reduction="mean"` |
 | equation (5) | instance consistency | `X_PROJ @ weak_x,strong_x` | `LabeledMemoryInstanceConsistency(owner="similarity_matching_treatment_nll")`, rows `t_missing`, no gate, `reduction="mean"` |
-| equation (12), `m=0.7` | small-bank temporal ensemble | — | detached random-access update inside `LabeledSimilarityMemory`, after the step’s targets are prepared |
-| one-epoch warm-up | do not read random initial slots | — | `SimilarityMatchingSpec(warmup_steps=2)`; both propagation and instance loss are off at steps 0 and 1 (§7) |
+| equation (12), `m=0.7` | small-bank temporal ensemble | — | detached random-access update inside `LabeledSimilarityMemory`, after the step’s targets are prepared; a slot's *first* observation fills it and every later one mixes (deviation 11) |
+| one-epoch warm-up | do not read unfilled slots | — | `SimilarityMatchingSpec(warmup_steps=2)`; both propagation and instance loss are off at steps 0 and 1, and also while any slot is still unfilled (§7) |
 | evaluation EMA | model reported for the CIFAR experiments | — | `TeacherSpec(decay=0.999, role="evaluation")`; no objective reads it |
 | `B=64`, `mu=7` | batch composition | — | `QuotaSampler(Quota("t_observed", 64), Quota("t_missing", 448))` |
 | — (project-local) | outcome likelihood | `Y_GIVEN_XT` | `ObservedOutcomeNLL`, rows `t_observed`, `reduction="population"` |
@@ -210,12 +212,10 @@ gradients:
   stop_gradients:
     joint_fit.observed_outcome_nll: none
     joint_fit.observed_treatment_nll: none
-    joint_fit.similarity_matching_treatment_nll: p(t|x) @ view=weak_x params=student, x_proj @ view=weak_x params=student, labelled memory
-    joint_fit.labeled_memory_instance_consistency: x_proj @ view=weak_x params=student, labelled memory
+    joint_fit.similarity_matching_treatment_nll: p(t|x) @ view=weak_x params=student, x_proj @ view=weak_x params=student
+    joint_fit.labeled_memory_instance_consistency: p(t|x) @ view=weak_x params=student, x_proj @ view=weak_x params=student
     joint_fit.missing_treatment_marginal_nll: none
-  detached_targets:
-    joint_fit.similarity_matching_treatment_nll: target                # hat p and its gate are constants of theta
-    joint_fit.labeled_memory_instance_consistency: target              # hat q is constant; q^s and the strong branch train
+  detached_targets: target                                             # hat p and its gate, and hat q, are all constants of theta; q^s and both strong branches train
   gradient_clipping: none                                              # paper and both reference ports name none
   marginal_nll_grad_path: both                                         # reviewed P5 choice; project-local addition
 
@@ -306,11 +306,18 @@ data:
 ```
 
 `alpha=0.9`, memory momentum `m=0.7`, the 32-step alignment window, the
-two-step warm-up, and `K=N_observed=64` have no canonical `FIDELITY.md` §2
-keys. They are required constructor arguments of one shared frozen
-`SimilarityMatchingSpec`; `plan_details()` must print all five and the memory
-key/update policy. This follows the reviewed CoMatch and PAWS precedent without
-adding five one-recipe card keys.
+two-step warm-up, and the unfolding switch of equations (7)–(8) have no
+canonical `FIDELITY.md` §2 keys. They are required constructor arguments of one
+shared frozen `SimilarityMatchingSpec`; `plan_details()` must print all five
+together with the memory key space and update order. This follows the reviewed
+CoMatch and PAWS precedent without adding five one-recipe card keys.
+
+`K` is *not* declared beside them. It is the number of observed training rows,
+read from the stage's `TrainingPopulation` when the state is built, on the
+`flexmatch` precedent for `N`: a recipe that asserted `K` could assert one the
+sampler never draws from. `plan_details()` prints the key space that determines
+it — one slot per observed training `row_id` — and §6.1 asserts `K=64` on the
+fixture.
 
 ## 5. Deviations from the paper
 
@@ -326,6 +333,7 @@ adding five one-recipe card keys.
 | 8 | `framework-limitation` | `augmentation-vocabulary` | No CTAugment/RandAugment or image-colour stack; strong-view strength is fixed. | The paper follows FixMatch’s image augmentation. xty2 has no learned tabular operation vocabulary with comparable magnitudes, and the same ledger row already records the limitation for neighbouring cards. | Unknown sign. Target corruption and cross-view alignment are reported; no claim is made that feature masking reproduces the source augmentation distribution. |
 | 9 | `judgement` | — | Use decay 0.999 for an evaluation-only EMA and report both student and EMA. | The paper says its CIFAR result uses an EMA but gives no small-dataset decay. `0.999` is the authors’ public default and the shipped FixMatch choice. Reporting both prevents the unresolved value from becoming result selection. | May smooth or lag a 3,000-step run. The primary tolerance must pass for both parameter sets. |
 | 10 | `judgement` | — | Use the fixed §6.1 XTY DGP rather than CIFAR-10/100 or ImageNet, and test the propagation mechanism against a matched ablation rather than borrowing top-1 accuracy. | None of the paper’s datasets has treatment, outcome, or missing-treatment semantics. A published-number target would test a second data stack instead of this recipe’s mapping. | Evidence is limited to correct wiring and usefulness on the declared fixture. |
+| 11 | `judgement` | — | Do not initialise the bank with random unit vectors. A slot holds nothing until its row is first observed, that first observation *fills* it outright, and only later observations apply equation (12)'s momentum. Propagation and the instance loss stay off until every slot is filled, not merely until `warmup_steps` has passed. | Both ports seed random features and mix from the first update. That is harmless over their warm-up *epoch* — hundreds of labelled steps at `m=0.7` leave the noise at `0.7^n` — but this fixture's warm-up is two steps (§7), so a mixed random seed would still carry weight `0.49` into the first propagated target and would make the mechanism's first reads noise. Filling on first sight is the same limit the source reaches, one step earlier, and removes an RNG stream the plan does not otherwise have. | None expected: the source's initial features are arbitrary and no equation reads them. §6.2's coverage invariant (`bank coverage = 1.0` before the first propagated target) is what makes the claim checkable. |
 
 ### 5.1 Framework additions made for this card
 
@@ -336,7 +344,7 @@ into a component buffer.
 
 | Added | Quadrant (§11.2) | Consumers today | Named second consumer | Why now |
 |---|---|---|---|---|
-| `SimilarityMatchingSpec` — frozen shared values for temperatures, `alpha`, bank momentum, DA window, warm-up, threshold, and support population | fidelity-bearing, reversible | both SimMatch objectives | not required | The two objectives must use the same bank arithmetic and source constants. One value object makes equality inspectable and puts otherwise keyless values in the plan digest. |
+| `SimilarityMatchingSpec` — frozen shared values for the two instance temperatures, `alpha`, bank momentum, DA window, warm-up, the gate threshold, and the equation (7)–(8) unfolding switch | fidelity-bearing, reversible | both SimMatch objectives | not required | The two objectives must use the same bank arithmetic and source constants. One value object makes equality inspectable and puts otherwise keyless values in the plan digest. |
 | `LabeledSimilarityMemory` — stage-local state with one random-access feature slot and known label per observed training `row_id`, plus a DA queue | fidelity-bearing, reversible | both SimMatch objectives through one owner | not required; CoMatch already constrains the general lifecycle but its FIFO key space must not be widened into this one | Equations (7)–(12) cannot be computed from one batch. `TrainingPopulation` already supplies the stable rows and labels, and `StatefulObjective` already owns reset and sibling reads. This object is recipe-local arithmetic over those contracts, not new framework vocabulary. |
 | `SimilarityMatchingTreatmentNLL` — equation (2) with the aggregated soft target `hat p`; owner of the memory | fidelity-bearing, reversible | this card | not required | Existing `PseudoLabelTreatmentNLL` hardens a target read directly from `T_GIVEN_X`; neither is true here. A flag would put two target-generating algorithms inside one objective. |
 | `LabeledMemoryInstanceConsistency` — equations (3)–(5), reading calibrated `hat q` from the named owner | fidelity-bearing, reversible | this card | not required | `InfoNCEContrastive` uses the identity as its target. The paper’s table 7 says that substitution loses 8.2 points, so the labelled distribution over memory slots is the mechanic rather than an interchangeable contrastive loss. |
@@ -415,16 +423,22 @@ Before training, measure rather than assume:
    changing one slot’s semantic factor changes `hat q` but leaves `q^agg`
    unchanged.
 3. Slots are keyed by sorted observed `row_id`. Permuting a batch does not move
-   its slot; a missing or duplicate support identity is rejected; a hidden
-   treatment can never enter `Q_l`.
+   its slot; a support identity with no slot, or one repeated inside a batch,
+   is rejected; a hidden treatment can never enter `Q_l`. A batch that reaches
+   only *some* slots is not an error — it leaves the rest unfilled, which
+   invariant 6 turns into a refusal to propagate.
 4. Targets read the previous-step bank. The current support embedding is
-   detached, temporally mixed, L2-normalised, and visible only on the next
-   optimiser step.
+   detached, written into its slot — filling it on first sight, temporally
+   mixed at `m=0.7` afterwards (deviation 11) — L2-normalised, and visible only
+   on the next optimiser step.
 5. Preparation and observation are idempotent within one step. Reversing the
    two objective declarations gives bit-identical losses and the bank updates
    exactly once.
 6. Steps 0 and 1 use `p^w`, set instance loss to zero, and still fill/update the
-   bank. Step 2 is the first propagated target and sees coverage 1.0.
+   bank. Step 2 is the first propagated target and sees coverage 1.0. A bank
+   still holding an unfilled slot after `warmup_steps` also refuses to
+   propagate, so an under-covered quota degrades to FixMatch's target rather
+   than reading a slot nothing has written.
 7. `hat p`, `hat q`, weak probabilities, weak embeddings, memory contents, and
    the confidence indicator carry no gradient. Strong semantic logits and
    strong embeddings do carry gradient.
@@ -441,14 +455,22 @@ Before training, measure rather than assume:
     unresolved reset semantics across folds.
 12. `plan.hyperparameters` matches every non-`n/a` §4 key, and
     `plan_details()` prints `alpha`, both temperatures, bank momentum, DA
-    window, warm-up steps, memory key space, update order, and `K`.
+    window, warm-up steps, the unfolding switch, the memory key space, and the
+    update order. `K` is read from the population rather than printed (§4).
 
 **Tier 1 (smoke fit and mechanism arms).**
 
-1. Run the full and no-propagation pair for one seed. Both unsupervised losses
-   fall after warm-up; the full arm beats marginal-frequency treatment NLL;
-   `hat p` and class-aggregated `hat q` are scored against the fixture’s hidden
-   treatments whether they improve or not.
+1. Run the full and no-propagation pair for one seed. The instance loss falls
+   after warm-up, and the supervised term falls. The **gated** semantic term is
+   read through its gate rate and accepted confidence rather than its level: a
+   gate that opens raises the term it charges, which is the same reading
+   `fixmatch.md` §6 records for that paper’s equation (4), so a rising eq. (2)
+   under a rising gate rate is the curriculum and not divergence. The full arm
+   beats marginal-frequency treatment NLL; `hat p` and class-aggregated `hat q`
+   are scored against the fixture’s hidden treatments whether they improve or
+   not. (Amended during implementation: the draft asked for both unsupervised
+   losses to fall, which eq. (2) cannot be expected to do while its gate is
+   still opening.)
 2. **Instance-to-semantic off:** `alpha=1`, equation (8) retained. This is the
    paper’s `w/o hat p` arm; predeclared expectation from figure 5/table 5:
    worse than full.
@@ -477,6 +499,20 @@ Before training, measure rather than assume:
 pair under the YAML contract above. The Tier 1 arms diagnose a failure but do
 not enter the acceptance metric and cannot be selected after seeing Tier 2.
 
+**What has run.** All twelve Tier 0 invariants are in
+`tests/invariants/test_simmatch.py`. Tier 1 arm 1 is in
+`tests/smoke/test_simmatch.py`, at 600 optimiser steps on one seed, with the
+warm-up, coverage and propagation behaviour asserted against a real run and
+both propagated targets scored on the fixture's hidden treatments. Measured on
+that run: gate rate 0.15 → 0.72 with accepted confidence 0.98, instance loss
+3.974 → 3.951 against a uniform-slot 4.159, target entropy 3.73 → 3.42,
+nearest-slot label agreement 0.81, held-out treatment NLL 0.268 student and
+0.370 EMA against a 0.708 marginal-frequency baseline, and hidden-label target
+NLL 0.2635 for `hat p` against 0.2682 for `DA(p^w)`. One seed at a fifth of the
+declared budget supports no direction; §6's ten-replicate contract is where one
+may be read. Arms 2–8 and Tier 2 are open; the status line stays `implemented`
+until the predeclared Tier 1 study runs in full.
+
 ### 6.3 Result ledger
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
@@ -491,8 +527,8 @@ not enter the acceptance metric and cannot be selected after seeing Tier 2.
 | Whether equation (9) aggregates `q^w` or the calibrated `hat q`. | Aggregate the original `q^w`. | Literal equation (9) and the authors’ code: `aggregated_prob.scatter_add(..., teacher_prob_orig)`, while the scaled distribution is a different tensor used only by the instance loss. |
 | Whether equation (8)’s unfolding uses the raw or distribution-aligned semantic prediction. | The aligned `p^w`. | Algorithm 1 computes `p^w=DA(phi_t(h^w))` before propagation; the authors’ code calls distribution alignment before gathering semantic factors by memory label. |
 | The paper does not mention a propagation warm-up. | Disable propagation and instance loss for the first two optimiser steps, while writing the bank. | Both reference ports disable them for epoch 0. On §6’s 960-row missing population with `448` missing rows and dropped incomplete batches, one source-style epoch is `floor(960/448)=2` steps. This is printed in the plan rather than hidden behind the word “epoch”. |
-| Initial memory contents. | Random unit vectors, labels fixed from the observed population; no target reads them before every feature slot has been replaced once. | The authors and SemiLearn initialise random normalised features. Initial labels are zero in code and overwritten by indexed support batches; deriving immutable `Q_l` from `TrainingPopulation` is safer and arithmetically identical by the first read because the quota contains all 64 observed rows. |
-| Read/write order. | Clone/read the prior bank, prepare both targets, then write current detached support embeddings once. | The authors’ `forward` clones `self.bank`, computes both losses, then calls `_update_bank`. Current supports must not leak into their own targets. |
+| Initial memory contents. | No initial features at all: a slot is empty until its row is first observed, that first observation fills it, and no target reads the bank until every slot is filled (deviation 11). Labels are fixed from the observed population and never written by a batch. | The authors and SemiLearn initialise random normalised features and mix from the first update, which their warm-up epoch dilutes to nothing; two warm-up steps here would not (deviation 11). Their initial labels are zero in code and overwritten by indexed support batches, so deriving immutable `Q_l` from `TrainingPopulation` is arithmetically identical by the first read and cannot take a hidden treatment. |
+| Read/write order. | Clone/read the prior bank, prepare both targets, then write current detached support embeddings once, whichever objective the mixer evaluates first. | The authors’ `forward` clones `self.bank`, computes both losses, then calls `_update_bank`. Current supports must not leak into their own targets. |
 | Whether weak and strong instance temperatures can differ. | Represent both fields, bind both to `0.1`, and reject a plan that silently aliases only one. | The paper has one `t`; the authors’ code exposes `tt` and `st` separately and the published command sets both to `0.1`. Separate fields preserve the code’s actual degree of freedom while the shared value object proves equality here. |
 | Whether the semantic confidence comparison is `>` or `>=`. | `>=`. | Equation (2) and algorithm 1 print `>`; the authors’ code uses `.ge(threshold)`. The difference is measure-zero for continuous logits, and code is the arithmetic that produced the reported run. |
 | Whether the gate uses `p^w` or propagated `hat p`. | Propagated `hat p`. | Algorithm 1 writes `1(max hat p > tau)H(hat p,p^s)`; the authors’ code constructs `prob_ku` first and then computes `max_probs` and the mask. This is essential: agreement between spaces is intended to raise or lower confidence. |
@@ -506,5 +542,5 @@ not enter the acceptance metric and cannot be selected after seeing Tier 2.
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status → `reviewed`) | | |
-| Plan diffed against §3.2 and §4 | | |
+| Card reviewed (status → `reviewed`) | Claude | 2026-08-31 |
+| Plan diffed against §3.2 and §4 | Claude | 2026-08-31 |

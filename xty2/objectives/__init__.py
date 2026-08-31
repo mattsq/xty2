@@ -64,6 +64,14 @@ from xty2.objectives.pseudo_label import (
     PseudoLabelTreatmentNLL,
     Sharpening,
 )
+from xty2.objectives.simmatch import (
+    LabeledMemoryInstanceConsistency,
+    LabeledSimilarityMemory,
+    PropagatedTargets,
+    SimilarityMatchingSpec,
+    SimilarityMatchingTemperatures,
+    SimilarityMatchingTreatmentNLL,
+)
 from xty2.objectives.supervised import ObservedOutcomeNLL, ObservedTreatmentNLL
 from xty2.objectives.support_set import (
     MeanEntropyMaximisation,
@@ -90,6 +98,8 @@ __all__ = [
     "FeatureStopGrad",
     "GradPath",
     "InfoNCEContrastive",
+    "LabeledMemoryInstanceConsistency",
+    "LabeledSimilarityMemory",
     "MeanEntropyMaximisation",
     "MemorySmoothedLabelGraph",
     "MemorySmoothedLabels",
@@ -97,6 +107,7 @@ __all__ = [
     "MissingTreatmentMarginalNLL",
     "ObservedOutcomeNLL",
     "ObservedTreatmentNLL",
+    "PropagatedTargets",
     "PseudoLabelGraphContrastive",
     "PseudoLabelStopGrad",
     "PseudoLabelTreatmentNLL",
@@ -105,6 +116,9 @@ __all__ = [
     "SelfAdaptiveThresholdTreatmentNLL",
     "SelfAdaptiveThresholds",
     "Sharpening",
+    "SimilarityMatchingSpec",
+    "SimilarityMatchingTemperatures",
+    "SimilarityMatchingTreatmentNLL",
     "StopGrad",
     "SupportSetClassifier",
     "SupportSetPseudoLabelConsistency",
