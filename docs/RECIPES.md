@@ -11,6 +11,7 @@ its evidence. The status line inside each card is authoritative.
 | [`cycle_dual.md`](recipes/cycle_dual.md) | `cycle_dual` | staged posterior labels and leakage controls |
 | [`ssdml.md`](recipes/ssdml.md) | `ssdml` | array and cross-fit executors |
 | [`fixmatch.md`](recipes/fixmatch.md) | `fixmatch` | quota sampling and confidence-gated pseudo-labels |
+| [`uda.md`](recipes/uda.md) | `uda` | temperature-sharpened consistency, confidence masking, and training signal annealing |
 | [`scarf.md`](recipes/scarf.md) | `scarf` | corruption-based contrastive pretraining |
 | [`doublematch.md`](recipes/doublematch.md) | `doublematch` | FixMatch plus representation consistency |
 | [`flexmatch.md`](recipes/flexmatch.md) | `flexmatch` | stateful class-adaptive confidence thresholds |
