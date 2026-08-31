@@ -339,19 +339,8 @@ def _draw_uniform(
 
 
 def _take(batch: XTYBatch, rows: Tensor) -> XTYBatch:
-    """Gather `rows` from every field a batch carries."""
-    return XTYBatch(
-        x=batch.x.index_select(0, rows),
-        t=batch.t.index_select(0, rows),
-        y=batch.y.index_select(0, rows),
-        t_observed=batch.t_observed.index_select(0, rows),
-        y_observed=batch.y_observed.index_select(0, rows),
-        row_id=batch.row_id.index_select(0, rows),
-        fold_id=(
-            None if batch.fold_id is None else batch.fold_id.index_select(0, rows)
-        ),
-        weight=(None if batch.weight is None else batch.weight.index_select(0, rows)),
-    )
+    """Gather ``rows`` through the batch's structural operation."""
+    return batch.index_select(rows)
 
 
 def eligible_populations(sampler: SamplerSpec) -> tuple[Rows, ...]:
