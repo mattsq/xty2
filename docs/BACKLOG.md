@@ -36,7 +36,8 @@ Git retains the exploratory chronology removed from this active queue.
 Already present: SCARF is deviating, FixMatch is reproduced, DoubleMatch,
 FlexMatch and FreeMatch are drafts, PAWS is implemented and smoke-passing, and
 CoMatch is implemented (`docs/recipes/comatch.md`) with its full predeclared
-smoke study still open.
+smoke study still open. SimMatch is implemented
+(`docs/recipes/simmatch.md`) with its Tier 1 study only partly run.
 The variational latent treatment is also implemented and smoke-passing;
 `docs/recipes/variational_treatment.md` is its authoritative card. Read their
 cards before proposing a close relative; their active ledgers supersede the
@@ -123,9 +124,14 @@ identifiable.
 
 ### 2.9 SimMatch ★
 
-SimMatch aligns semantic and instance similarities against a memory bank.
-Specify ownership, update order, reset behaviour, and checkpoint semantics
-before code.
+`docs/recipes/simmatch.md` is the implemented card and is authoritative from
+here. It selects the paper's small-bank temporal-ensemble variant, keys one
+feature slot by each observed training `row_id`, keeps the two propagation
+directions as separate objectives sharing one idempotent state, and predeclares
+a paired no-propagation arm. The card answers ownership, update order, and reset
+behaviour; exact checkpoint/resume remains typed debt. Tier 0 and the first
+Tier 1 arm ship with it; the remaining Tier 1 arms and the ten-seed Tier 2 pair
+are open.
 
 ### 2.10 PAWS
 

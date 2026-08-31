@@ -47,6 +47,7 @@ from xty2.recipes.scarf import (
     TEMPERATURE,
     scarf,
 )
+from xty2.recipes.simmatch import SIMMATCH_STEPS, simmatch
 from xty2.recipes.ssdml import SSDML_ENCODER_WIDTHS, ssdml
 from xty2.recipes.tarnet import ENCODER_WIDTHS, OUTCOME_WIDTHS, tarnet
 from xty2.recipes.variational_treatment import (
@@ -82,6 +83,7 @@ __all__ = [
     "SAT",
     "SELF_SUPERVISED_WEIGHT",
     "SHARPENING",
+    "SIMMATCH_STEPS",
     "SMALL_CORRUPTION_RATE",
     "SSDML_ENCODER_WIDTHS",
     "STRONG_MASK_RATE",
@@ -101,6 +103,7 @@ __all__ = [
     "mean_teacher",
     "paws",
     "scarf",
+    "simmatch",
     "ssdml",
     "tarnet",
     "variational_treatment",

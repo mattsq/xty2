@@ -17,6 +17,7 @@ its evidence. The status line inside each card is authoritative.
 | [`freematch.md`](recipes/freematch.md) | `freematch` | shared self-adaptive thresholds and fairness |
 | [`paws.md`](recipes/paws.md) | `paws` | class-stratified support sets and non-parametric soft pseudo-labels |
 | [`comatch.md`](recipes/comatch.md) | `comatch` | memory-smoothed pseudo-labels and a pseudo-label-graph contrastive term |
+| [`simmatch.md`](recipes/simmatch.md) | `simmatch` | labelled-instance memory and bidirectional semantic-instance pseudo-label propagation |
 | [`variational_treatment.md`](recipes/variational_treatment.md) | `variational_treatment` | amortised treatment posterior and discrete-latent ELBO |
 
 Use [`_TEMPLATE.md`](recipes/_TEMPLATE.md) for a new method and stop for review
