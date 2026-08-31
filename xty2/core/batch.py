@@ -180,7 +180,8 @@ class XTYBatch:
             )
         if rows.device != self.device:
             raise BatchContractError(
-                f"XTYBatch.index_select rows are on {rows.device}, expected {self.device}"
+                f"XTYBatch.index_select rows are on {rows.device}, "
+                f"expected {self.device}"
             )
         if rows.numel() and (int(rows.min()) < 0 or int(rows.max()) >= self.batch_size):
             raise BatchContractError(
@@ -209,7 +210,8 @@ class XTYBatch:
         for index, batch in enumerate(batches):
             if not isinstance(batch, cls):
                 raise BatchContractError(
-                    f"XTYBatch.cat entry {index} is {type(batch)}, expected {cls.__name__}"
+                    f"XTYBatch.cat entry {index} is {type(batch)}, "
+                    f"expected {cls.__name__}"
                 )
 
         values: dict[str, Tensor | None] = {}
@@ -221,7 +223,8 @@ class XTYBatch:
                 continue
             if not all(present):
                 raise BatchContractError(
-                    f"batch field {spec.name!r} is present for only part of the sequence"
+                    f"batch field {spec.name!r} is present for only part of "
+                    "the sequence"
                 )
             tensors = [entry for entry in entries if isinstance(entry, Tensor)]
             if len(tensors) != len(entries):
