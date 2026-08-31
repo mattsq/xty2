@@ -610,40 +610,22 @@ def run_stage(
             "resolved before prediction."
         )
     source, population = _feed(run, compiled, batches, seed=seed)
-    prediction_batches: list[XTYBatch] | None = None
-    fit_batches: BatchSource = source
-    if isinstance(compiled.action, PseudoLabelAction):
-        prediction_batches = []
-        fit_batches = _capture_step_batches(source, compiled, prediction_batches)
     _restore_initial_state(
         run,
         parameters=run.initial_parameters(),
         buffers=run.initial_buffers(),
     )
-    result = _run_stage(
+    result = _run_gradient_or_action(
         run,
         compiled,
-        fit_batches,
+        source,
         seed=seed,
         run_dir=run_dir,
         probe=probe,
+        source_checkpoint=None,
         population=population,
     )
-    if prediction_batches is None:
-        return replace(result, population=population)
-    labels = _predict_pseudo_labels(
-        run,
-        compiled,
-        prediction_batches,
-        checkpoints={0: result.checkpoint},
-        fold=0,
-        seed=seed,
-        teacher=result.teacher,
-    )
-    paths = dict(result.paths)
-    if run_dir is not None:
-        paths["pseudo_labels"] = str(run_dir.write_pseudo_labels(labels))
-    return replace(result, pseudo_labels=labels, paths=paths, population=population)
+    return replace(result, population=population)
 
 
 def run_array_fit(
@@ -1025,8 +1007,8 @@ def _run_cross_fit(
                 f"{train_rows.numel()} train rows and {predict_rows.numel()} "
                 "prediction rows; both must be non-empty"
             )
-        train_batch = _slice_batch(data, train_rows)
-        predict_batch = _slice_batch(data, predict_rows)
+        train_batch = data.index_select(train_rows)
+        predict_batch = data.index_select(predict_rows)
         _restore_initial_state(
             run,
             parameters=run.initial_parameters(),
@@ -1238,43 +1220,10 @@ def _capture_step_batches(
 
 
 def _combine_batches(batches: Sequence[XTYBatch]) -> XTYBatch:
-    """Concatenate one finite dataset, preserving every optional field."""
+    """Concatenate one finite dataset through the batch structural contract."""
     if not batches:
         raise TrainingError("cannot combine an empty batch sequence")
-
-    def optional(name: str) -> Tensor | None:
-        values = [getattr(batch, name) for batch in batches]
-        if all(value is None for value in values):
-            return None
-        if any(value is None for value in values):
-            raise TrainingError(
-                f"batch field {name!r} is present for only part of the dataset"
-            )
-        return torch.cat([value for value in values if value is not None], dim=0)
-
-    return XTYBatch(
-        x=torch.cat([batch.x for batch in batches], dim=0),
-        t=torch.cat([batch.t for batch in batches], dim=0),
-        y=torch.cat([batch.y for batch in batches], dim=0),
-        t_observed=torch.cat([batch.t_observed for batch in batches], dim=0),
-        y_observed=torch.cat([batch.y_observed for batch in batches], dim=0),
-        row_id=torch.cat([batch.row_id for batch in batches], dim=0),
-        fold_id=optional("fold_id"),
-        weight=optional("weight"),
-    )
-
-
-def _slice_batch(batch: XTYBatch, rows: Tensor) -> XTYBatch:
-    return XTYBatch(
-        x=batch.x[rows],
-        t=batch.t[rows],
-        y=batch.y[rows],
-        t_observed=batch.t_observed[rows],
-        y_observed=batch.y_observed[rows],
-        row_id=batch.row_id[rows],
-        fold_id=batch.fold_id[rows] if batch.fold_id is not None else None,
-        weight=batch.weight[rows] if batch.weight is not None else None,
-    )
+    return XTYBatch.cat(batches)
 
 
 def _objective_states(

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Literal, Protocol, runtime_checkable
 
@@ -170,6 +170,14 @@ class RecomputeRule:
 
 
 @dataclass(frozen=True)
+class _ViewValidation:
+    """Static schema-dependent facts resolved once by ``compile()``."""
+
+    declarations: tuple[frozenset[str], ...]
+    ordered_rules: tuple[RecomputeRule, ...]
+
+
+@dataclass(frozen=True)
 class ViewSpec:
     """A named sequence of transforms plus its preservation contract."""
 
@@ -178,6 +186,13 @@ class ViewSpec:
     preserves: frozenset[PreservedField]
     recompute_rules: tuple[RecomputeRule, ...] = ()
     draws: int = 1
+    _validation_cache: dict[int, tuple[Schema, _ViewValidation]] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+        compare=False,
+        hash=False,
+    )
     """How many independent samples of this view a recipe may realise (§2.1).
 
     A view is a distribution over batches, not a batch, so "two draws of the
@@ -242,13 +257,33 @@ class ViewSpec:
         object.__setattr__(self, "recompute_rules", rules)
 
     def validate(self, schema: Schema) -> None:
-        """Validate transforms and the derived-column rule against ``schema``."""
-        self._validated_transform_columns(schema)
+        """Validate and cache static transform/schema facts for runtime use."""
+        self._validated(schema)
+
+    def _validated(self, schema: Schema) -> _ViewValidation:
+        """Return schema-dependent declarations, computing them at most once.
+
+        ``compile()`` calls :meth:`validate`, so ordinary execution hits this
+        cache. The key is identity-based because recompute callables and view
+        transforms need not be hashable; retaining the schema beside the value
+        prevents an object-id reuse from ever returning the wrong validation.
+        """
+        key = id(schema)
+        cached = self._validation_cache.get(key)
+        if cached is not None and cached[0] is schema:
+            return cached[1]
+        validation = self._build_validation(schema)
+        self._validation_cache[key] = (schema, validation)
+        return validation
 
     def _validated_transform_columns(
         self, schema: Schema
     ) -> tuple[frozenset[str], ...]:
-        """Validate the view and return each transform's declared footprint."""
+        """Compatibility helper returning the cached transform footprints."""
+        return self._validated(schema).declarations
+
+    def _build_validation(self, schema: Schema) -> _ViewValidation:
+        """Validate the view and resolve all schema-dependent static metadata."""
         affected: set[str] = set()
         known = set(schema.feature_names)
         declarations: list[frozenset[str]] = []
@@ -309,7 +344,10 @@ class ViewSpec:
                 f"view {self.name!r} registers recompute rule(s) for "
                 f"{redundant!r}, but none of their dependencies are perturbed"
             )
-        return tuple(declarations)
+        return _ViewValidation(
+            declarations=tuple(declarations),
+            ordered_rules=_ordered_rules(schema, self.recompute_rules),
+        )
 
     def affected_columns(self, schema: Schema) -> frozenset[str]:
         """Every column the final view may replace, including recomputes."""
@@ -339,7 +377,7 @@ class ViewSpec:
                 f"for {draw!r}"
             )
         schema.validate_batch(batch)
-        declarations = self._validated_transform_columns(schema)
+        validation = self._validated(schema)
         original = batch.clone()
         generator = torch.Generator(device=batch.device)
         generator.manual_seed(_view_seed(rng_key, self.name, draw))
@@ -348,7 +386,9 @@ class ViewSpec:
         # still rejects an in-place implementation, while the user's source
         # batch remains intact even on that failing path.
         current = batch.clone()
-        for transform, declared in zip(self.transforms, declarations, strict=True):
+        for transform, declared in zip(
+            self.transforms, validation.declarations, strict=True
+        ):
             before = current.clone()
             result = transform.apply(
                 current, schema, generator=generator, population=population
@@ -375,14 +415,16 @@ class ViewSpec:
             )
             current = result
 
-        for rule in _ordered_rules(schema, self.recompute_rules):
+        for rule in validation.ordered_rules:
             current = rule.apply(current, schema)
             schema.validate_batch(current)
 
         changed = [
-            field
-            for field in sorted(self.preserves)
-            if not _field_equal(getattr(original, field), getattr(current, field))
+            field_name
+            for field_name in sorted(self.preserves)
+            if not _field_equal(
+                getattr(original, field_name), getattr(current, field_name)
+            )
         ]
         if changed:
             raise ViewError(

@@ -16,7 +16,7 @@ Two rules from the design are enforced here rather than documented:
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, fields, replace
 from typing import Any, cast
 
@@ -161,6 +161,76 @@ class XTYBatch:
     def t_missing(self) -> Tensor:
         """`[B]` bool, the complement of `t_observed`."""
         return ~self.t_observed
+
+    # -- structural operations --------------------------------------------
+
+    def index_select(self, rows: Tensor) -> XTYBatch:
+        """Gather ``rows`` from every tensor field this batch carries.
+
+        Row selection is a property of the batch contract, not of a loader or
+        executor. Keeping it here means a new optional row-aligned field cannot
+        be silently dropped by one of several hand-written slicing helpers.
+        """
+        if rows.ndim != 1 or rows.dtype != torch.long:
+            raise BatchContractError(
+                "XTYBatch.index_select rows must be a [N] long Tensor, got "
+                f"shape {tuple(rows.shape)} and dtype {rows.dtype}"
+            )
+        if rows.device != self.device:
+            raise BatchContractError(
+                f"XTYBatch.index_select rows are on {rows.device}, "
+                f"expected {self.device}"
+            )
+        if rows.numel() and (int(rows.min()) < 0 or int(rows.max()) >= self.batch_size):
+            raise BatchContractError(
+                f"XTYBatch.index_select rows must lie in [0, {self.batch_size}), "
+                f"got min={int(rows.min())}, max={int(rows.max())}"
+            )
+        return replace(
+            self,
+            **{
+                name: tensor.index_select(0, rows)
+                for name, tensor in self._tensors().items()
+            },
+        )
+
+    @classmethod
+    def cat(cls, batches: Sequence[XTYBatch]) -> XTYBatch:
+        """Concatenate row-aligned batches while preserving optional fields.
+
+        Optional fields must be present on every input or on none of them. The
+        constructed batch is revalidated, so duplicate ``row_id`` values and
+        all other batch invariants remain enforced at the structural boundary.
+        """
+        batches = tuple(batches)
+        if not batches:
+            raise BatchContractError("XTYBatch.cat needs at least one batch")
+        for index, batch in enumerate(batches):
+            if not isinstance(batch, cls):
+                raise BatchContractError(
+                    f"XTYBatch.cat entry {index} is {type(batch)}, "
+                    f"expected {cls.__name__}"
+                )
+
+        values: dict[str, Tensor | None] = {}
+        for spec in fields(cls):
+            entries = [getattr(batch, spec.name) for batch in batches]
+            present = [entry is not None for entry in entries]
+            if not any(present):
+                values[spec.name] = None
+                continue
+            if not all(present):
+                raise BatchContractError(
+                    f"batch field {spec.name!r} is present for only part of "
+                    "the sequence"
+                )
+            tensors = [entry for entry in entries if isinstance(entry, Tensor)]
+            if len(tensors) != len(entries):
+                raise BatchContractError(
+                    f"batch field {spec.name!r} is not tensor-valued in every batch"
+                )
+            values[spec.name] = torch.cat(tensors, dim=0)
+        return cls(**cast(dict[str, Any], values))
 
     # -- functional transforms --------------------------------------------
 
