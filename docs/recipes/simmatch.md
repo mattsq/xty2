@@ -3,8 +3,9 @@
 **Status:** `draft`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
-> **Agent route:** review §2–§5 before implementation. This card stops at the
-> review boundary required by `CLAUDE.md`; no SimMatch code belongs in this PR.
+> **Agent route:** read §2–§5 to implement or audit fidelity; §6 only for
+> benchmark/reporting work. This card stops at the review boundary required by
+> `CLAUDE.md`; no SimMatch code belongs in this PR.
 
 ---
 
