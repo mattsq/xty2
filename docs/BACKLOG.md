@@ -35,7 +35,8 @@ Git retains the exploratory chronology removed from this active queue.
 
 Already present: SCARF is deviating, FixMatch is reproduced, DoubleMatch,
 FlexMatch and FreeMatch are drafts, PAWS is implemented and smoke-passing, and
-CoMatch has a drafted card (`docs/recipes/comatch.md`) awaiting review.
+CoMatch is implemented (`docs/recipes/comatch.md`) with its full predeclared
+smoke study still open.
 The variational latent treatment is also implemented and smoke-passing;
 `docs/recipes/variational_treatment.md` is its authoritative card. Read their
 cards before proposing a close relative; their active ledgers supersede the
@@ -107,7 +108,7 @@ ablation and monitor representation scale, concentration, and alignment.
 CoMatch couples class probabilities, projected embeddings, and a similarity
 graph. X_PROJ already exists; the new question is whether graph-refined targets
 can remain declarative and provenance-safe. `docs/recipes/comatch.md` is the
-drafted card and is authoritative from here: it maps the paper's §3.2 (the
+implemented card and is authoritative from here: it maps the paper's §3.2 (the
 in-batch graph, not the §3.3 EMA/momentum-queue scale variant) onto one
 `joint_fit` stage, and its answer to the provenance question is that the
 memory bank is objective state with the seven `§15.4` lifecycle answers written

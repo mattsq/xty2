@@ -464,8 +464,9 @@ def test_state_stays_opt_in_across_the_objective_package() -> None:
     )
     assert stateful == [
         "CurriculumPseudoLabelTreatmentNLL",
+        "MemorySmoothedPseudoLabelTreatmentNLL",
         "SelfAdaptiveThresholdTreatmentNLL",
-    ], "exactly the two declared objectives carry per-stage state"
+    ], "exactly the three declared objectives carry per-stage state"
     instantiated = {
         "ObservedOutcomeNLL": objectives.ObservedOutcomeNLL(),
         "ObservedTreatmentNLL": objectives.ObservedTreatmentNLL(),

@@ -92,9 +92,10 @@ class ProjectionHead(Component):
         )
         self.widths = validate_widths(self.widths, owner=owner)
         self.dropout = validate_dropout(self.dropout, owner=owner)
-        if self.activation not in ("relu", "elu"):
+        if self.activation not in ("relu", "elu", "leaky_relu:0.1"):
             raise GraphError(
-                f"{owner}.activation supports 'relu' or 'elu', got {self.activation!r}"
+                f"{owner}.activation supports 'relu', 'elu', or "
+                f"'leaky_relu:0.1', got {self.activation!r}"
             )
         if self.normalisation not in ("row_l2", "none"):
             raise GraphError(
@@ -134,7 +135,12 @@ def _head(
     current = input_dim
     for index, width in enumerate(widths):
         if index:
-            layers.append(nn.ReLU() if activation == "relu" else nn.ELU())
+            if activation == "relu":
+                layers.append(nn.ReLU())
+            elif activation == "elu":
+                layers.append(nn.ELU())
+            else:
+                layers.append(nn.LeakyReLU(negative_slope=0.1))
             if dropout:
                 layers.append(nn.Dropout(dropout))
         layers.append(nn.Linear(current, width))
