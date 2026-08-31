@@ -50,16 +50,16 @@ from xty2.core.loss import LossTerm, TrainContext, reduce_rows, treatment_distri
 from xty2.core.ports import Port, port_spec
 from xty2.core.rows import RowIndex, Rows, validate_population
 
-Sharpening = Literal["hard"]
+Sharpening = Literal["hard", "none"]
 """How the artificial label is post-processed.
 
-One value so far, and it is the paper's own taxonomy rather than an accident:
+The vocabulary follows the papers' own taxonomy rather than an accident:
 FixMatch's table 1 lists its post-processing as *pseudo-labelling* — the arg max
 — where UDA and MixMatch are listed as *sharpening*, a temperature applied to a
-soft target. A recipe that needs the second names a second value and brings
-`losses.temperature` with it (`DESIGN.md` §11). UDA is the near one: it gates on
-confidence exactly as this does and then sharpens instead of taking the arg max,
-so it would generalise this field rather than need an objective of its own.
+soft target. ``none`` is CoMatch's explicit choice to keep its memory-smoothed
+target soft without temperature sharpening.  This FixMatch objective still
+accepts only ``hard``; the wider alias is shared card vocabulary, not a branch
+inside its computation.
 """
 
 PseudoLabelStopGrad = Literal["target"]

@@ -28,6 +28,13 @@ from xty2.objectives.adaptive_threshold import (
     SelfAdaptiveThresholds,
     SelfAdaptiveThresholdTreatmentNLL,
 )
+from xty2.objectives.comatch import (
+    CoMatchConfidenceThresholds,
+    MemorySmoothedLabelGraph,
+    MemorySmoothedLabels,
+    MemorySmoothedPseudoLabelTreatmentNLL,
+    PseudoLabelGraphContrastive,
+)
 from xty2.objectives.consistency import (
     CONSISTENCY_DIVERGENCES,
     STOP_GRADIENTS,
@@ -72,6 +79,7 @@ __all__ = [
     "LOG_FLOOR",
     "STOP_GRADIENTS",
     "UNUSED",
+    "CoMatchConfidenceThresholds",
     "ConsistencyDivergence",
     "ConsistencyLoss",
     "CosineFeatureConsistency",
@@ -83,9 +91,13 @@ __all__ = [
     "GradPath",
     "InfoNCEContrastive",
     "MeanEntropyMaximisation",
+    "MemorySmoothedLabelGraph",
+    "MemorySmoothedLabels",
+    "MemorySmoothedPseudoLabelTreatmentNLL",
     "MissingTreatmentMarginalNLL",
     "ObservedOutcomeNLL",
     "ObservedTreatmentNLL",
+    "PseudoLabelGraphContrastive",
     "PseudoLabelStopGrad",
     "PseudoLabelTreatmentNLL",
     "SelfAdaptiveFairness",

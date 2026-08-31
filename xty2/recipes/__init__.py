@@ -1,6 +1,7 @@
 """Declarative assemblies of registered pieces; no logic (`DESIGN.md` §9)."""
 
 from xty2.recipes.cnflow import CNFLOW_ENCODER_WIDTHS, cnflow
+from xty2.recipes.comatch import COMATCH_STEPS, comatch
 from xty2.recipes.cycle_dual import (
     CYCLE_DUAL_ENCODER_WIDTHS,
     CYCLE_DUAL_OUTCOME_WIDTHS,
@@ -56,6 +57,7 @@ from xty2.recipes.variational_treatment import (
 
 __all__ = [
     "CNFLOW_ENCODER_WIDTHS",
+    "COMATCH_STEPS",
     "CORRUPTION_RATE",
     "COSINE_PHASE",
     "CURRICULUM",
@@ -90,6 +92,7 @@ __all__ = [
     "VARIATIONAL_TREATMENT_STEPS",
     "WEAK_MASK_RATE",
     "cnflow",
+    "comatch",
     "cycle_dual",
     "doublematch",
     "fixmatch",

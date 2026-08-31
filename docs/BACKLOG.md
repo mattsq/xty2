@@ -34,7 +34,9 @@ Git retains the exploratory chronology removed from this active queue.
 | Explicit treatment-observation model | promotes label availability to a statistical variable | missingness semantics |
 
 Already present: SCARF is deviating, FixMatch is reproduced, DoubleMatch,
-FlexMatch and FreeMatch are drafts, and PAWS is implemented and smoke-passing.
+FlexMatch and FreeMatch are drafts, PAWS is implemented and smoke-passing, and
+CoMatch is implemented (`docs/recipes/comatch.md`) with its full predeclared
+smoke study still open.
 The variational latent treatment is also implemented and smoke-passing;
 `docs/recipes/variational_treatment.md` is its authoritative card. Read their
 cards before proposing a close relative; their active ledgers supersede the
@@ -105,7 +107,13 @@ ablation and monitor representation scale, concentration, and alignment.
 
 CoMatch couples class probabilities, projected embeddings, and a similarity
 graph. X_PROJ already exists; the new question is whether graph-refined targets
-can remain declarative and provenance-safe.
+can remain declarative and provenance-safe. `docs/recipes/comatch.md` is the
+implemented card and is authoritative from here: it maps the paper's §3.2 (the
+in-batch graph, not the §3.3 EMA/momentum-queue scale variant) onto one
+`joint_fit` stage, and its answer to the provenance question is that the
+memory bank is objective state with the seven `§15.4` lifecycle answers written
+down, while the two directions of the co-training loop stay two objectives
+sharing one state through the sibling read `freematch` built.
 
 ### 2.8 SsCL
 
