@@ -171,12 +171,10 @@ class XTYBatch:
         executor. Keeping it here means a new optional row-aligned field cannot
         be silently dropped by one of several hand-written slicing helpers.
         """
-        if not isinstance(rows, Tensor) or rows.ndim != 1 or rows.dtype != torch.long:
-            shape = tuple(rows.shape) if isinstance(rows, Tensor) else None
-            dtype = rows.dtype if isinstance(rows, Tensor) else None
+        if rows.ndim != 1 or rows.dtype != torch.long:
             raise BatchContractError(
                 "XTYBatch.index_select rows must be a [N] long Tensor, got "
-                f"shape {shape} and dtype {dtype}"
+                f"shape {tuple(rows.shape)} and dtype {rows.dtype}"
             )
         if rows.device != self.device:
             raise BatchContractError(
