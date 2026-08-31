@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import torch
-
 from xty2.core import FeatureSpec, Schema, TrainingPopulation, XTYBatch
 from xty2.views import ViewSpec
 
