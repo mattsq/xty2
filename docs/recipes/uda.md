@@ -1,11 +1,10 @@
 # Recipe spec card: uda
 
-**Status:** `draft`
+**Status:** `smoke-passing`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
-> **Agent route:** read §2–§5 to review implementation scope; §6 is the
-> predeclared evidence contract. Stop after review: no UDA implementation is
-> authorised while this card remains `draft`.
+> **Agent route:** read §2–§5 to implement or audit fidelity; §6 is the
+> predeclared evidence contract. Historical diagnosis lives in Git.
 
 ---
 
@@ -117,7 +116,7 @@ One `joint_fit` gradient stage. Paper classes map to treatment levels, so the
 classifier is `T_GIVEN_X` from `CategoricalPropensity`. The ordinary project-local
 outcome likelihood and exact missing-treatment marginal remain present.
 
-Two reversible objective additions are required:
+Two reversible objective additions and one shared value object are required:
 
 1. `ConfidenceMaskedConsistencyLoss`: directed KL between two `T_GIVEN_X`
    realisations, with detached weak target, target temperature, confidence gate
@@ -131,6 +130,12 @@ Two reversible objective additions are required:
    retained subset. The mixer reduction remains the existing closed value
    `mean`; the dynamic denominator is objective arithmetic and must be printed
    by `plan_details()`, not invented as a new mixer reduction.
+3. `UDAConfidenceThresholds`: one immutable policy holding the fixed
+   unsupervised gate and the exponential TSA schedule. Both objectives bind the
+   same policy to `losses.confidence_threshold`, so the card's one canonical
+   key cannot hide either of UDA's two confidence rules. The policy carries
+   `scale=5` and `T=3000` explicitly rather than leaving source arithmetic as a
+   silent objective default.
 
 No new port, global row-population token, executor, artifact, stage type, or
 state lifecycle is requested.
@@ -139,16 +144,16 @@ state lifecycle is requested.
 |---|---|---|---|
 | `p_θ(y|x)` | class distribution | `T_GIVEN_X` | `CategoricalPropensity` over `MLPEncoder` |
 | labelled `x_1, f*(x_1)` | observed class | `T_GIVEN_X @ weak_x` | `TrainingSignalAnnealedTreatmentNLL`, rows `t_observed` |
-| `η_t` | TSA ceiling | — | exponential threshold schedule inside that objective |
+| `η_t` | TSA ceiling | — | `UDAConfidenceThresholds.tsa_ceiling()` inside that objective |
 | weak/original `x_2` | detached consistency target | `T_GIVEN_X @ weak_x` | left side of `ConfidenceMaskedConsistencyLoss` |
 | `x_hat` | stronger augmented row | `T_GIVEN_X @ strong_x` | right side of `ConfidenceMaskedConsistencyLoss` |
-| `θ_tilde` | fixed current target params | `T_GIVEN_X @ weak_x, params=student` | `stop_grad="left"`; no training teacher |
+| `θ_tilde` | fixed current target params | `T_GIVEN_X @ weak_x, params=student` | `stop_grad="target"`; no training teacher |
 | `tau=0.4` | target softmax temperature | — | `target_temperature=0.4` |
-| `beta=0.8` | unsharpened weak-confidence gate | — | `confidence_threshold=0.8` |
+| `beta=0.8`, exponential TSA | the two confidence rules | — | shared `thresholds=UDA_THRESHOLDS` |
 | eq. (1) consistency | soft directed KL / cross-entropy | weak + strong `T_GIVEN_X` | `ConfidenceMaskedConsistencyLoss(divergence="kl")`, rows `t_missing` |
 | `lambda=1` | unsupervised weight | — | `Weighted(..., weight=1.0)` |
 | ordinary image augmentation | weak perturbation | — | `ViewSpec("weak_x", FeatureMask(p=0.1))` |
-| RandAugment + Cutout | strong perturbation | — | `ViewSpec("strong_x", FeatureMask(p=0.1), FeatureMask(p=0.5))` (deviation 2) |
+| RandAugment + Cutout | strong perturbation | — | `ViewSpec("strong_x", FeatureMask(p=0.1), FeatureMask(p=0.1))` (deviation 2) |
 | `B=64`, `mu=7` | batch composition | — | `QuotaSampler`: 64 `t_observed`, 448 `t_missing` |
 | evaluation moving average | reported model | — | `TeacherSpec(decay=0.9999, role="evaluation", ema_applies_to_buffers=True)` |
 | — | project-local outcome likelihood | `Y_GIVEN_XT` | `ObservedOutcomeNLL`, rows `t_observed` |
@@ -198,18 +203,18 @@ losses:
     joint_fit.missing_treatment_marginal_nll: 0.5
   schedules:
     joint_fit.observed_outcome_nll: constant 1.0
-    joint_fit.tsa_observed_treatment_nll: tsa_exp ceiling by optimiser step, source formula, T=3000
+    joint_fit.tsa_observed_treatment_nll: constant 1.0 # the TSA ceiling is gate arithmetic, represented by losses.confidence_threshold and plan_details
     joint_fit.uda_consistency: constant 1.0
     joint_fit.missing_treatment_marginal_nll: ramp 0.0 -> 0.5 over 1000 optimiser steps
   temperature: 0.4
   sharpening: softmax_temperature
-  confidence_threshold: uda(unsupervised=0.8, tsa=exp source formula)
+  confidence_threshold: uda(unsupervised=0.8, tsa=exp_schedule(scale=5, steps=3000))
 
 optimisation:
   optimiser: sgd(momentum=0.9, nesterov=True) # ref impl image/main.py
   lr: 0.03                                    # ref impl / CIFAR GPU script
   lr_schedule: cosine 1.0 * cos(pi * 0.4375 * min(step/3000, 1))
-  weight_decay: 0.0005 (all trainable parameters, including bias) # ref impl utils.decay_weights
+  weight_decay: 0.0005 (all trainable components; all parameters) # ref impl utils.decay_weights
   batch_size: 512
   labelled_unlabelled_ratio: 7.0
   total_steps_or_epochs: 3000 optimiser steps # source CIFAR script uses 500000; deviation 3
@@ -242,9 +247,9 @@ architecture:
 data:
   standardisation: x: none fitted on 'train'
   outcome_scaling: y: zscore fitted on 'train'
-  treatment_encoding: integer classes 0..K-1 through XTYBatch
-  split_protocol: one fixed project-local DGP, split train/test by §6.1
-  missingness_mechanism: treatment MCAR to exactly 64 labelled training rows, keyed by row_id
+  treatment_encoding: n/a # XTYBatch contract supplies integer classes 0..K-1; propensity emits K probabilities
+  split_protocol: one fixed project-local DGP, split train/test by the section 6.1 fixture; no CIFAR/SVHN protocol applies (deviation 1); training rows are assignment 'train'
+  missingness_mechanism: treatment MCAR to a budget of 64 labelled rows, keyed by row_id
 ```
 
 ## 5. Deviations from the paper
@@ -252,7 +257,7 @@ data:
 | # | Kind | Blocked on | What we do differently | Why | Expected effect on the §6 metric |
 |---|---|---|---|---|---|
 | 1 | `judgement` | — | Apply UDA to `p(t|x)` and compose it with the causal outcome stack. | The paper studies classification; xty2 asks whether the same missing-label mechanism helps treatment prediction without replacing the reviewed outcome likelihood. | Published image error is not comparable; §6 uses paired project-local arms. |
-| 2 | `judgement` | — | Replace crop/flip and RandAugment+Cutout with schema-preserving feature masks. | Image transforms have no tabular semantics. | Likely weaker perturbation diversity; §6 measures label-flip rate before training. |
+| 2 | `judgement` | — | Replace crop/flip and RandAugment+Cutout with a 10% weak feature mask and a strong view that composes two independent 10% masks. | Image transforms have no tabular semantics. A reviewed 50% second mask flipped the fixture's Bayes label on 15.8% of rows, violating §6's data-policy guardrail; 10% retains a strictly stronger composed view while holding the seed-locked flip rate below 5%. | Weaker perturbation diversity than the initial draft; §6 measures both flip rates before training. |
 | 3 | `judgement` | — | Train 3,000 optimiser steps rather than the CIFAR script's 500,000. | This is a small synthetic mechanism test. | May understate long-horizon effects; every arm shares the budget. |
 | 4 | `judgement` | — | Use the reviewed MLP/TARNet/propensity stack rather than Wide-ResNet. | Architecture swaps are orthogonal components in xty2. | No architecture-dependent published accuracy comparison is valid. |
 | 5 | `judgement` | — | Run UDA consistency only on `t_missing`; the released image unsupervised stream is built from the full training population. | `t_missing` is the statistical unlabelled population in this adaptation and avoids deliberately reusing observed identities as unlabelled rows. | Slightly less consistency data than source-style reuse; direction unknown. |
@@ -262,12 +267,13 @@ data:
 
 ### 5.1 Framework additions made for this card
 
-Both additions are fidelity-bearing but reversible. Neither adds load-bearing
+All three additions are fidelity-bearing but reversible. None adds load-bearing
 framework vocabulary, so `DESIGN.md` §11.2 does not require a named second
 consumer.
 
 | Added | Quadrant (§11.2) | Consumers today | Named second consumer | Why now |
 |---|---|---|---|---|
+| `UDAConfidenceThresholds` | fidelity-bearing, reversible | both UDA objectives | not required | UDA has a fixed confidence gate and a scheduled true-class ceiling under one canonical card key. One shared value makes disagreement impossible and prints `beta`, schedule family, scale, and horizon together. |
 | `ConfidenceMaskedConsistencyLoss` | fidelity-bearing, reversible | UDA | not required | Existing consistency lacks UDA's target temperature and gate; FixMatch's objective hardens the target. |
 | `TrainingSignalAnnealedTreatmentNLL` | fidelity-bearing, reversible | UDA | not required | Static row populations and scalar objective schedules cannot express a model-dependent true-class gate with the source retained-row denominator. |
 
@@ -289,7 +295,7 @@ reproduction:
   metric: held-out treatment NLL for student and evaluation EMA; held-out outcome NLL guardrail; UDA gate coverage/confidence and target entropy; TSA retained fraction and ceiling
   published: none - no published number applies to this adaptation
   published_source: n/a
-  tolerance: full/no-consistency held-out treatment-NLL ratio < 1.0 in mean by at least one stderr for student and EMA; outcome NLL <= 1.05x no-consistency; tau=0.4 target entropy < tau=1 on matched weak logits; tau must not change gate membership on fixed logits; TSA retained fraction begins below 1 and rises; report sharpening and TSA effects without retroactively choosing their sign
+  tolerance: full/no-consistency held-out treatment-NLL ratio < 1.0 in mean by at least one stderr for student and EMA; outcome NLL <= 1.05x no-consistency; tau=0.4 target entropy < tau=1 on matched weak logits; tau must not change gate membership on fixed logits; report the learned TSA retained fraction without imposing a direction; report sharpening and TSA effects without retroactively choosing their sign
   seeds: 10
   report: mean_and_stderr
 ```
@@ -365,18 +371,30 @@ TSA retained fraction.
 6. Diagnostic only: run an always-accept UDA gate to expose low-confidence
    target instability. No performance direction is asserted.
 7. Diagnostic only: replace strong augmentation with an independent weak draw.
-   A remaining gain suggests the project-local marginal term, rather than
-   augmentation consistency, is carrying the result.
-8. Report view label-flip rates beside every result. A strong view that is not
-   label-preserving is a data-policy failure, not evidence against UDA.
+   Compare it with the no-consistency arm as sensitivity to augmentation
+   strength. A gain still has a weak-to-weak consistency signal and cannot be
+   attributed to the marginal term, which is fixed in both arms.
+8. Report view label-flip rates beside every result. Require the composed strong
+   view to flip more labels than weak but at most 5% on the seed-locked fixture;
+   a larger rate is a data-policy failure, not evidence against UDA.
 
 **Tier 2.** Run the four predeclared arms over all ten replicates. Only the
 primary full-versus-no-consistency NLL target plus outcome guardrail determines
 `reproduced` versus `deviating`; sharpening and TSA signs remain reported
 mechanism effects.
 
-**What has run.** Nothing. This is a draft card; no xty2 implementation or
-benchmark evidence exists yet.
+**What has run.** Tier 0: `tests/invariants/test_uda.py` (`32 passed`). Tier 1:
+`tests/smoke/test_uda.py` (`8 passed`), including all four 3,000-step paired
+arms and the always-accept and weak-to-weak diagnostics. On seed 94000, held-out
+treatment NLL (student / EMA) was full `0.332 / 0.541`, no-consistency
+`0.314 / 0.573`, no-sharpening `0.295 / 0.604`, and no-TSA `0.408 / 0.481`,
+against the observed-frequency `0.705`. Full-arm gate coverage went `0 → 0.886`,
+terminal accepted confidence was `0.960`, target entropy went `0.693 → 0.059`,
+and consistency loss went `0 → 0.167`; terminal TSA retention was `1.0` at a
+`0.9992` ceiling. Weak/strong label-flip rates were `2.1% / 4.3%`, inside the
+predeclared guardrail. All recorded values were finite. Tier 2 has not run, so
+the opposite student/EMA directions versus no-consistency support no
+reproduction claim.
 
 ### 6.3 Result ledger
 
@@ -405,5 +423,5 @@ benchmark evidence exists yet.
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status → `reviewed`) | | |
-| Plan diffed against §3.2 and §4 | | |
+| Card reviewed (status → `reviewed`) | ChatGPT | 2026-09-01 |
+| Plan diffed against §3.2 and §4 | ChatGPT | 2026-09-01 |

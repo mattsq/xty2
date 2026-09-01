@@ -217,8 +217,9 @@ Current objectives are exported from `xty2/objectives/__init__.py`:
 |---|---|
 | supervised likelihood | `ObservedOutcomeNLL`, `ObservedTreatmentNLL` |
 | missing-treatment likelihood | `MissingTreatmentMarginalNLL` |
-| consistency | `ConsistencyLoss`, `CosineFeatureConsistency` |
+| consistency | `ConsistencyLoss`, `CosineFeatureConsistency`, `ConfidenceMaskedConsistencyLoss` |
 | pseudo-labels | `PseudoLabelTreatmentNLL`, `CurriculumPseudoLabelTreatmentNLL`, `SelfAdaptiveThresholdTreatmentNLL`, `SelfAdaptiveFairness` |
+| supervised annealing | `TrainingSignalAnnealedTreatmentNLL` |
 | contrastive | `InfoNCEContrastive` |
 
 FlexMatch's curriculum objective and FreeMatch's SAT/SAF pair are stateful.
@@ -458,6 +459,7 @@ initial five proved the core architecture; later cards extended it under §11.2.
 | `doublematch` | representation consistency beside FixMatch |
 | `flexmatch` | stage-local objective state and adaptive thresholds |
 | `freematch` | shared state across batch-coupled adaptive objectives |
+| `uda` | temperature-sharpened gated consistency and training-signal annealing |
 
 ## 11. Overdesign guardrails
 
