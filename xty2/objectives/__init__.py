@@ -79,6 +79,15 @@ from xty2.objectives.support_set import (
     SupportSetPseudoLabelConsistency,
     TargetRole,
 )
+from xty2.objectives.uda import (
+    ConfidenceMaskedConsistencyLoss,
+    TrainingSignalAnnealedTreatmentNLL,
+    UDAConfidenceThresholds,
+    UDADivergence,
+    UDASchedule,
+    UDASharpening,
+    UDAStopGrad,
+)
 from xty2.objectives.variational import VariationalTreatmentELBO
 
 __all__ = [
@@ -88,6 +97,7 @@ __all__ = [
     "STOP_GRADIENTS",
     "UNUSED",
     "CoMatchConfidenceThresholds",
+    "ConfidenceMaskedConsistencyLoss",
     "ConsistencyDivergence",
     "ConsistencyLoss",
     "CosineFeatureConsistency",
@@ -123,5 +133,11 @@ __all__ = [
     "SupportSetClassifier",
     "SupportSetPseudoLabelConsistency",
     "TargetRole",
+    "TrainingSignalAnnealedTreatmentNLL",
+    "UDAConfidenceThresholds",
+    "UDADivergence",
+    "UDASchedule",
+    "UDASharpening",
+    "UDAStopGrad",
     "VariationalTreatmentELBO",
 ]

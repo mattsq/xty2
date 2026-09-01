@@ -50,6 +50,13 @@ from xty2.recipes.scarf import (
 from xty2.recipes.simmatch import SIMMATCH_STEPS, simmatch
 from xty2.recipes.ssdml import SSDML_ENCODER_WIDTHS, ssdml
 from xty2.recipes.tarnet import ENCODER_WIDTHS, OUTCOME_WIDTHS, tarnet
+from xty2.recipes.uda import (
+    TARGET_TEMPERATURE,
+    UDA_STEPS,
+    UDA_STRONG_MASK_RATE,
+    UDA_THRESHOLDS,
+    uda,
+)
 from xty2.recipes.variational_treatment import (
     POSTERIOR_WIDTHS,
     VARIATIONAL_TREATMENT_STEPS,
@@ -88,8 +95,12 @@ __all__ = [
     "SSDML_ENCODER_WIDTHS",
     "STRONG_MASK_RATE",
     "SUPPORT_PER_TREATMENT",
+    "TARGET_TEMPERATURE",
     "TAU",
     "TEMPERATURE",
+    "UDA_STEPS",
+    "UDA_STRONG_MASK_RATE",
+    "UDA_THRESHOLDS",
     "UNSUPERVISED_WEIGHT",
     "VARIATIONAL_TREATMENT_STEPS",
     "WEAK_MASK_RATE",
@@ -106,5 +117,6 @@ __all__ = [
     "simmatch",
     "ssdml",
     "tarnet",
+    "uda",
     "variational_treatment",
 ]
