@@ -1,6 +1,6 @@
 # Recipe spec card: uda
 
-**Status:** `smoke-passing`
+**Status:** `reproduced`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity; §6 is the
@@ -392,15 +392,57 @@ against the observed-frequency `0.705`. Full-arm gate coverage went `0 → 0.886
 terminal accepted confidence was `0.960`, target entropy went `0.693 → 0.059`,
 and consistency loss went `0 → 0.167`; terminal TSA retention was `1.0` at a
 `0.9992` ceiling. Weak/strong label-flip rates were `2.1% / 4.3%`, inside the
-predeclared guardrail. All recorded values were finite. Tier 2 has not run, so
-the opposite student/EMA directions versus no-consistency support no
-reproduction claim.
+predeclared guardrail. All recorded values were finite.
+
+**Tier 2, ten replicates.** The primary attribution holds in both directions
+the tolerance names. Against the `lambda_uda = 0` arm, UDA's held-out treatment
+NLL ratio was `0.946 +/- 0.020` on the evaluation EMA and `0.952 +/- 0.041` on
+the student, each inside `1.0` by more than one standard error; UDA led the EMA
+in eight replicates of ten and the student in seven of ten. Absolute EMA NLL was
+`0.593 +/- 0.011` against `0.628 +/- 0.010`, and student `0.323 +/- 0.006`
+against `0.345 +/- 0.015`, on a marginal-frequency baseline of
+`0.696 +/- 0.001`. The outcome guardrail was `0.9996 +/- 0.0002`, so the
+consistency term did not buy treatment accuracy out of the outcome likelihood.
+Both `tau` clauses held on every replicate: at step 0, where the arms share weak
+logits, `tau = 0.4` strictly lowered target entropy against `tau = 1`, and gate
+coverage and accepted confidence were bit-identical across the two, which is the
+gate reading untempered probabilities.
+
+Tier 1's seed-94000 student direction did not survive the wider sample — it is
+one replicate of ten, and the two arms' students are `1.029` there against a
+`0.952` mean — so §6.2's refusal to read a single seed's sign was the right
+call, in the direction that happened to favour the method.
+
+**Mechanism arms, sign reported not chosen.** Against the same
+no-consistency denominator, dropping sharpening (`tau = 1`) gave
+`0.982 +/- 0.016` EMA and `0.919 +/- 0.035` student, so on this fixture
+sharpening is not what earns the gain and the student arm is nominally better
+without it. Replacing TSA with the ordinary observed-treatment NLL gave
+`0.761 +/- 0.011` EMA and `1.070 +/- 0.047` student — the largest effect
+measured here, and one that points in opposite directions for the two parameter
+sets. Neither sign was predeclared and neither is claimed. TSA retained
+`0.909 +/- 0.031` of labelled rows at step 0 and `0.988 +/- 0.006` at the end,
+under a terminal ceiling of `0.9992`: on a 64-label, `K = 2` fixture the
+exponential schedule suppresses very little, which bounds how much appendix
+A.1's mechanic can be doing.
+
+**One fixture broke §6.2's view guardrail.** Across the ten fixtures the
+composed strong view flipped `4.79% +/- 0.16%` of Bayes labels against the weak
+view's `2.60% +/- 0.17%`, strong above weak everywhere as required — but seed
+`94100` flipped `5.96%`, over the 5% ceiling rule 8 sets. The card calls a
+breach "a data-policy failure, not evidence against UDA", and §6.2 names the
+primary NLL target and outcome guardrail as the only things that set status, so
+this is reported here rather than gating the result; the Tier 2 metric is
+informational for that reason. It is a live question for review whether rule 8's
+ceiling should bind all ten fixtures rather than Tier 1's one, which would make
+deviation 2's `0.1` second mask too strong for this fixture family at its
+upper tail.
 
 ### 6.3 Result ledger
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
-| — | — | — | — | — |
+| 2026-09-02 | `a808089` | student_treatment_NLL_ratio<br>ema_treatment_NLL_ratio<br>held_out_outcome_NLL_ratio<br>sharpening_lowers_target_entropy<br>sharpening_leaves_the_gate_unchanged | 0.952354 +/- 0.0411<br>0.946062 +/- 0.0196<br>0.999556 +/- 0.000187<br>1 +/- 0<br>1 +/- 0 | yes |
 
 ## 7. Unknowns
 
