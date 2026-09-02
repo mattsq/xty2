@@ -484,7 +484,7 @@ project-local DGP, and §2 still refuses every published number.
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
-| 2026-09-02 | `working-tree@7f9b7fb` | held_out_treatment_NLL_ratio<br>held_out_outcome_NLL_ratio<br>paws_nn_over_marginal_prior_NLL<br>terminal_marginal_entropy<br>positive_view_alignment_gap | 0.934255 +/- 0.0246<br>1.01086 +/- 0.0101<br>0.410086 +/- 0.00573<br>0.692213 +/- 0.00033 nat<br>0.241944 +/- 0.0135 | yes |
+| 2026-09-02 | `049cec4` | held_out_treatment_NLL_ratio<br>held_out_outcome_NLL_ratio<br>paws_nn_over_marginal_prior_NLL<br>terminal_marginal_entropy<br>positive_view_alignment_gap | 0.934255 +/- 0.0246<br>1.01086 +/- 0.0101<br>0.410086 +/- 0.00573<br>0.692213 +/- 0.00033 nat<br>0.241944 +/- 0.0135 | yes |
 
 ## 7. Unknowns
 
