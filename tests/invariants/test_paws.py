@@ -399,6 +399,23 @@ def test_paws_recipe_contains_declarations_and_no_control_flow() -> None:
 
 def test_card_records_review_and_passing_tier_one_evidence() -> None:
     card = (ROOT / "docs/recipes/paws.md").read_text()
-    assert "**Status:** `smoke-passing`" in card
     assert "Card reviewed (status → `reviewed`) | Codex | 2026-08-29" in card
     assert "Plan diffed against §3.2 and §4 | Codex | 2026-08-29" in card
+
+
+def test_the_card_records_the_tier_two_result() -> None:
+    """`FIDELITY.md` §1.1: only the completed Tier 2 run sets reproduced."""
+    card = (ROOT / "docs/recipes/paws.md").read_text()
+    assert "**Status:** `reproduced`" in card
+    ledger = card.split("### 6.3 Result ledger", 1)[1].split("## 7.", 1)[0]
+    assert "held_out_treatment_NLL_ratio" in ledger
+    # The five criteria §6's tolerance names, each carried as its own required
+    # metric: a ledger row naming fewer of them would be a narrower run than
+    # the card declares.
+    for metric in (
+        "held_out_outcome_NLL_ratio",
+        "paws_nn_over_marginal_prior_NLL",
+        "terminal_marginal_entropy",
+        "positive_view_alignment_gap",
+    ):
+        assert metric in ledger, metric
