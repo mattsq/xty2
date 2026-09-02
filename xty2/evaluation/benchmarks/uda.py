@@ -17,6 +17,11 @@ arms share weak logits: `tau` must lower the target's entropy and must leave the
 gate's membership alone. They are recorded as all-replicate boolean guardrails
 (`bool_float`), which is what makes a `tau` that leaked into the gate a Tier 2
 failure rather than a footnote.
+
+§6.2's view label-flip rule is measured on all ten fixtures too, but reports
+rather than decides: §6.2 names the primary NLL target and the outcome
+guardrail as the only things that set this card's status, and calls a broken
+flip ceiling "a data-policy failure, not evidence against UDA".
 """
 
 from __future__ import annotations
@@ -147,18 +152,21 @@ def run(
                 column(rows, "gate_guardrail"),
                 1.0,
             ),
-            # §6.2's Tier 1 rule 8, measured again on all ten fixtures: a
-            # composed strong view that flips more than 5% of Bayes labels is a
-            # data-policy failure, and the card says in the same sentence that
-            # such a rate is "not evidence against UDA". Reading it as a
-            # boolean rather than as a mean flip rate is what keeps the two
-            # findings apart: this metric can only fail by a fixture actually
-            # breaking the guardrail, never by a mean drifting inside its own
-            # noise.
-            MetricResult.lower_bound(
+            # §6.2's Tier 1 rule 8 — weak < strong <= 5% of Bayes labels
+            # flipped — measured on all ten fixtures rather than on Tier 1's
+            # one, and **informational**. Card §6.2 says what may decide this
+            # card's status: "Only the primary full-versus-no-consistency NLL
+            # target plus outcome guardrail determines `reproduced` versus
+            # `deviating`", and the same card calls a broken flip ceiling "a
+            # data-policy failure, not evidence against UDA". A required
+            # metric here would let the fixture's view strength answer a
+            # question about the method. It is reported per fixture, as a
+            # boolean and as the worst rate, so that a breach is visible in
+            # the result rather than absent from it — see §6.2, where the one
+            # fixture over the ceiling is recorded.
+            MetricResult.information(
                 "views_respect_the_label_flip_guardrail",
                 column(rows, "flip_guardrail"),
-                1.0,
             ),
             MetricResult.information(
                 "uda_ema_treatment_NLL", column(rows, "uda_ema_nll"), unit="nat/row"
