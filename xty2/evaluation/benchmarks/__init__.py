@@ -48,6 +48,10 @@ def benchmark_function(recipe: str) -> BenchmarkFunction:
         from xty2.evaluation.benchmarks.flexmatch import run
 
         return run
+    if recipe == "freematch":
+        from xty2.evaluation.benchmarks.freematch import run
+
+        return run
     raise KeyError(
         f"unknown Tier 2 recipe {recipe!r}; expected one of {list(RECIPES)!r}"
     )
@@ -63,6 +67,7 @@ RECIPES = (
     "fixmatch",
     "doublematch",
     "flexmatch",
+    "freematch",
 )
 
 __all__ = ["RECIPES", "BenchmarkFunction", "benchmark_function"]

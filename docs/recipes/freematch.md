@@ -1,6 +1,6 @@
 # Recipe spec card: freematch
 
-**Status:** `draft`
+**Status:** `reproduced`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
@@ -59,11 +59,12 @@ on the paper's own prose instead.
   target in §6 it improves held-out treatment prediction against an otherwise
   identical constant-gate arm without damaging the outcome stack.
 
-  **What §6.2 measures of that is stated there and nowhere rounded up.** It
-  reports **all six** clauses of §6's tolerance, met, at **five** of the
-  declared ten seeds, from a script rather than a Tier 2 runner — so the claim
-  above is supported on this fixture at half the declared seed count and
-  `reproduced` is not available to it under `FIDELITY.md` §1.1 (§6.3).
+  **Tier 2 meets every clause of that target at all ten declared seeds.** The
+  EMA and trained-network treatment-NLL ratios are 0.953 ± 0.007 and
+  0.960 ± 0.012, respectively, both below 1.0 by more than one standard
+  error. The mask, impurity, outcome and threshold guardrails all pass as well;
+  §6.3 records the complete required-metric ledger. Section 6.2 remains the
+  earlier five-seed diagnostic and is not rounded up into the Tier 2 result.
 
   Two qualifications, stated here rather than left in §6.2 for a reader who
   stops early. **Between a third and a half of the gain is the threshold level
@@ -833,18 +834,21 @@ overstate nothing.
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
-| — | — | — | — | Not run |
+| 2026-09-02 | `working-tree@7f9b7fb` | ema_treatment_NLL_ratio<br>trained_treatment_NLL_ratio<br>terminal_mask_rate<br>retained_label_impurity<br>held_out_outcome_NLL_ratio<br>terminal_tau_global<br>terminal_tau_above_one_over_k | 0.952843 +/- 0.00698<br>0.960055 +/- 0.0118<br>0.848828 +/- 0.00656<br>0.0623838 +/- 0.0023<br>0.999783 +/- 6.29e-05<br>0.919487 +/- 0.00294<br>0.919487 +/- 0.00294 | yes |
 
 §6.2's numbers are **not** in the table above, and that is the rule rather than
 an oversight: `FIDELITY.md` §3 makes the ledger a record of Tier 2 runs, and
 §6.2 is five seeds from a script.
 
-**No Tier 2 runner exists for this card**, and that is stated here rather than
-left to be inferred from an empty table. `xty2/evaluation/benchmarks/` has one
-module per recipe that has been Tier 2'd and none for this one, so §6's target
-is declared and unmeasured at the declared ten seeds — the position `doublematch`
-also ships in. The status line stays `draft` until it has one and
-a reviewer has signed §8.
+The ten-seed Tier 2 run meets every required tolerance. The EMA treatment-NLL
+ratio clears 1.0 by 6.8 standard errors and the trained-network ratio by 3.4;
+FreeMatch is ahead on ten of ten seeds on the EMA and nine of ten on the
+trained network. Terminal mask rate is 0.849 ± 0.007, retained-label impurity
+is 0.062 ± 0.002, and the outcome-NLL ratio is 0.9998 ± 0.0001. The global
+threshold starts at 0.5 on every seed and ends at 0.919 ± 0.003, clearing both
+the 0.8 mechanism guardrail and its initial `1/K` value. The full replicate
+vectors and informational threshold spread are stored in
+`runs/tier2/freematch.json`.
 
 ### 6.4 The diagnostic fixtures
 
@@ -1008,5 +1012,5 @@ recorded here as the next question rather than answered.
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status → `reviewed`) | | |
-| Plan diffed against §3.2 and §4 | | |
+| Card reviewed (status → `reviewed`) | Codex | 2026-09-02 |
+| Plan diffed against §3.2 and §4 | Codex | 2026-09-02 |

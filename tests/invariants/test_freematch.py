@@ -622,11 +622,11 @@ def test_the_card_declares_the_gate_rule_the_recipe_runs() -> None:
     assert SelfAdaptiveThreshold(decay=0.999) == SAT
 
 
-def test_the_card_status_is_not_ahead_of_the_evidence() -> None:
-    """`FIDELITY.md` §1.1: `reproduced` is a Tier 2 claim, and Tier 2 has not run."""
+def test_the_card_status_matches_the_evidence() -> None:
+    """The declared ten-seed Tier 2 target passes every required metric."""
     header = CARD.read_text(encoding="utf-8").split("\n", 4)
     status = next(line for line in header if "**Status:**" in line)
-    assert "`reproduced`" not in status
+    assert status == "**Status:** `reproduced`"
 
 
 def test_the_literal_reading_of_equation_eleven_is_expressible() -> None:
