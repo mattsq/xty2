@@ -200,7 +200,7 @@ def doublematch(
                     # Eq. (3) — the method. `h(v_i)` against `z_i`, on every
                     # row rather than the ones the gate above retained, and
                     # reading the *same* weak pass that produced the label
-                    # (Alg. 1 lines 8 and 14), which is what makes the paper's
+                    # (Alg. 1 lines 11, 14 and 17), which is what makes the paper's
                     # "minimal computational overhead" true here too.
                     Weighted(
                         CosineFeatureConsistency(

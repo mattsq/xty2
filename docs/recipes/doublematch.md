@@ -1,6 +1,6 @@
 # Recipe spec card: doublematch
 
-**Status:** `draft`
+**Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
@@ -114,8 +114,8 @@ gradients:
     joint_fit.pseudo_label_treatment_nll: p(t|x) @ view=weak_x params=student   # eq. (2): w_i is constant
     joint_fit.cosine_feature_consistency: x_repr @ view=weak_x params=student   # eq. (3): z_i is constant
     joint_fit.missing_treatment_marginal_nll: none
-  detached_targets: target                    # both unlabelled terms detach the weak-view side; Alg. 1 lines 11 and 14
-  gradient_clipping: none                     # paper names none; retained P5 choice
+  detached_targets: target                    # both unlabelled terms detach the weak-view side; Alg. 1 lines 14 and 17
+  gradient_clipping: none                     # paper silent, ref impl applies none; retained P5 choice
   marginal_nll_grad_path: both                # reviewed P5 choice; project-local addition
 
 teacher:
@@ -137,7 +137,7 @@ losses:
     joint_fit.observed_outcome_nll: t_observed
     joint_fit.observed_treatment_nll: t_observed
     joint_fit.pseudo_label_treatment_nll: all    # FixMatch footnote 2: U includes the labelled rows without their labels
-    joint_fit.cosine_feature_consistency: all    # eq. (3) is over every unlabelled row, gated by nothing
+    joint_fit.cosine_feature_consistency: all    # eq. (3) is ungated; `all` is footnote 2's U, so the denominator is the 512-row quota, not the reference's mu B = 448 (§7)
     joint_fit.missing_treatment_marginal_nll: t_missing
   weights:
     joint_fit.observed_outcome_nll: 1.0
@@ -157,7 +157,7 @@ losses:
 
 optimisation:
   optimiser: sgd(momentum=0.9, nesterov=True)    # §III-B and §IV-D
-  lr: 0.03                                       # eta_0, §IV-D
+  lr: 0.03                                       # eta_0; the ref impl's value, *not* the 0.3 printed in §IV-D (§7)
   lr_schedule: cosine 1.0 * cos(pi * 0.4375 * min(step/3000, 1))   # eq. (5) with gamma = 7/8, K = our 3000 steps
   weight_decay: 0.0005 (all trainable components; norm and bias exempt)   # w_d, §IV-D; eq. (6) covers f, g and h, and the ref impl decays the `kernel` variables of the `classify` scope, which is all three
   batch_size: 512                                # B + mu B = 64 + 448, derived from the QuotaSampler's quotas
@@ -219,11 +219,26 @@ data:
 
 ### 5.1 Framework additions made for this card
 
-`CosineFeatureConsistency` is a recipe-local objective over existing ports. The draft remains unsigned; its diagnostic history is recoverable from Git rather than carried in the active card.
+One addition, and it is reversible: an objective over two ports that already
+existed. Its diagnostic history is recoverable from Git rather than carried in
+the active card.
+
+| Added | Quadrant (§11.2) | Consumers today | Named second consumer | Why now |
+|---|---|---|---|---|
+| `CosineFeatureConsistency` — eq. (3), `-cos(h(v_i), z_i)` per row with the target side detached | fidelity-bearing, reversible | this card | not required (reversible) | Eq. (3) reads two *different* ports — `X_PROJ` on the trained side and `X_REPR` on the detached one — because the projection head sits on the strong branch only. No arrangement of one port over two realisations states that, so the asymmetry lives in the objective. Neither shipped neighbour is it: `ConsistencyLoss` is a divergence between two distributions, not a direction between two embeddings, and `InfoNCEContrastive` needs the negatives eq. (3) does not have. Reversible because nothing outside the objective changes: `X_PROJ` is `scarf.md` §5.1's port and `ProjectionHead` its component, both unmodified. |
+
+**One thing that is not an addition.** `ProjectionHead` at `widths=(200,)`,
+`normalisation="none"` is a *declaration* of the reviewed component rather than
+a widening of it: `h` is one dimension-preserving affine layer (§III, Fig. 2),
+so the activation is inert and Tier 0 asserts the module is a single `Linear`.
+
+### Tier 2 outcome
+
+On 2026-09-02, commit `900409cdf6bb` produced a `deviating` result: This is the predeclared project-local DoubleMatch mechanism target: does eq. (3)'s detached weak-feature/projected strong-feature cosine consistency, trained on the rows eq. (2)'s gate rejects, improve a *treatment* propensity over the otherwise identical w_s = 0 fit — which by the paper's §III is FixMatch. It is not a reproduction of Wallin et al., whose inputs, labels, architecture, metric and 352,000-step budget all differ and whose headline claim is about training speed, which a fixed shared budget cannot measure (deviation 3). Within noise of the target: trained_treatment_NLL_ratio was 0.99607 +/- 0.00677 against mean <= 1, by at least one stderr, inside its target by 0.00393 — less than its own standard error, so the run does not distinguish it from a miss.
 
 ## 6. Reproduction target
 
-The planned pair changes only the feature-consistency weight from `0.5` to `0` and checks likelihood, gate, alignment, and collapse diagnostics.
+The pair changes only the feature-consistency weight from `0.5` to `0` and checks likelihood, gate, alignment, and collapse diagnostics. §6.3 records the ten-seed outcome; §6.2 is what the single-seed diagnostics said before it.
 
 ```yaml
 reproduction:
@@ -269,16 +284,30 @@ near 1). Holding `row_l2` fixed and using torch-scale initialisation removed
 that collapse; dropping `row_l2` merely delayed it. On the declared graph one
 initialisation draw gave `w_s=0.5` versus zero EMA NLL `0.3225` versus `0.3185`
 but student NLL `0.3556` versus `0.3807`; another draw reversed the EMA order.
-Alignment consistently moved while gate rate and outcome NLL did not. These
-mixed readings are why the ten-seed Tier 2 ledger remains unrun and the card
-stays draft.
+Alignment consistently moved while gate rate and outcome NLL did not.
+
+Those mixed single-draw readings are what §6's ten-seed protocol was for, and
+§6.3 now carries it. Across ten seeds both ratios land below 1 in mean — EMA
+`0.9932 ± 0.0065`, student `0.9961 ± 0.0068` — so the *sign* the single draws
+disagreed about is stable, and the effect is small enough that the student ratio
+clears its target by `0.0039`, less than its own standard error. That is
+`FIDELITY.md` §3's `deviating`: a nominal pass this run cannot distinguish from
+a miss. It is not a finding that the term does nothing. Terminal alignment
+reaches `0.708 ± 0.0067` against a floor of 0.5; the collapse guardrail's worst
+point over the *whole* trajectory is `0.674 ± 0.0096` against a 0.9 ceiling; and
+the outcome stack is untouched, at `1.00002 ± 0.00005` of the ablation's
+held-out NLL. What eq. (3) does not do at 3,000 steps is move the gate —
+terminal coverage `0.784` against the ablation's `0.789` — or move the propensity
+by more than the seed noise. Deviation 3 is the standing candidate for why: the
+paper's own claim is about training *speed* over 352,000 steps, and the shared
+3,000-step budget is the one thing this protocol holds fixed that the paper
+varies.
 
 ### 6.3 Result ledger
 
-
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
-| — | — | — | not run | — |
+| 2026-09-02 | `900409cdf6bb` | ema_treatment_NLL_ratio<br>trained_treatment_NLL_ratio<br>held_out_outcome_NLL_ratio<br>terminal_feature_alignment<br>max_target_concentration | 0.993242 +/- 0.00653<br>0.99607 +/- 0.00677<br>1.00002 +/- 4.7e-05<br>0.707667 +/- 0.0067<br>0.674232 +/- 0.00958 | no |
 
 ## 7. Unknowns
 
@@ -292,10 +321,15 @@ stays draft.
 | Whether eq. (6)'s weight decay reaches `h`. | Yes, and biases are exempt | Eq. (6) writes `\|\|theta_h\|\|^2` explicitly, and the ref impl creates the projection head inside the `classify` variable scope and sums `l2_loss` over variables whose name carries `kernel` — so matrices are decayed, biases are not, exactly as `fixmatch.md` records for the classifier. |
 | The `+1` offset. Eq. (3) is `-cos`; the reference computes `mean(1 - cos)`. | Implement eq. (3), `-cos` | The paper is the primary source and the offset contributes no gradient. Recorded here because a run compared against a reference training curve will sit exactly 1.0 lower, and that is not a bug. |
 | Which xty2 quantity is "the output from the penultimate layer". | `X_REPR`, unnormalised | ref impl `libml/models.py`: `embeds` is the global-average-pooled activation and `logits = dense(embeds)`. `MLPEncoder -> X_REPR -> CategoricalPropensity` is the same two-node structure. The paper does not discuss the *geometry* of that activation because a WideResNet fixes it: BatchNorm on every block makes a rank-one batch impossible, which is the state §6.2 finds this encoder passing through. What a WideResNet also fixes is the *scale* of that activation, which is what deviation 9 restores here by other means; a normalisation layer inside the encoder would be the other answer and is a bigger change than this card needs. |
+| `eta_0`. §IV-D states `0.3`; the reference runs `0.03` — `doublematch.py`'s `FLAGS.set_default('lr', 0.03)`, which overrides `libml/train.py`'s own `0.0001` and which the README's reproduction commands never pass a `--lr` to change. | `0.03`, the code's value. | **Reference implementation over the paper**, on three grounds. It is the rate the released configuration actually ran, so it is the one behind Table I. It is FixMatch's published rate, and §III-B says "we stay close to the FixMatch settings". And it is the only number in §4 whose stated source contradicts it, which is why this row exists rather than a citation to §IV-D: a reader checking `0.03` against the paper finds `0.3` and cannot tell a transcription error from a deliberate one. |
+| Whether eq. (3)'s `mu B` denominator counts the labelled quota rows. The reference evaluates `l_s` on the unlabelled loader's `mu B` rows only (`embeds[-batch*uratio:]`), and FixMatch's footnote 2 makes that loader the whole training set — so a labelled row enters `l_s` only when it is independently drawn there. | Yes: `rows="all"`, so all 512 quota rows, and the denominator is 512 rather than 448. | xty2 draws one batch, not two loaders: `QuotaSampler` puts 64 `t_observed` and 448 `t_missing` rows in the same batch, so footnote 2's `U` is `all` — exactly as `fixmatch.md` §4 records for eq. (2), and the same mapping is used here for eq. (3). The consequence the reference does not have is that a labelled row is *guaranteed* to feed eqs. (1), (2) and (3) in one step, where two independent loaders make that coincidence rare. §6's two arms share it, so it moves the baseline rather than the term under test. |
+| The prediction head `g`'s initialisation. `libml/models.py` builds it as `tf.layers.dense(y, nclass, kernel_initializer=tf.glorot_normal_initializer())` — the same Glorot normal as the projection head. | CFRNet's `normal std=0.1/sqrt(fan_in)`, the P5 propensity's, unchanged. | Deviation 4 holds the causal stack fixed and `g` is part of it. Recorded because the `h` row above takes the *opposite* decision on the same reference initialiser, and because deviation 9 is evidence that an initialisation scale on this graph is not a detail. What makes the two rows differ rather than conflict: `h` exists only to serve eq. (3), whose gradient carries `1/\|\|.\|\|`, while `g` is trained by eqs. (1) and (2), which carry no such factor — so the argument that moved the encoder does not reach `g`. Untested here; an arm that wants it tested needs its own. |
 
 ## 8. Review
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status → `reviewed`) | | |
-| Plan diffed against §3.2 and §4 | | |
+| Card reviewed (status → `reviewed`) | Claude | 2026-09-02 |
+| Plan diffed against §3.2 and §4 | Claude | 2026-09-02 |
+| Audited equation by equation against arXiv v1 and `walline/doublematch` @ `6ea4994` | Claude | 2026-09-02 |
+| Tier 2 run and ledger recorded (status → `deviating`) | Claude | 2026-09-02 |

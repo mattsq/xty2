@@ -6,8 +6,11 @@ reviewed thresholds, writes all replicate values to `runs/tier2/<recipe>.json`,
 and checks the fresh outcome against the card's recorded `reproduced` or
 `deviating` status.
 
-The nightly workflow runs the five files as separate matrix jobs so a failure
-names the recipe and the expensive cases can use the hosted runner's CPU cores.
+The nightly workflow derives its matrix from `xty2.evaluation.benchmarks.RECIPES`
+and runs one file per recipe as a separate job, so a failure names the recipe and
+the expensive cases can use the hosted runner's CPU cores. A count here would
+rot every time a card acquires a module, which is why there is no longer one.
+
 To regenerate a ledger row locally after a reviewed protocol change:
 
 ```bash
