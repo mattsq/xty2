@@ -66,6 +66,81 @@ checkpoint = result.stage("joint_fit").checkpoint
 On a row where `t_observed` is `0`, `t` must still contain a valid placeholder
 treatment; the observation mask is the only missingness indicator.
 
+### Build a recipe from scratch
+
+Recipes can also be assembled directly from components, objectives, and stages.
+After writing and reviewing `docs/recipes/tiny_tarnet.md`, this small recipe can
+reuse the `schema` and `rows` created above:
+
+```python
+from itertools import repeat
+
+from xty2.components import MLPEncoder, TARNetHead
+from xty2.core import (
+    ComponentGraph,
+    Constant,
+    ExternalBatches,
+    GradientClipping,
+    OptimiserSpec,
+    Recipe,
+    Stage,
+    WeightDecay,
+    Weighted,
+)
+from xty2.objectives import ObservedOutcomeMSE
+
+initialisation = "torch Linear default Kaiming-uniform"
+torch.manual_seed(0)
+recipe = Recipe(
+    name="tiny_tarnet",
+    schema=schema,
+    system=ComponentGraph(
+        [
+            MLPEncoder(
+                input_dim=schema.num_features,
+                widths=(32,),
+                activation="relu",
+                normalisation="none",
+                dropout=0.0,
+                initialisation=initialisation,
+            ),
+            TARNetHead(
+                representation_dim=32,
+                num_treatments=schema.treatment_cardinality,
+                outcome=schema.outcome,
+                widths=(16,),
+                activation="relu",
+                normalisation="none",
+                dropout=0.0,
+                initialisation=initialisation,
+                output_parameterisation="K means; fixed Gaussian scale=1.0",
+            ),
+        ]
+    ),
+    program=(
+        Stage(
+            name="fit",
+            objectives=(
+                Weighted(ObservedOutcomeMSE(), weight=1.0, reduction="population"),
+            ),
+            trainable=("mlp_encoder", "tarnet_head"),
+            optimiser=OptimiserSpec(
+                name="adam",
+                lr=1e-3,
+                weight_decay=WeightDecay.none(),
+                lr_schedule=Constant(1.0),
+                clipping=GradientClipping.none(),
+            ),
+            steps=100,
+            sampler=ExternalBatches(),
+        ),
+    ),
+    card="docs/recipes/tiny_tarnet.md",
+)
+
+result = run_program(compile(recipe), {"fit": repeat(rows, 100)}, seed=0)
+```
+
 ## Documentation
 
 Start at [`docs/README.md`](docs/README.md). It explains which document is
