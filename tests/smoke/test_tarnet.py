@@ -22,7 +22,7 @@ from xty2.core import (
     XTYBatch,
     compile,
 )
-from xty2.recipes import tarnet
+from xty2.recipes import tarnet_extension
 from xty2.training import StageResult, run_stage
 
 FEATURES = 6
@@ -169,9 +169,9 @@ def paired_fit() -> tuple[_Metrics, _Metrics]:
     batches = _dataset(train)
 
     torch.manual_seed(17)
-    marginal_recipe = tarnet(schema)
+    marginal_recipe = tarnet_extension(schema)
     torch.manual_seed(17)
-    complete_case_recipe = _complete_case_ablation(tarnet(schema))
+    complete_case_recipe = _complete_case_ablation(tarnet_extension(schema))
     for name, value in marginal_recipe.system.state_dict().items():
         assert torch.equal(value, complete_case_recipe.system.state_dict()[name])
     assert (

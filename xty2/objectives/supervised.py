@@ -82,6 +82,50 @@ class ObservedOutcomeNLL:
 
 
 @dataclass(frozen=True)
+class ObservedOutcomeMSE:
+    """Squared factual error at the observed treatment.
+
+    This is distinct from ``ObservedOutcomeNLL`` even when the outcome head is
+    a fixed-scale Gaussian. A unit-scale Gaussian NLL contributes one half of
+    squared error, which changes its strength relative to other objectives and
+    regularisation. TARNet's continuous-outcome objective is MSE exactly.
+    """
+
+    name: str = "observed_outcome_mse"
+
+    @property
+    def rows(self) -> Rows:
+        return "t_observed"
+
+    @property
+    def requires(self) -> frozenset[tuple[Port, Realisation]]:
+        return frozenset({(Port.Y_GIVEN_XT, DEFAULT)})
+
+    @property
+    def detaches(self) -> frozenset[tuple[Port, Realisation]]:
+        return frozenset()
+
+    @property
+    def batch_coupled(self) -> bool:
+        return False
+
+    def compute(
+        self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
+    ) -> LossTerm:
+        del ctx
+        head = outcome_distribution(
+            state, Port.Y_GIVEN_XT, DEFAULT, objective=self.name
+        )
+        error = head.mean(treatment_at(batch, rows)) - batch.y
+        per_row = error.square()
+        if per_row.ndim > 1:
+            per_row = per_row.sum(dim=tuple(range(1, per_row.ndim)))
+        if batch.weight is not None:
+            per_row = per_row * batch.weight
+        return reduce_rows(per_row, rows)
+
+
+@dataclass(frozen=True)
 class ObservedTreatmentNLL:
     """Observed-treatment NLL for `p(t | x)` or `q(t | x, y)`.
 
@@ -135,4 +179,4 @@ class ObservedTreatmentNLL:
         return reduce_rows(per_row, rows)
 
 
-__all__ = ["ObservedOutcomeNLL", "ObservedTreatmentNLL"]
+__all__ = ["ObservedOutcomeMSE", "ObservedOutcomeNLL", "ObservedTreatmentNLL"]

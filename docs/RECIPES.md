@@ -5,7 +5,8 @@ its evidence. The status line inside each card is authoritative.
 
 | Card | Recipe | Primary role |
 |---|---|---|
-| [`tarnet.md`](recipes/tarnet.md) | `tarnet` | shared encoder, outcome heads, propensity, exact marginalisation |
+| [`tarnet.md`](recipes/tarnet.md) | `tarnet` | paper-faithful shared encoder and weighted factual-MSE outcome heads |
+| [`tarnet_extension.md`](recipes/tarnet_extension.md) | `tarnet_extension` | propensity and exact missing-treatment marginalisation extension |
 | [`cnflow.md`](recipes/cnflow.md) | `cnflow` | conditional density head under the same marginal objective |
 | [`mean_teacher.md`](recipes/mean_teacher.md) | `mean_teacher` | EMA teacher, views, and consistency scheduling |
 | [`cycle_dual.md`](recipes/cycle_dual.md) | `cycle_dual` | staged posterior labels and leakage controls |

@@ -20,6 +20,7 @@ from xty2.core import (
     CategoricalTreatment,
     CompileError,
     ComponentGraph,
+    ExternalBatches,
     GraphError,
     OutcomeSpec,
     Port,
@@ -30,6 +31,7 @@ from xty2.core import (
     compile,
     resolve_rows,
 )
+from xty2.evaluation.benchmarks.cnflow import _paired_recipes
 from xty2.objectives import MissingTreatmentMarginalNLL
 from xty2.recipes import CNFLOW_ENCODER_WIDTHS, cnflow
 
@@ -100,6 +102,14 @@ def test_the_recipe_is_exactly_one_graph_and_one_stage() -> None:
     assert all(
         objective.weight.describe() == "constant 1.0" for objective in stage.objectives
     )
+
+
+def test_the_tier2_pair_declares_its_external_batch_stream() -> None:
+    with torch.random.fork_rng():
+        flow, gaussian = _paired_recipes(make_schema(), base=70_000)
+    for recipe in (flow, gaussian):
+        stage = compile(recipe).stage("joint_fit").stage
+        assert isinstance(stage.sampler, ExternalBatches)
 
 
 def test_the_recipe_file_contains_declarations_and_no_conditionals() -> None:

@@ -43,6 +43,7 @@ from xty2.objectives import ObservedOutcomeNLL, ObservedTreatmentNLL
 from xty2.training import (
     Checkpoint,
     GradientProbe,
+    MinimumValidationSelection,
     RunDirectory,
     StageResult,
     run_stage,
@@ -178,6 +179,37 @@ def test_the_run_s_own_compiled_stage_is_accepted() -> None:
     run = compile(_recipe())
     result = run_stage(run, run.stage("fit"), _batches(), seed=0)
     assert result.stage == "fit"
+
+
+def test_validation_selection_restores_the_lowest_scoring_checkpoint() -> None:
+    torch.manual_seed(97)
+    selected_run = compile(_recipe())
+    torch.manual_seed(97)
+    expected_run = compile(_recipe(steps=6))
+    scores = iter((3.0, 1.0, 2.0))
+    selection = MinimumValidationSelection(every=3, score=lambda _: next(scores))
+    batches = _batches()
+
+    result = run_stage(
+        selected_run,
+        "fit",
+        batches,
+        seed=0,
+        selection=selection,
+    )
+    expected = run_stage(expected_run, "fit", batches[:6], seed=0)
+
+    assert result.steps == 8
+    assert result.selection is not None
+    assert result.selection.step == 6
+    assert result.selection.score == 1.0
+    assert result.checkpoint.steps == 6
+    assert torch.equal(
+        result.checkpoint.trained_on_row_ids,
+        expected.checkpoint.trained_on_row_ids,
+    )
+    for name, value in selected_run.graph.state_dict().items():
+        assert torch.equal(value, expected_run.graph.state_dict()[name])
 
 
 def test_trainable_only_yields_exactly_the_named_components() -> None:

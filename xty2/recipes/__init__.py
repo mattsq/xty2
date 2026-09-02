@@ -49,7 +49,12 @@ from xty2.recipes.scarf import (
 )
 from xty2.recipes.simmatch import SIMMATCH_STEPS, simmatch
 from xty2.recipes.ssdml import SSDML_ENCODER_WIDTHS, ssdml
-from xty2.recipes.tarnet import ENCODER_WIDTHS, OUTCOME_WIDTHS, tarnet
+from xty2.recipes.tarnet import (
+    ENCODER_WIDTHS,
+    OUTCOME_WIDTHS,
+    tarnet,
+    tarnet_extension,
+)
 from xty2.recipes.uda import (
     TARGET_TEMPERATURE,
     UDA_STEPS,
@@ -117,6 +122,7 @@ __all__ = [
     "simmatch",
     "ssdml",
     "tarnet",
+    "tarnet_extension",
     "uda",
     "variational_treatment",
 ]

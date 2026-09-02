@@ -72,7 +72,11 @@ from xty2.objectives.simmatch import (
     SimilarityMatchingTemperatures,
     SimilarityMatchingTreatmentNLL,
 )
-from xty2.objectives.supervised import ObservedOutcomeNLL, ObservedTreatmentNLL
+from xty2.objectives.supervised import (
+    ObservedOutcomeMSE,
+    ObservedOutcomeNLL,
+    ObservedTreatmentNLL,
+)
 from xty2.objectives.support_set import (
     MeanEntropyMaximisation,
     SupportSetClassifier,
@@ -115,6 +119,7 @@ __all__ = [
     "MemorySmoothedLabels",
     "MemorySmoothedPseudoLabelTreatmentNLL",
     "MissingTreatmentMarginalNLL",
+    "ObservedOutcomeMSE",
     "ObservedOutcomeNLL",
     "ObservedTreatmentNLL",
     "PropagatedTargets",

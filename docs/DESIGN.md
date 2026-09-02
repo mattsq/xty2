@@ -321,6 +321,14 @@ A checkpoint records recipe, stage, fold, trained row ids, component state,
 steps, seed, and plan digest. A pseudo-label artifact records row ids, labels,
 the producing checkpoint for each row, and the source checkpoints.
 
+When an evaluation protocol declares validation-based early stopping,
+`MinimumValidationSelection` may observe the graph at a fixed interval while
+the optimiser continues for the stage's full declared budget. After the search
+it restores the lowest-scoring state; the emitted checkpoint's `steps` and
+trained row ids stop at that selected state, while the step log retains the
+full search trace. Selection is per execution and currently applies only to a
+student graph without an EMA teacher.
+
 Provenance is derived by executor-owned factories:
 
 - `used_y` comes from `Y_RAW` reachability in the compiled graph;
