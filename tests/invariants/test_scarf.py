@@ -296,7 +296,7 @@ def test_every_card_value_the_plan_also_carries_agrees_with_it() -> None:
     """
     hyperparameters = compile(scarf(_schema())).plan.hyperparameters
     mismatched: list[str] = []
-    symbolic = {"architecture.widths_depths": {"K": "3", "X_REPR": "200"}}
+    symbolic = {"architecture.widths_depths": {"K": "3", "X_REPR": "256"}}
     checked = 0
     for key, stated in _card_section_four().items():
         planned = hyperparameters.get(key)

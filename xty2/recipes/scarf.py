@@ -38,7 +38,7 @@ from xty2.objectives import (
     ObservedOutcomeNLL,
     ObservedTreatmentNLL,
 )
-from xty2.recipes.tarnet import ENCODER_WIDTHS, OUTCOME_WIDTHS
+from xty2.recipes.tarnet import OUTCOME_WIDTHS
 from xty2.views import FeatureCorruption
 
 CORRUPTED_X = Realisation(view="corrupted_x")
@@ -55,6 +55,9 @@ TEMPERATURE = 1.0
 
 PROJECTION_WIDTHS = (256, 256)
 """`g`: "2 layers", "hidden dimension 256" (card §4)."""
+
+SCARF_ENCODER_WIDTHS = (256, 256, 256, 256)
+"""`f`: four ReLU layers of width 256, as specified in paper section 4."""
 
 PRETRAIN_STEPS = 1_000
 """Card §4 and deviation 4: a fixed budget where the paper early-stops."""
@@ -84,11 +87,11 @@ DATA_POLICY = DataSpec(
         ),
         train="train",
     ),
-    # Section 6 standardises the outcome on the training rows and reports on
-    # the original scale. Declaring it here rather than doing it in the fixture
-    # is the point: the plan now names the split the statistics come from, and
+    # The paper z-scores numeric features by default; section 6 also
+    # standardises the outcome. Declaring both here rather than doing either in
+    # the fixture makes the plan name the fitting split, and
     # `TrainingPopulation.fitted_on_row_ids` is checked against it.
-    preprocess=PreprocessSpec(features="none", outcome="zscore"),
+    preprocess=PreprocessSpec(features="zscore", outcome="zscore"),
     # Section 6's label budget. Pretraining reads no labels at all — which is
     # the paper's point — so this governs the fine-tuning stage's populations
     # only, and a count is how section 4 of the paper states its scarce regime.
@@ -127,14 +130,14 @@ def scarf(schema: Schema, *, recompute_rules: tuple[RecomputeRule, ...] = ()) ->
             [
                 MLPEncoder(
                     input_dim=schema.num_features,
-                    widths=ENCODER_WIDTHS,
-                    activation="elu",
-                    normalisation="row_l2",
+                    widths=SCARF_ENCODER_WIDTHS,
+                    activation="relu",
+                    normalisation="none",
                     dropout=0.0,
                     initialisation=CFRNET_INITIALISATION,
                 ),
                 ProjectionHead(
-                    representation_dim=ENCODER_WIDTHS[-1],
+                    representation_dim=SCARF_ENCODER_WIDTHS[-1],
                     widths=PROJECTION_WIDTHS,
                     activation="relu",
                     normalisation="row_l2",
@@ -142,7 +145,7 @@ def scarf(schema: Schema, *, recompute_rules: tuple[RecomputeRule, ...] = ()) ->
                     initialisation=CFRNET_INITIALISATION,
                 ),
                 TARNetHead(
-                    representation_dim=ENCODER_WIDTHS[-1],
+                    representation_dim=SCARF_ENCODER_WIDTHS[-1],
                     num_treatments=schema.treatment_cardinality,
                     outcome=schema.outcome,
                     widths=OUTCOME_WIDTHS,
@@ -153,7 +156,7 @@ def scarf(schema: Schema, *, recompute_rules: tuple[RecomputeRule, ...] = ()) ->
                     output_parameterisation="K means; fixed Gaussian scale=1.0",
                 ),
                 CategoricalPropensity(
-                    representation_dim=ENCODER_WIDTHS[-1],
+                    representation_dim=SCARF_ENCODER_WIDTHS[-1],
                     num_treatments=schema.treatment_cardinality,
                     activation="linear logits",
                     normalisation="none",
@@ -244,6 +247,7 @@ __all__ = [
     "JOINT_FIT_STEPS",
     "PRETRAIN_STEPS",
     "PROJECTION_WIDTHS",
+    "SCARF_ENCODER_WIDTHS",
     "TEMPERATURE",
     "scarf",
 ]

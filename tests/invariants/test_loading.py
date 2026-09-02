@@ -40,7 +40,7 @@ from xty2.core import (
     compile,
 )
 from xty2.core.errors import ArtifactError, CompileError, TrainingError, Xty2Error
-from xty2.evaluation.benchmarks.common import batch_indices
+from xty2.evaluation.benchmarks.common import batch_indices, on_the_training_scale
 from xty2.training import run_stage
 from xty2.training.loading import build_population, iterate, sampler_seed
 
@@ -271,6 +271,27 @@ def test_standardisation_is_fitted_on_the_declared_split_and_says_so() -> None:
     # And the population it hands back is the *training* rows only: a stage
     # that stepped on the test split would be the leak this exists to stop.
     assert population.batch_size == 32
+
+
+def test_benchmark_rows_receive_both_fitted_feature_and_outcome_scaling() -> None:
+    """Evaluation must consume the same transform the training loader fitted."""
+    data = _dataset(rows=32)
+    population = build_population(
+        data,
+        _policy(preprocess=PreprocessSpec(features="zscore", outcome="zscore")),
+        seed=1,
+    )
+    held_out = _rows(8)
+    scaled = on_the_training_scale(held_out, population)
+    statistics = population.statistics
+    assert torch.allclose(
+        scaled.x,
+        (held_out.x - statistics["x_location"]) / statistics["x_scale"],
+    )
+    assert torch.allclose(
+        scaled.y,
+        (held_out.y - statistics["y_location"]) / statistics["y_scale"],
+    )
 
 
 def test_statistics_fitted_off_the_training_split_are_caught() -> None:

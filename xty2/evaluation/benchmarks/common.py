@@ -514,12 +514,19 @@ def training_dataset(schema: Schema, train: XTYBatch) -> Dataset:
 
 
 def on_the_training_scale(batch: XTYBatch, population: TrainingPopulation) -> XTYBatch:
-    """Apply the outcome scaling the run **fitted**, never one refitted here.
+    """Apply feature/outcome scaling the run **fitted**, never refit here.
 
     Refitting on the held-out rows is the leakage `FIDELITY.md` §2 names first,
     and `StageResult.population` exists so that it is not the path of least
     resistance.
     """
-    location = population.statistics["y_location"]
-    scale = population.statistics["y_scale"]
-    return batch.replace(y=(batch.y - location) / scale)
+    changes: dict[str, torch.Tensor] = {}
+    if "x_scale" in population.statistics:
+        changes["x"] = (
+            batch.x - population.statistics["x_location"]
+        ) / population.statistics["x_scale"]
+    if "y_scale" in population.statistics:
+        changes["y"] = (
+            batch.y - population.statistics["y_location"]
+        ) / population.statistics["y_scale"]
+    return batch.replace(**changes) if changes else batch
