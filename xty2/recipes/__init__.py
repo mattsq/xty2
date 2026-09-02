@@ -44,6 +44,7 @@ from xty2.recipes.scarf import (
     JOINT_FIT_STEPS,
     PRETRAIN_STEPS,
     PROJECTION_WIDTHS,
+    SCARF_ENCODER_WIDTHS,
     TEMPERATURE,
     scarf,
 )
@@ -93,6 +94,7 @@ __all__ = [
     "PRETRAIN_STEPS",
     "PROJECTION_WIDTHS",
     "SAT",
+    "SCARF_ENCODER_WIDTHS",
     "SELF_SUPERVISED_WEIGHT",
     "SHARPENING",
     "SIMMATCH_STEPS",
