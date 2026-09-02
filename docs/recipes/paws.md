@@ -1,6 +1,6 @@
 # Recipe spec card: paws
 
-**Status:** `smoke-passing`
+**Status:** `reproduced`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
@@ -390,9 +390,9 @@ Two fixture facts this recipe adds, both checked rather than assumed:
 
 ### 6.2 Predeclared evidence
 
-The criteria below were fixed while the card was `draft`. Tier 0 and Tier 1 now
-pass at the implementation on PR #23; the ten-seed downstream reproduction
-target remains unrun and §6.3 therefore stays empty.
+The criteria below were fixed while the card was `draft`. Tier 0 and Tier 1
+pass at the implementation on PR #23, and the ten-seed downstream target has
+since been run; §6.3 records it.
 
 **Tier 0 (invariants).**
 
@@ -461,11 +461,30 @@ uniform-marginal prior cuts NLL by more than half and moves the predicted
 minority share from 0.215 toward the true 0.15. That is the falsification §2
 predeclared, not a failure of the implementation.
 
+**Tier 2, ten seeds.** Against the unpretrained arm, PAWS pretraining reached a
+held-out `p(t | x)` NLL ratio of `0.934 +/- 0.025` and led in eight seeds of
+ten, at an outcome-NLL ratio of `1.011 +/- 0.010` — inside the 1.05 within
+which the card is willing to let the outcome head pay for the representation.
+Every guardrail passed. paws-nn scored `0.286 +/- 0.004` nat/row against the
+fixture's marginal-prior `0.698 +/- 0.002`, a ratio of `0.410 +/- 0.006`, at
+`0.909 +/- 0.002` accuracy; terminal `H(p̄)` was `0.6922 +/- 0.0003`, within
+0.001 of `log 2`; and a row's similarity to its own second large view exceeded
+its similarity to the batch's other anchors by `0.242 +/- 0.013`. That last is
+the only criterion a single replicate missed — one seed of ten gave 0.170 —
+and the card states it on the mean, which clears 0.2 by three standard errors.
+
+The paired guardrails are what make the downstream ratio readable: the
+representation is not collapsed by either of the paper's two conditions, and it
+classifies held-out treatments far better than the prior it was given, so the
+0.934 is about the representation reaching `joint_fit` rather than about a
+degenerate encoder being harmless. It remains a mechanism result on one
+project-local DGP, and §2 still refuses every published number.
+
 ### 6.3 Result ledger
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
-| — | — | — | — | — |
+| 2026-09-02 | `049cec4` | held_out_treatment_NLL_ratio<br>held_out_outcome_NLL_ratio<br>paws_nn_over_marginal_prior_NLL<br>terminal_marginal_entropy<br>positive_view_alignment_gap | 0.934255 +/- 0.0246<br>1.01086 +/- 0.0101<br>0.410086 +/- 0.00573<br>0.692213 +/- 0.00033 nat<br>0.241944 +/- 0.0135 | yes |
 
 ## 7. Unknowns
 
