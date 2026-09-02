@@ -383,7 +383,7 @@ zero. The outcome-NLL ratio was `1.000 +/- 0.0001`.
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
-| 2026-09-02 | `working-tree@900409c` | ema_treatment_NLL_ratio<br>trained_treatment_NLL_ratio<br>terminal_mask_rate<br>retained_label_impurity<br>held_out_outcome_NLL_ratio<br>terminal_threshold_max<br>initial_threshold_min | 0.961311 +/- 0.00971<br>0.964709 +/- 0.0113<br>0.847559 +/- 0.00837<br>0.0581345 +/- 0.00224<br>0.999657 +/- 0.000107<br>0.95 +/- 0<br>0 +/- 0 | yes |
+| 2026-09-02 | `a382e53` | ema_treatment_NLL_ratio<br>trained_treatment_NLL_ratio<br>terminal_mask_rate<br>retained_label_impurity<br>held_out_outcome_NLL_ratio<br>terminal_threshold_max<br>initial_threshold_min | 0.961311 +/- 0.00971<br>0.964709 +/- 0.0113<br>0.847559 +/- 0.00837<br>0.0581345 +/- 0.00224<br>0.999657 +/- 0.000107<br>0.95 +/- 0<br>0 +/- 0 | yes |
 
 ## 7. Unknowns
 
