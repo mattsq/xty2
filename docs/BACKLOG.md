@@ -43,6 +43,11 @@ The variational latent treatment is also implemented and smoke-passing;
 cards before proposing a close relative; their active ledgers supersede the
 historical notes once carried here.
 
+Meta Pseudo Labels + UDA now has a draft research packet at
+`docs/recipes/meta_pseudo_labels.md`. It specifies the hard-label one-step
+estimator and the proposed meta-gradient executor boundary; stop for review
+before implementation.
+
 ### Recommended stress-test sequence
 
 1. CoMatch or PAWS: test class-compatible representation learning.
@@ -148,7 +153,9 @@ does not discharge or depend on the `batch-row-repetition` ledger item.
 The teacher update depends on how a student trained on teacher labels performs
 on labelled data. If this cannot be represented by ordinary stages, it is
 evidence for the §15.3 meta-gradient boundary, not permission to hide a loop in
-a recipe function.
+a recipe function. `docs/recipes/meta_pseudo_labels.md` is the draft card and
+is authoritative for the selected variant, proposed executor shape, and
+predeclared evidence.
 
 ### 2.12 SelfMatch, SimCLRv2 and Noisy Student
 
