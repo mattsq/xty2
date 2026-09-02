@@ -48,6 +48,10 @@ def benchmark_function(recipe: str) -> BenchmarkFunction:
         from xty2.evaluation.benchmarks.flexmatch import run
 
         return run
+    if recipe == "uda":
+        from xty2.evaluation.benchmarks.uda import run
+
+        return run
     if recipe == "freematch":
         from xty2.evaluation.benchmarks.freematch import run
 
@@ -71,6 +75,7 @@ RECIPES = (
     "fixmatch",
     "doublematch",
     "flexmatch",
+    "uda",
     "freematch",
     "paws",
 )
