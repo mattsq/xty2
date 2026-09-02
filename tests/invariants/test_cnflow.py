@@ -137,7 +137,13 @@ def test_the_real_flow_satisfies_the_candidate_treatment_contract(
     assert isinstance(outcome, ConditionalFlowOutcome)
     assert isinstance(propensity, CategoricalTreatment)
     check_outcome_distribution_contract(
-        outcome, y=batch.y, num_treatments=schema.treatment_cardinality
+        outcome,
+        y=batch.y,
+        num_treatments=schema.treatment_cardinality,
+        # Five float32 spline transforms can accumulate a few micro-units of
+        # batch-shape-dependent rounding for a width-one event.  This remains
+        # far below a semantically meaningful candidate-column disagreement.
+        atol=1e-5,
     )
     check_treatment_distribution_contract(
         propensity, num_treatments=schema.treatment_cardinality
