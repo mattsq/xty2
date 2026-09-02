@@ -30,7 +30,13 @@ from xty2.core import (
     compile,
 )
 from xty2.objectives import ConsistencyLoss, ObservedTreatmentNLL
-from xty2.recipes import ENCODER_WIDTHS, OUTCOME_WIDTHS, cnflow, mean_teacher, tarnet
+from xty2.recipes import (
+    ENCODER_WIDTHS,
+    OUTCOME_WIDTHS,
+    cnflow,
+    mean_teacher,
+    tarnet_extension,
+)
 from xty2.training import EMATeacher
 from xty2.views import FeatureMask
 
@@ -256,7 +262,7 @@ def test_the_architecture_and_optimiser_are_the_reviewed_p5_stack() -> None:
     torch.manual_seed(19)
     mean_graph = mean_teacher(_schema()).system
     torch.manual_seed(19)
-    tarnet_graph = tarnet(_schema()).system
+    tarnet_graph = tarnet_extension(_schema()).system
     assert mean_graph.names == tarnet_graph.names
     for name, value in mean_graph.state_dict().items():
         assert torch.equal(value, tarnet_graph.state_dict()[name])
@@ -266,7 +272,7 @@ def test_default_supervision_keeps_the_p5_and_p7_plans_on_identity() -> None:
     objective = ObservedTreatmentNLL()
     assert objective.realisation == DEFAULT
     assert objective.requires == frozenset({(Port.T_GIVEN_X, DEFAULT)})
-    for recipe in (tarnet(_schema()), cnflow(_schema())):
+    for recipe in (tarnet_extension(_schema()), cnflow(_schema())):
         rendered = compile(recipe).plan.render()
         assert "requires  p(t|x) @ view=identity params=student" in rendered
         assert "student_x" not in rendered

@@ -42,6 +42,7 @@ from xty2.training.loss_mixer import (
     ObjectiveLog,
     gradient_report,
 )
+from xty2.training.selection import MinimumValidationSelection, SelectionResult
 from xty2.training.teacher import EMATeacher
 
 __all__ = [
@@ -56,12 +57,14 @@ __all__ = [
     "GradientProbe",
     "GradientReport",
     "LossMixer",
+    "MinimumValidationSelection",
     "MixedLoss",
     "ObjectiveLog",
     "PredictionMode",
     "ProgramResult",
     "PseudoLabels",
     "RunDirectory",
+    "SelectionResult",
     "StageResult",
     "StepRecord",
     "build_population",

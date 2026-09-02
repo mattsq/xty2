@@ -61,6 +61,7 @@ from xty2.training.loss_mixer import (
     MixedLoss,
     ObjectiveLog,
 )
+from xty2.training.selection import MinimumValidationSelection, SelectionResult
 from xty2.training.teacher import EMATeacher
 
 STREAM_STRIDE = 1_000_000
@@ -209,6 +210,7 @@ class StageResult:
     pseudo_labels: PseudoLabels | None = None
     teacher: EMATeacher | None = None
     population: TrainingPopulation | None = None
+    selection: SelectionResult | None = None
     paths: Mapping[str, str] = field(default_factory=dict)
     """Where the artifacts were written, when a run directory was given."""
 
@@ -564,6 +566,7 @@ def run_stage(
     seed: int,
     run_dir: RunDirectory | None = None,
     probe: GradientProbe | None = None,
+    selection: MinimumValidationSelection | None = None,
 ) -> StageResult:
     """Train one stage for `stage.steps` optimiser steps.
 
@@ -585,6 +588,9 @@ def run_stage(
         run_dir: Where to write the plan, the checkpoint and the log. `None`
             runs without writing anything.
         probe: The §6.2 gradient probe. Off by default, and so off in CI.
+        selection: Optional periodic validation selection. Training still runs
+            for the stage's full declared budget; the returned checkpoint and
+            live graph are restored to the lowest-scoring observed state.
 
     Returns:
         The trace, the per-step log and the stage's checkpoint.
@@ -624,6 +630,7 @@ def run_stage(
         probe=probe,
         source_checkpoint=None,
         population=population,
+        selection=selection,
     )
     return replace(result, population=population)
 
@@ -835,6 +842,7 @@ def _run_gradient_or_action(
     probe: GradientProbe | None,
     source_checkpoint: Checkpoint | None,
     population: TrainingPopulation | None = None,
+    selection: MinimumValidationSelection | None = None,
 ) -> StageResult:
     """Execute a normal fit, optionally followed by a pseudo-label action."""
     materialised: list[XTYBatch] | None = None
@@ -854,6 +862,7 @@ def _run_gradient_or_action(
             run_dir=run_dir,
             probe=probe,
             population=population,
+            selection=selection,
         )
         if materialised is None:
             return result
@@ -1267,6 +1276,7 @@ def _run_stage(
     probe: GradientProbe | None,
     fold: int | None = None,
     population: TrainingPopulation | None = None,
+    selection: MinimumValidationSelection | None = None,
 ) -> StageResult:
     """Execute one already-resolved stage for `run_stage` or `run_program`."""
     if compiled.steps > MAX_STAGE_STEPS:
@@ -1279,6 +1289,16 @@ def _run_stage(
         )
     spec = compiled.optimiser
     graph = run.graph
+    if selection is not None and selection.result is not None:
+        raise TrainingError(
+            "a MinimumValidationSelection instance belongs to one stage run; "
+            "construct a fresh selector for each execution"
+        )
+    if selection is not None and compiled.teacher is not None:
+        raise TrainingError(
+            "validation selection of an EMA-teacher stage is ambiguous; the "
+            "selector currently restores only the student graph"
+        )
     torch.manual_seed(seed)
     graph.zero_grad(set_to_none=True)
 
@@ -1346,18 +1366,26 @@ def _run_stage(
                 # batches would otherwise rewrite the provenance of every step
                 # already recorded (DESIGN.md §7.1).
                 seen.append(batch.row_id.detach().clone())
+                if selection is not None:
+                    selection.consider(
+                        run,
+                        step + 1,
+                        final=step + 1 == compiled.steps,
+                    )
         finally:
             # Restored module by module. `graph.train(flag)` is recursive, so
             # one saved root flag would silently put a submodule a caller had
             # placed in eval mode back into training.
             for module, was in modes.items():
                 module.training = was
+        selected = selection.restore(run) if selection is not None else None
+        checkpoint_steps = selected.step if selected is not None else len(records)
         checkpoint = _emit_checkpoint(
             run,
             compiled,
             parameters,
-            seen,
-            steps=len(records),
+            seen[:checkpoint_steps],
+            steps=checkpoint_steps,
             seed=seed,
             fold=fold,
         )
@@ -1380,6 +1408,7 @@ def _run_stage(
         records=tuple(records),
         _checkpoint=checkpoint,
         teacher=teacher,
+        selection=selected,
         paths=paths,
     )
 

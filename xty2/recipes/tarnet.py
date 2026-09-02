@@ -1,4 +1,4 @@
-"""The reviewed TARNet P5 assembly — declarations only."""
+"""Published TARNet and the separately named xty2 missing-treatment extension."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from xty2.core import (
 )
 from xty2.objectives import (
     MissingTreatmentMarginalNLL,
+    ObservedOutcomeMSE,
     ObservedOutcomeNLL,
     ObservedTreatmentNLL,
 )
@@ -41,7 +42,7 @@ cost, and this is where it is repaid.
 DATA_POLICY = DataSpec(
     split=SplitSpec(
         protocol=(
-            "the archive's own realisation, fit/validation split 90/10 by "
+            "the archive's own realisation, fit/validation split 70/30 by "
             "seeded permutation as the reference loader does"
         ),
         train="fit",
@@ -60,9 +61,71 @@ DATA_POLICY = DataSpec(
 
 
 def tarnet(schema: Schema) -> Recipe:
-    """Build the single-stage P5 recipe exactly as `docs/recipes/tarnet.md`."""
+    """Build Shalit et al.'s outcome-only TARNet baseline."""
     return Recipe(
         name="tarnet",
+        schema=schema,
+        system=ComponentGraph(
+            [
+                MLPEncoder(
+                    input_dim=schema.num_features,
+                    widths=ENCODER_WIDTHS,
+                    activation="elu",
+                    normalisation="row_l2",
+                    dropout=0.0,
+                    initialisation=CFRNET_INITIALISATION,
+                ),
+                TARNetHead(
+                    representation_dim=ENCODER_WIDTHS[-1],
+                    num_treatments=schema.treatment_cardinality,
+                    outcome=schema.outcome,
+                    widths=OUTCOME_WIDTHS,
+                    activation="elu",
+                    normalisation="none",
+                    dropout=0.0,
+                    initialisation=CFRNET_INITIALISATION,
+                    output_parameterisation="K means; fixed Gaussian scale=1.0",
+                ),
+            ]
+        ),
+        program=(
+            Stage(
+                name="joint_fit",
+                objectives=(
+                    Weighted(ObservedOutcomeMSE(), weight=1.0, reduction="population"),
+                ),
+                trainable=(
+                    "mlp_encoder",
+                    "tarnet_head",
+                ),
+                rows="all",
+                optimiser=OptimiserSpec(
+                    name="adam",
+                    lr=1e-3,
+                    weight_decay=WeightDecay(
+                        value=1e-4,
+                        on_norm_and_bias=False,
+                        components=("tarnet_head",),
+                    ),
+                    lr_schedule=ExponentialDecay(gamma=0.97, every=100),
+                    clipping=GradientClipping.none(),
+                    betas=(0.9, 0.999),
+                    eps=1e-8,
+                ),
+                steps=3_000,
+                sampler=UniformSampler(batch_size=BATCH_SIZE),
+            ),
+        ),
+        card="docs/recipes/tarnet.md",
+        purpose="causal",
+        data=DATA_POLICY,
+    )
+
+
+def tarnet_extension(schema: Schema) -> Recipe:
+    """Build the xty2 propensity/marginal-likelihood TARNet extension."""
+    return Recipe(
+        name="tarnet_extension",
         schema=schema,
         system=ComponentGraph(
             [
@@ -133,10 +196,17 @@ def tarnet(schema: Schema) -> Recipe:
                 sampler=UniformSampler(batch_size=BATCH_SIZE),
             ),
         ),
-        card="docs/recipes/tarnet.md",
+        card="docs/recipes/tarnet_extension.md",
         purpose="causal",
         data=DATA_POLICY,
     )
 
 
-__all__ = ["BATCH_SIZE", "DATA_POLICY", "ENCODER_WIDTHS", "OUTCOME_WIDTHS", "tarnet"]
+__all__ = [
+    "BATCH_SIZE",
+    "DATA_POLICY",
+    "ENCODER_WIDTHS",
+    "OUTCOME_WIDTHS",
+    "tarnet",
+    "tarnet_extension",
+]

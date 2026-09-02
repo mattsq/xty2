@@ -41,6 +41,7 @@ from xty2.core import (
 )
 from xty2.objectives import (
     MissingTreatmentMarginalNLL,
+    ObservedOutcomeMSE,
     ObservedOutcomeNLL,
     ObservedTreatmentNLL,
 )
@@ -321,6 +322,21 @@ def test_the_observed_outcome_nll_applies_batch_weights_before_reduction() -> No
     assert float(term.value) == pytest.approx(float(expected), abs=1e-12)
 
 
+def test_the_observed_outcome_mse_is_exact_weighted_squared_error() -> None:
+    weights = torch.linspace(0.25, 2.0, BATCH_SIZE, dtype=torch.float64)
+    batch = _double_batch(weight=weights)
+    head, _ = _heads(batch)
+    rows = resolve_rows(batch, "t_observed")
+    state = State({DEFAULT: {Port.Y_GIVEN_XT: head}})
+
+    term = ObservedOutcomeMSE().compute(state, batch, rows, _ctx())
+
+    error = head.mean(treatment_at(batch, rows)) - batch.y
+    expected = (weights * error.square()).index_select(0, rows).mean()
+    assert term.n == int(rows.numel())
+    assert float(term.value) == pytest.approx(float(expected), abs=1e-12)
+
+
 def test_the_observed_treatment_nll_is_the_categorical_cross_entropy() -> None:
     batch = _double_batch()
     _, propensity = _heads(batch)
@@ -363,8 +379,8 @@ def test_the_observed_treatment_nll_rejects_a_non_realisation() -> None:
 
 @pytest.mark.parametrize(
     "objective",
-    [ObservedOutcomeNLL(), ObservedTreatmentNLL()],
-    ids=["outcome", "treatment"],
+    [ObservedOutcomeMSE(), ObservedOutcomeNLL(), ObservedTreatmentNLL()],
+    ids=["outcome_mse", "outcome_nll", "treatment"],
 )
 def test_an_unobserved_treatment_is_never_read(objective: object) -> None:
     # The no-sentinel rule with teeth: `t` on unobserved rows holds an arbitrary
@@ -388,9 +404,10 @@ def test_an_unobserved_treatment_is_never_read(objective: object) -> None:
     "objective, port",
     [
         (ObservedOutcomeNLL(), Port.Y_GIVEN_XT),
+        (ObservedOutcomeMSE(), Port.Y_GIVEN_XT),
         (ObservedTreatmentNLL(), Port.T_GIVEN_X),
     ],
-    ids=["outcome", "treatment"],
+    ids=["outcome_nll", "outcome_mse", "treatment"],
 )
 def test_a_complete_case_term_with_no_observed_rows_is_zero(
     objective: object, port: Port
@@ -410,6 +427,8 @@ def test_a_complete_case_term_with_no_observed_rows_is_zero(
 
 
 def test_the_complete_case_terms_declare_their_ports_and_rows() -> None:
+    assert ObservedOutcomeMSE().rows == "t_observed"
+    assert ObservedOutcomeMSE().requires == frozenset({(Port.Y_GIVEN_XT, DEFAULT)})
     assert ObservedOutcomeNLL().rows == "t_observed"
     assert ObservedOutcomeNLL().requires == frozenset({(Port.Y_GIVEN_XT, DEFAULT)})
     assert ObservedTreatmentNLL().rows == "t_observed"

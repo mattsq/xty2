@@ -21,7 +21,7 @@ ROOT = Path(__file__).parents[2]
 @pytest.mark.parametrize(
     ("recipe", "seeds", "metric"),
     [
-        ("tarnet", 10, "sqrt_PEHE_in_sample"),
+        ("tarnet", 1_000, "sqrt_PEHE_in_sample"),
         (
             "cnflow",
             10,

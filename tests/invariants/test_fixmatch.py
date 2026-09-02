@@ -29,7 +29,13 @@ from xty2.core import (
 )
 from xty2.core.errors import ViewError
 from xty2.objectives import ObservedTreatmentNLL, PseudoLabelTreatmentNLL
-from xty2.recipes import ENCODER_WIDTHS, OUTCOME_WIDTHS, fixmatch, mean_teacher, tarnet
+from xty2.recipes import (
+    ENCODER_WIDTHS,
+    OUTCOME_WIDTHS,
+    fixmatch,
+    mean_teacher,
+    tarnet_extension,
+)
 from xty2.recipes.fixmatch import WEAK_X_LABELLED
 from xty2.views import FeatureMask
 
@@ -255,7 +261,7 @@ def test_the_architecture_is_the_shared_p5_stack() -> None:
     torch.manual_seed(19)
     fixmatch_graph = fixmatch(_schema()).system
     torch.manual_seed(19)
-    tarnet_graph = tarnet(_schema()).system
+    tarnet_graph = tarnet_extension(_schema()).system
     assert fixmatch_graph.names == tarnet_graph.names
     for name, value in fixmatch_graph.state_dict().items():
         assert torch.equal(value, tarnet_graph.state_dict()[name])

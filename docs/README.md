@@ -14,6 +14,7 @@ wasteful and makes historical rationale look like current scope.
 | Change a core contract | the relevant `DESIGN.md` section | owning module and invariant tests |
 | Change loading or execution | `DESIGN.md` §7–§8 | `proposals/loader.md` only for the accepted data-boundary decision |
 | Plan research | `BACKLOG.md` | `PRIOR_ART.md` for comparative notes |
+| Review non-normative scale diagnostics | `experiments/` | the relevant recipe card for the reviewed baseline |
 | Understand project history | `PLAN.md` | Git and PR history |
 
 Do not read `PLAN.md`, `BACKLOG.md`, or `PRIOR_ART.md` to implement an already
@@ -47,6 +48,7 @@ and re-review the card and normative documents. `PLAN.md`, `BACKLOG.md`, and
 | [`PLAN.md`](PLAN.md) | completed P0–P12 build history | no |
 | [`BACKLOG.md`](BACKLOG.md) | candidate research and framework stress tests | no |
 | [`PRIOR_ART.md`](PRIOR_ART.md) | comparative framework notes | no |
+| [`experiments/`](experiments/) | dated, non-normative diagnostic results | no |
 
 `CLAUDE.md` is the short operating policy for coding agents. It routes here
 rather than duplicating these documents.

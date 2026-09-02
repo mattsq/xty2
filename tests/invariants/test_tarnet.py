@@ -21,12 +21,13 @@ from xty2.core import (
     check_treatment_distribution_contract,
     compile,
 )
-from xty2.recipes import ENCODER_WIDTHS, tarnet
+from xty2.recipes import ENCODER_WIDTHS, tarnet, tarnet_extension
 
 from tests.invariants.conftest import make_batch, make_schema
 
 ROOT = Path(__file__).resolve().parents[2]
 CARD = ROOT / "docs" / "recipes" / "tarnet.md"
+EXTENSION_CARD = ROOT / "docs" / "recipes" / "tarnet_extension.md"
 
 
 def test_the_recipe_is_exactly_one_graph_and_one_stage() -> None:
@@ -34,7 +35,6 @@ def test_the_recipe_is_exactly_one_graph_and_one_stage() -> None:
     assert run.graph.names == (
         "mlp_encoder",
         "tarnet_head",
-        "categorical_propensity",
     )
     assert len(run.stages) == 1
     stage = run.stage("joint_fit")
@@ -43,14 +43,24 @@ def test_the_recipe_is_exactly_one_graph_and_one_stage() -> None:
     assert stage.trainable == run.graph.names
     assert stage.passes[0].components == run.graph.names
     assert [objective.name for objective in stage.objectives] == [
-        "observed_outcome_nll",
-        "observed_treatment_nll",
-        "missing_treatment_marginal_nll",
+        "observed_outcome_mse",
     ]
     assert [objective.rows for objective in stage.objectives] == [
         ("t_observed",),
-        ("t_observed",),
-        ("t_missing",),
+    ]
+
+
+def test_the_extension_keeps_the_propensity_and_marginal_objectives() -> None:
+    run = compile(tarnet_extension(make_schema()))
+    assert run.graph.names == (
+        "mlp_encoder",
+        "tarnet_head",
+        "categorical_propensity",
+    )
+    assert [objective.name for objective in run.stage("joint_fit").objectives] == [
+        "observed_outcome_nll",
+        "observed_treatment_nll",
+        "missing_treatment_marginal_nll",
     ]
 
 
@@ -63,7 +73,7 @@ def test_the_gaussian_tarnet_recipe_rejects_a_categorical_outcome() -> None:
 def test_the_real_heads_satisfy_both_distribution_contracts() -> None:
     schema = make_schema()
     batch = make_batch()
-    state = compile(tarnet(schema)).state("joint_fit", batch)
+    state = compile(tarnet_extension(schema)).state("joint_fit", batch)
     outcome = state.default[Port.Y_GIVEN_XT]
     propensity = state.default[Port.T_GIVEN_X]
     assert isinstance(outcome, GaussianOutcome)
@@ -110,11 +120,9 @@ def test_the_plan_names_each_component_s_architecture() -> None:
     assert hyperparameters["architecture.widths_depths"] == {
         "mlp_encoder": ENCODER_WIDTHS,
         "tarnet_head": "3 independent heads, each [100, 100, 100]",
-        "categorical_propensity": "linear 200 -> 3",
     }
     assert hyperparameters["architecture.output_parameterisation"] == {
         "tarnet_head": "K means; fixed Gaussian scale=1.0",
-        "categorical_propensity": "K softmax logits",
     }
     assert hyperparameters["optimisation.lr_schedule"] == (
         "staircase 1.0 * 0.97^floor(step/100)"
@@ -157,8 +165,8 @@ def test_a_decay_scope_outside_the_stage_is_a_compile_error() -> None:
         compile(changed)
 
 
-def _answered_card_keys() -> set[str]:
-    text = CARD.read_text(encoding="utf-8")
+def _answered_card_keys(card: Path) -> set[str]:
+    text = card.read_text(encoding="utf-8")
     section = text.split("## 4. Mechanics checklist", 1)[1].split(
         "## 5. Deviations from the paper", 1
     )[0]
@@ -179,22 +187,23 @@ def _answered_card_keys() -> set[str]:
     return keys
 
 
-def _assert_card_is_covered(recipe: Recipe) -> None:
+def _assert_card_is_covered(recipe: Recipe, card: Path = CARD) -> None:
     plan = compile(recipe).plan
-    missing = sorted(_answered_card_keys() - set(plan.hyperparameters))
+    missing = sorted(_answered_card_keys(card) - set(plan.hyperparameters))
     assert not missing, "card keys missing from plan: " + ", ".join(missing)
 
 
 def test_every_answered_card_key_reaches_the_plan() -> None:
     _assert_card_is_covered(tarnet(make_schema()))
+    _assert_card_is_covered(tarnet_extension(make_schema()), EXTENSION_CARD)
 
 
 def test_the_card_cross_check_fails_when_a_real_binding_is_removed() -> None:
-    recipe = tarnet(make_schema())
+    recipe = tarnet_extension(make_schema())
     stage = recipe.program[0]
     complete_case = replace(
         recipe,
         program=Program((replace(stage, objectives=stage.objectives[:2]),)),
     )
     with pytest.raises(AssertionError, match=r"gradients\.marginal_nll_grad_path"):
-        _assert_card_is_covered(complete_case)
+        _assert_card_is_covered(complete_case, EXTENSION_CARD)
