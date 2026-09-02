@@ -33,8 +33,8 @@ Git retains the exploratory chronology removed from this active queue.
 | Variational latent treatment | uses q(t\|x,y), p(t\|x), and p(y\|x,t) together | ELBO composition |
 | Explicit treatment-observation model | promotes label availability to a statistical variable | missingness semantics |
 
-Already present: SCARF is deviating, FixMatch is reproduced, DoubleMatch,
-FlexMatch and FreeMatch are drafts, PAWS is implemented and smoke-passing, and
+Already present: SCARF is deviating, FixMatch and FlexMatch are reproduced,
+DoubleMatch and FreeMatch are drafts, PAWS is implemented and smoke-passing, and
 CoMatch is implemented (`docs/recipes/comatch.md`) with its full predeclared
 smoke study still open. SimMatch is implemented
 (`docs/recipes/simmatch.md`) with its Tier 1 study only partly run.

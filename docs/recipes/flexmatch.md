@@ -1,6 +1,6 @@
 # Recipe spec card: flexmatch
 
-**Status:** `draft`
+**Status:** `reproduced`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
@@ -320,6 +320,11 @@ The 90% criterion is a judgement and is sensitive: 0.1 then 0.2 is selected only
 
 The planned pair holds the 20% strong view fixed and compares curriculum gating with a constant threshold.
 
+The result remains scoped by the open framework debt in §5.7 and §5.8: it
+measures a fixed tabular augmentation at the 64-label minimum the current
+sampler can express, not inherited adaptive augmentation or the paper's
+scarcer-label regime.
+
 ```yaml
 reproduction:
   dataset: fixmatch.md §6.1's project-local seed-locked two-cluster XTY DGP (6 features, K=2), unmodified
@@ -364,14 +369,21 @@ Using FixMatch's stronger 0.5 view trapped three of five seeds at the ungated
 warm-up; a `tau=1` permanently ungated ablation isolated the view, rather than
 ungated self-training itself, as the cause. These script-level five-seed
 measurements motivate the guardrails but cannot set status; the Tier 2 ledger
-below remains unrun.
+below is the result-bearing evidence.
+
+At the declared ten seeds, FlexMatch achieved EMA treatment-NLL ratio
+`0.961 +/- 0.010` and trained-parameter ratio `0.965 +/- 0.011`, leading the
+constant gate in nine seeds of ten on each. Every predeclared guardrail passed:
+terminal mask rate was `0.848 +/- 0.008`, retained-label impurity
+`0.058 +/- 0.002`, and all runs reached `max_c T(c) = tau` after starting at
+zero. The outcome-NLL ratio was `1.000 +/- 0.0001`.
 
 ### 6.3 Result ledger
 
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
-| — | — | — | — | Not run |
+| 2026-09-02 | `working-tree@900409c` | ema_treatment_NLL_ratio<br>trained_treatment_NLL_ratio<br>terminal_mask_rate<br>retained_label_impurity<br>held_out_outcome_NLL_ratio<br>terminal_threshold_max<br>initial_threshold_min | 0.961311 +/- 0.00971<br>0.964709 +/- 0.0113<br>0.847559 +/- 0.00837<br>0.0581345 +/- 0.00224<br>0.999657 +/- 0.000107<br>0.95 +/- 0<br>0 +/- 0 | yes |
 
 ## 7. Unknowns
 
@@ -392,5 +404,5 @@ below remains unrun.
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status → `reviewed`) | | |
-| Plan diffed against §3.2 and §4 | | |
+| Card reviewed (status → `reviewed`) | Codex | 2026-09-02 |
+| Plan diffed against §3.2 and §4 | Codex | 2026-09-02 |

@@ -97,6 +97,20 @@ def test_ledger_writeback_sets_reproduced_and_records_mean_stderr() -> None:
     assert "### Tier 2 outcome" not in updated
 
 
+def test_ledger_writeback_accepts_card_style_spacing_and_placeholder() -> None:
+    card = (
+        _card()
+        .replace(
+            "### 6.1 Result ledger\n\n",
+            "### 6.1 Result ledger\n\n\n",
+        )
+        .replace("| | | | | |", "| — | — | — | — | Not run |")
+    )
+    updated = update_card_text(card, _result(passed=True))
+    assert "| 2026-08-24 | `abc1234` | error | 0.1 +/- 0 | yes |" in updated
+    assert "Not run" not in updated
+
+
 def test_deviation_writeback_adds_the_required_section5_explanation() -> None:
     result = _result(passed=False)
     updated = update_card_text(_card(), result)

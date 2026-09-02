@@ -843,7 +843,7 @@ an oversight: `FIDELITY.md` §3 makes the ledger a record of Tier 2 runs, and
 left to be inferred from an empty table. `xty2/evaluation/benchmarks/` has one
 module per recipe that has been Tier 2'd and none for this one, so §6's target
 is declared and unmeasured at the declared ten seeds — the position `doublematch`
-and `flexmatch` also ship in. The status line stays `draft` until it has one and
+also ships in. The status line stays `draft` until it has one and
 a reviewer has signed §8.
 
 ### 6.4 The diagnostic fixtures

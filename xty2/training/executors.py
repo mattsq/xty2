@@ -199,6 +199,10 @@ class StageResult:
             rows: refitting them on the evaluation split is the leakage
             `FIDELITY.md` §2 names first, and a run that could not hand back
             what it fitted would make refitting the path of least resistance.
+        objective_states: The final executor-owned state of each stateful
+            objective. Stateless stages expose an empty mapping. This is
+            diagnostic state, not model state: checkpoints remain parameters
+            and buffers only.
     """
 
     stage: str
@@ -210,6 +214,7 @@ class StageResult:
     pseudo_labels: PseudoLabels | None = None
     teacher: EMATeacher | None = None
     population: TrainingPopulation | None = None
+    objective_states: Mapping[str, object] = field(default_factory=dict)
     selection: SelectionResult | None = None
     paths: Mapping[str, str] = field(default_factory=dict)
     """Where the artifacts were written, when a run directory was given."""
@@ -220,6 +225,9 @@ class StageResult:
             self,
             "fold_checkpoints",
             MappingProxyType(dict(sorted(self.fold_checkpoints.items()))),
+        )
+        object.__setattr__(
+            self, "objective_states", MappingProxyType(dict(self.objective_states))
         )
         object.__setattr__(self, "paths", MappingProxyType(dict(self.paths)))
 
@@ -1408,6 +1416,7 @@ def _run_stage(
         records=tuple(records),
         _checkpoint=checkpoint,
         teacher=teacher,
+        objective_states=objective_states,
         selection=selected,
         paths=paths,
     )
