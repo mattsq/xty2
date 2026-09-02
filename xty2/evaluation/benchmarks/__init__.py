@@ -1,13 +1,4 @@
-"""The card-defined Tier 2 benchmark cases (`docs/PLAN.md` P12).
-
-Eight, since `scarf`, `fixmatch` and `doublematch` acquired modules. The first
-two cards' §6.3 recorded the absence as the reason their status could not pass
-`smoke-passing`: "the Tier 2 runner has one module per recipe and this recipe
-has none". `doublematch.md` §6.2 recorded the same thing in its own words — a
-ten-seed ledger left unrun, with a card kept at `draft` because of it. A
-declared protocol nothing can execute is a target in the same sense a tolerance
-nobody measures against is one.
-"""
+"""The card-defined Tier 2 benchmark cases (`docs/PLAN.md` P12)."""
 
 from __future__ import annotations
 
@@ -53,6 +44,10 @@ def benchmark_function(recipe: str) -> BenchmarkFunction:
         from xty2.evaluation.benchmarks.doublematch import run
 
         return run
+    if recipe == "flexmatch":
+        from xty2.evaluation.benchmarks.flexmatch import run
+
+        return run
     raise KeyError(
         f"unknown Tier 2 recipe {recipe!r}; expected one of {list(RECIPES)!r}"
     )
@@ -67,6 +62,7 @@ RECIPES = (
     "scarf",
     "fixmatch",
     "doublematch",
+    "flexmatch",
 )
 
 __all__ = ["RECIPES", "BenchmarkFunction", "benchmark_function"]

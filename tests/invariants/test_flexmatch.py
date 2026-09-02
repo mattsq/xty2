@@ -573,6 +573,9 @@ def test_the_state_is_built_per_stage_execution_and_not_per_recipe() -> None:
     # The curriculum has to have *moved* for that equality to mean anything: a
     # state that was never written would be equal between two runs trivially.
     assert max(_marked(first)) > 0.0
+    final = first.objective_states[CURRICULUM_TERM]
+    assert isinstance(final, CurriculumStatus)
+    assert final.unused() < final.size
 
 
 def test_two_arms_sharing_one_objective_instance_do_not_share_a_curriculum() -> None:
@@ -743,9 +746,9 @@ def test_the_card_declares_the_gate_rule_the_recipe_runs() -> None:
     assert CurriculumThreshold(tau=0.95, warm_up=True, mapping="convex") == CURRICULUM
 
 
-def test_the_card_status_is_not_ahead_of_the_evidence() -> None:
-    """`FIDELITY.md` §1.1: `reproduced` is a Tier 2 claim, and Tier 2 has not run."""
+def test_the_card_records_the_tier_two_result() -> None:
+    """`FIDELITY.md` §1.1: only the completed Tier 2 run sets reproduced."""
     header = CARD.read_text(encoding="utf-8").split("\n", 4)
     assert any("**Status:**" in line for line in header)
     status = next(line for line in header if "**Status:**" in line)
-    assert "`reproduced`" not in status
+    assert "`reproduced`" in status

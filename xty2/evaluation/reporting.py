@@ -29,7 +29,7 @@ _STATUS = re.compile(
     r"smoke-passing|reproduced|deviating)`$"
 )
 _LEDGER = re.compile(
-    r"(?P<head>### 6\.\d+ Result ledger\n\n"
+    r"(?P<head>### 6\.\d+ Result ledger\n{2,}"
     # The template writes the header as "Value ± stderr" and the cards
     # written before P12 write it as "Value +/- stderr". Both spellings name
     # the same reviewed column, so a card created from the template must not
@@ -554,8 +554,17 @@ def update_card_text(text: str, result: BenchmarkResult) -> str:
         f"{within} |\n"
     )
     old_rows = ledger_match.group("rows")
-    blank = "| | | | | |\n"
-    new_rows = old_rows.replace(blank, row, 1) if blank in old_rows else old_rows + row
+    placeholders = (
+        "| | | | | |\n",
+        "| — | — | — | — | — |\n",
+        "| — | — | — | — | Not run |\n",
+    )
+    placeholder = next((item for item in placeholders if item in old_rows), None)
+    new_rows = (
+        old_rows.replace(placeholder, row, 1)
+        if placeholder is not None
+        else old_rows + row
+    )
     text = (
         text[: ledger_match.start()]
         + ledger_match.group("head")
