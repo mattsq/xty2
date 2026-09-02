@@ -40,6 +40,10 @@ def benchmark_function(recipe: str) -> BenchmarkFunction:
         from xty2.evaluation.benchmarks.fixmatch import run
 
         return run
+    if recipe == "doublematch":
+        from xty2.evaluation.benchmarks.doublematch import run
+
+        return run
     if recipe == "flexmatch":
         from xty2.evaluation.benchmarks.flexmatch import run
 
@@ -57,6 +61,7 @@ RECIPES = (
     "ssdml",
     "scarf",
     "fixmatch",
+    "doublematch",
     "flexmatch",
 )
 
