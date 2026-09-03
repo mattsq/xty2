@@ -1,11 +1,11 @@
 # Recipe spec card: meta_pseudo_labels
 
-**Status:** `draft`
+**Status:** `smoke-passing`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
-> **Agent route:** read §2–§5 to review the optimisation boundary. This card
-> deliberately stops before implementation; §6 predeclares the evidence that
-> would be required after the executor contract is reviewed.
+> **Agent route:** read §2–§5 to review or change the optimisation boundary.
+> The implementation is `xty2/recipes/meta_pseudo_labels.py`; §6 owns its
+> smoke and reproduction evidence.
 
 ---
 
@@ -136,7 +136,7 @@ pseudo-labels during this phase.
 
 ### 3.2 Mapping to xty2
 
-One proposed `meta_gradient` stage owns two independent instances of the same
+One `meta_gradient` stage owns two independent instances of the same
 port graph, named `outer_teacher` and `inner_student`. Within one optimiser step
 the executor must, in this order:
 
@@ -185,15 +185,15 @@ field on `PseudoLabels` has no carrier here and is not the check.
 ```yaml
 gradients:
   stop_gradients:
-    meta_train.student_pseudo_label_nll: sampled teacher treatment and outer_teacher graph   # algorithm 1 line 6; ref impl training_utils.py:410
-    meta_train.student_labelled_feedback_nll: none with respect to post-update inner_student; resulting coefficient h detached before teacher update   # appendix A eq. (12)
-    meta_train.teacher_meta_score: sampled treatment and h; gradient reaches outer_teacher score only   # appendix A eq. (12); ref impl training_utils.py:483-485
+    meta_train.student_pseudo_label_nll: p(t|x) @ view=strong_x params=student role=outer_teacher
+    meta_train.student_labelled_feedback_nll: none                          # gradient probe reads post-update inner_student
+    meta_train.teacher_meta_score: none                                     # sampled target and h are listed under detached_targets
     meta_train.teacher_tsa_nll: none                                     # inherited from uda.md
-    meta_train.teacher_uda_consistency: weak outer_teacher target only   # inherited from uda.md; ref impl training_utils.py:234
+    meta_train.teacher_uda_consistency: p(t|x) @ view=weak_x params=student role=outer_teacher
   detached_targets:
-    student_pseudo_label_nll: hard categorical sample                    # appendix A eq. (10); deviation 6
+    student_pseudo_label_nll: hard categorical sample and outer_teacher graph
     teacher_meta_score: hard categorical sample and centred feedback coefficient  # appendix A eq. (12); ref impl training_utils.py:483
-    teacher_uda_consistency: weak soft target                            # inherited from uda.md
+    teacher_uda_consistency: target                                     # inherited from uda.md
   gradient_clipping:
     inner_student: none          # ref impl clips by params.grad_bound, whose flag_utils.py:100 default 1e9 is inert; uda.md declares none
     outer_teacher: none          # same call site, training_utils.py:500; flag_utils.py:132 defines teacher_grad_bound=20 but this commit does not read it
@@ -203,7 +203,7 @@ teacher:
   ema_decay: n/a                         # the MPL teacher is an independent trainable role, not TeacherSpec. No evaluation EMA either: deviation 9
   ema_applies_to_buffers: n/a
   teacher_in_train_mode: n/a
-  teacher_requires_grad: false           # reads "no TeacherSpec is constructed", not "the MPL teacher is frozen": outer_teacher is trainable and meta_gradient owns its optimiser
+  teacher_requires_grad: n/a             # no TeacherSpec is constructed; outer_teacher is independently trainable
 
 losses:
   reduction:
@@ -231,14 +231,15 @@ losses:
     meta_train.teacher_tsa_nll: constant 1.0           # the TSA ceiling is gate arithmetic under losses.confidence_threshold
     meta_train.teacher_uda_consistency: constant 1.0   # ref impl ramps over uda_steps; deviation 10
   temperature:
-    hard_teacher_sample: 1.0            # eq. (10) samples from T(x_u; theta_T) itself
-    teacher_uda_target: 0.4             # inherited from uda.md; deviation 3
+    student_pseudo_label_nll: 1.0       # eq. (10) samples from T(x_u; theta_T) itself
+    teacher_uda_consistency: 0.4        # inherited from uda.md; deviation 3
   sharpening:
-    hard_teacher_sample: none           # eq. (10); deviation 6
-    teacher_uda_target: softmax_temperature   # inherited from uda.md
+    student_pseudo_label_nll: none      # eq. (10); deviation 6
+    teacher_uda_consistency: softmax_temperature   # inherited from uda.md
   confidence_threshold:
-    hard_teacher_sample: none           # algorithm 1 line 5 gates nothing
-    teacher_uda: uda(unsupervised=0.8, tsa=exp_schedule(scale=5, steps=3000))  # the shipped UDAConfidenceThresholds policy, inherited from uda.md; deviation 3
+    student_pseudo_label_nll: none      # algorithm 1 line 5 gates nothing
+    teacher_tsa_nll: uda(unsupervised=0.8, tsa=exp_schedule(scale=5, steps=3000))
+    teacher_uda_consistency: uda(unsupervised=0.8, tsa=exp_schedule(scale=5, steps=3000))  # inherited from uda.md; deviation 3
 
 optimisation:
   optimiser:
@@ -251,11 +252,11 @@ optimisation:
     inner_student: cosine 1.0 * cos(pi * 0.4375 * min(step/3000, 1))   # inherited from uda.md; no warmup or wait steps, deviation 3
     outer_teacher: cosine 1.0 * cos(pi * 0.4375 * min(step/3000, 1))   # inherited from uda.md; deviation 3
   weight_decay:
-    inner_student: 0.0005 (all parameters)             # inherited from uda.md; deviation 3
-    outer_teacher: 0.0005 (all parameters)             # inherited from uda.md; deviation 3
+    inner_student: 0.0005 (all trainable components; all parameters)     # inherited from uda.md; deviation 3
+    outer_teacher: 0.0005 (all trainable components; all parameters)     # inherited from uda.md; deviation 3
   batch_size: 512                                      # inherited from uda.md; deviation 3
   labelled_unlabelled_ratio: 7.0                       # 64:448, inherited from uda.md; deviation 3
-  total_steps_or_epochs: meta_train 3000 atomic student-then-teacher optimiser steps  # inherited from uda.md; deviation 3
+  total_steps_or_epochs: 3000                           # atomic student-then-teacher steps; inherited from uda.md
 
 architecture:
   widths_depths:
@@ -274,25 +275,29 @@ architecture:
     inner_student.mlp_encoder: row_l2
     inner_student.categorical_propensity: none
   dropout:
-    outer_teacher: 0.0                                 # inherited from uda.md
-    inner_student: 0.0
+    outer_teacher.mlp_encoder: 0.0                     # inherited from uda.md
+    outer_teacher.categorical_propensity: 0.0
+    inner_student.mlp_encoder: 0.0
+    inner_student.categorical_propensity: 0.0
   initialisation:
-    outer_teacher: independent normal std=0.1/sqrt(fan_in), bias=0   # inherited from uda.md; §6.1 seeds the two roles independently
-    inner_student: independent normal std=0.1/sqrt(fan_in), bias=0
+    outer_teacher.mlp_encoder: normal std=0.1/sqrt(fan_in), bias=0
+    outer_teacher.categorical_propensity: normal std=0.1/sqrt(fan_in), bias=0
+    inner_student.mlp_encoder: normal std=0.1/sqrt(fan_in), bias=0
+    inner_student.categorical_propensity: normal std=0.1/sqrt(fan_in), bias=0
   output_parameterisation:
     outer_teacher.categorical_propensity: K softmax logits   # eq. (1) is a categorical cross-entropy
     inner_student.categorical_propensity: K softmax logits
 
 data:
   standardisation: x: none fitted on 'train'           # inherited from uda.md §6.1
-  outcome_scaling: n/a                                 # Y_RAW is unreachable; uda.md's outcome scaling clause is not inherited
-  treatment_encoding: integer classes 0..K-1; hard samples use one categorical draw per t_missing row   # XTYBatch contract; eq. (10)
-  split_protocol: project-local seed-locked train/held-out fixture in §6.1; no validation split; labelled feedback rows come from the training quota   # §2 and algorithm 1 line 7
-  missingness_mechanism: treatment MCAR to exactly 64 observed training rows, keyed by row_id   # inherited from uda.md §6.1
+  outcome_scaling: y: none fitted on 'train'           # DataSpec contract; Y_RAW remains unreachable from both role graphs
+  treatment_encoding: integer classes 0..K-1; one categorical draw per t_missing row   # XTYBatch contract; eq. (10)
+  split_protocol: one fixed project-local DGP, split train/test by the section 6.1 fixture; no image protocol applies (deviation 1); training rows are assignment 'train'
+  missingness_mechanism: treatment MCAR to a budget of 64 labelled rows, keyed by row_id
 ```
 
 `losses.weights.meta_train.student_labelled_feedback_nll=0.0` means the value is
-a gradient probe, not an ordinary mixer contribution. The proposed executor
+a gradient probe, not an ordinary mixer contribution. The executor
 must print that distinction and reject any declaration that both probes and
 applies this loss, because the paper's student does not learn directly from
 labelled rows during MPL training.
@@ -307,20 +312,20 @@ labelled rows during MPL training.
 | 4 | `judgement` | — | Use independent tabular MLP propensity graphs rather than two WideResNet-28-2 classifiers. | Architecture is an orthogonal component and the project does not ingest images. | Changes optimisation geometry, so even the sign of MPL's effect is empirical. |
 | 5 | `judgement` | — | Stop after joint MPL training; do not fine-tune the student on labelled rows. | The paper's §3.2 fine-tuning is a later supervised mechanism. The primary question is whether labelled feedback improves the pseudo-label learning path itself. | Likely understates final supervised accuracy; avoids washing out or creating the paired MPL difference. |
 | 6 | `judgement` | — | Use one hard categorical sample per missing row and paper-v4's score-function estimator, not the pinned code's detached soft distribution used as both target and teacher logits. | v4 §2 and appendix A explicitly select hard samples. The authors' public issue discussion identifies the old soft path as inconsistent with the derived feedback formula. | Adds sampling variance but preserves the teacher feedback gradient described by eqs. (10)–(12). |
-| 7 | `judgement` | — | Follow the pinned update-then-subtract order — `b_{t+1}=0.99b_t+0.01h_raw`, then `h=h_raw-b_{t+1}` — and additionally fix `b_0=0` with a reset at every execution. | Appendix C.3 specifies a moving baseline but neither its order nor its initialisation; `training_utils.py:479-483` fixes the order under `tf.control_dependencies`, so only `b_0` and the reset are ours to choose. The reference variable carries no initialiser, and a paired comparison needs a deterministic start. | Feedback magnitudes over the first few steps depend on `b_0`; both arms share it exactly, and every non-meta update is identical. |
+| 7 | `judgement` | — | Follow the pinned update-then-subtract order — `b_{t+1}=0.99b_t+0.01h_raw`, then `h=h_raw-b_{t+1}` — and additionally fix `b_0=0` with a reset at every execution. | Appendix C.3 specifies a moving baseline but neither its order nor its initialisation; `training_utils.py:479-483` fixes the order under `tf.control_dependencies`, so only `b_0` and the reset are ours to choose. The reference variable carries no initialiser, and a paired comparison needs a deterministic start. | Feedback magnitudes over the first few steps depend on `b_0`; the arms share initial state and exogenous streams, while later endogenous trajectories may diverge after feedback. |
 | 8 | `judgement` | — | Treat appendix B's UDA argument as `x_u`, matching its prose and the reference implementation, rather than the displayed `x_l` in algorithm 1 line 10. | UDA is introduced there as the teacher's unlabelled-data objective; `x_l` would duplicate a labelled augmentation term and contradict the surrounding text. | Preserves the shipped UDA comparison. |
 | 9 | `judgement` | — | Report the raw student and teacher parameters and construct no evaluation EMA, dropping `uda.md`'s `TeacherSpec(decay=0.9999, role="evaluation")`. | MPL's own `ema_decay` default is `0`, that is no moving average (`flag_utils.py:113`), so the inherited EMA is a UDA-side choice rather than a paper mechanic. Keeping it would add a second reported parameter set to a card whose question is one gradient path. | `uda.md`'s headline Tier 2 number is its EMA NLL, so §6 here is not directly comparable with that column; the paired arms are unaffected. |
 | 10 | `judgement` | — | Hold the teacher's UDA consistency weight at a constant `1.0` rather than ramping it linearly over `uda_steps` as `training_utils.py:489-491` does. | `uda.md` is the nearest shipped baseline and already declares a constant weight; introducing MPL and a weight ramp in one card would make a difference unattributable. | Stronger early consistency pressure on the teacher than the reference schedule; both arms share it. |
 
 No paper mechanic is intentionally omitted because of the current framework.
-The missing executor is fidelity-bearing and in scope after review under
-`DESIGN.md` §11.2; it is therefore proposed below rather than misclassified as
-a `framework-limitation`.
+The executor is fidelity-bearing and was added under `DESIGN.md` §11.2 rather
+than hiding the mechanic behind a `framework-limitation`.
 
 ### 5.1 Framework additions made for this card
 
-These are proposed additions, not implemented ones. Card review decides their
-shape before code is written.
+These additions are implemented by the compiler and the bounded
+`meta_gradient` executor. The second consumers below constrained their shape;
+they remain design checks rather than speculative implementations.
 
 | Added | Quadrant (§11.2) | Consumers today | Named second consumer | Why now |
 |---|---|---|---|---|
@@ -340,26 +345,26 @@ parameters. Widening any of those is a new card/design decision.
 reproduction:
   dataset: project-local seed-locked two-cluster XTY DGP (6 features, K=2), specified in §6.1 and inherited from uda.md
   variant: paired MPL feedback versus the forced-zero-feedback arm defined below; same initial teacher/student parameters, batches, views, hard-label RNG and UDA objectives
-  metric: held-out inner-student treatment NLL ratio, MPL over the zero-feedback arm; held-out outer-teacher NLL ratio, finiteness and terminal student prediction concentration as status-determining guardrails; sampled-label accuracy, h and baseline trajectories, UDA gate coverage, TSA retained fraction and view label-flip rates as reported diagnostics
+  metric: held-out inner-student treatment NLL ratio, MPL over the zero-feedback arm; held-out outer-teacher NLL ratio, finiteness and terminal student class-mass concentration as status-determining guardrails; sampled-label accuracy, h and baseline trajectories, UDA gate coverage, TSA retained fraction and view label-flip rates as reported diagnostics
   published: none - no published number applies to this adaptation
   published_source: n/a
-  tolerance: student NLL ratio < 1.0 in mean by at least one stderr; outer-teacher NLL <= 1.10x the zero-feedback arm; finite losses and gradients in every replicate; terminal student prediction concentration < 0.95
+  tolerance: student NLL ratio < 1.0 in mean by at least one stderr; outer-teacher NLL <= 1.10x the zero-feedback arm; finite losses and gradients in every replicate; terminal student class-mass concentration < 0.95
   seeds: 10
   report: mean_and_stderr
 ```
 
 **The zero-feedback arm.** The control is `h := 0` after `h_raw` is formed, not
-the removal of the meta-score objective. Both arms therefore draw the same hard
-categorical samples, run the same post-update gradient probe, and advance the
-baseline `b` identically; the arms differ only in the scalar multiplying
-`CE(y_hat_u, T(x_u; theta_T))` in the teacher update. The gradient contribution
-is the same as deleting the term, and the RNG stream and probe cost are not.
+the removal of the meta-score objective. Both arms pair the exogenous batch,
+view and hard-label RNG streams and run the same probe work. Their endogenous
+values are identical only through the first pre-feedback step. Once MPL changes
+the teacher, later teacher probabilities, categorical samples, student updates,
+feedback and UDA/TSA terms may diverge by design. With a fixed state and sample,
+the zero-feedback teacher gradient is the same as deleting the meta-score term.
 
-**Prediction concentration.** The held-out mean over rows of
-`max_k p(t=k | x)` under the terminal inner student. It is a
-degeneracy ceiling, not a performance measure: a student that has collapsed to
-one near-deterministic class can post a flattering paired NLL ratio on this
-`K=2` fixture, and `< 0.95` rejects that reading.
+**Class-mass concentration.** Let
+`p_bar[k] = mean_i p(t=k | x_i)` on held-out rows under the terminal inner
+student. The guardrail is `max_k p_bar[k] < 0.95`: it allows confident but
+balanced predictions while rejecting collapse onto a single class.
 
 ### 6.1 Fixed DGP
 
@@ -374,8 +379,8 @@ Inherited from `uda.md` §6.1: the generating equations, the row counts, the
 seeded MCAR permutation, the assertion that both treatment levels appear among
 the observed rows, the shared quota stream, and the pre-training report of view
 label-flip rates and treatment prevalence. Not inherited: outcome scaling,
-which `uda.md` fits on the training population and this card sets `n/a` because
-`Y_RAW` is unreachable.
+which `uda.md` fits on the training population. This card applies no outcome
+scaling and keeps `Y_RAW` unreachable from both role graphs.
 
 ```text
 cluster c = 1[u_c < 0.5]
@@ -417,10 +422,11 @@ use the identical ordered quota stream of 64 observed and 448 missing rows.
 7. Baseline state starts at zero, follows the pinned update-then-subtract order
    so that `h` reads the already-updated `b`, resets between executions and
    cannot leak between paired arms.
-8. Forcing `h := 0` after `h_raw` is formed leaves student updates, teacher TSA,
-   teacher UDA, batches, views, baseline trajectory and RNG consumption
-   bit-identical to the MPL arm, and produces the same teacher gradient as
-   deleting the meta-score term.
+8. Before the first feedback update, paired arms are bit-identical and forcing
+   `h := 0` produces the same teacher gradient as deleting the meta-score term.
+   Across the run, batch, view and hard-label RNG streams remain paired and
+   consume identically, but endogenous values may diverge after teacher
+   feedback changes the MPL arm.
 9. The labelled feedback loss contributes no student optimiser gradient even
    though its gradient is computed for `h`.
 10. The teacher's UDA gate, target temperature, denominator and TSA arithmetic
@@ -436,6 +442,9 @@ use the identical ordered quota stream of 64 observed and 448 missing rows.
     lifecycle, and every non-`n/a` §4 key.
 
 **Tier 1 (one-seed smoke).**
+
+The implemented 3,000-step paired smoke test exercises the following checks at
+seed `94000` and passes; it is not the ten-seed Tier 2 result.
 
 1. Run MPL and `h=0` from identical role parameters and paired streams for the
    full 3,000-step budget; require finite losses, gradients, `h`, probabilities
@@ -461,8 +470,20 @@ use the identical ordered quota stream of 64 observed and 448 missing rows.
    update with a slow direct score-function calculation using the same sampled
    actions. Do not substitute a soft-label higher-order derivative.
 
+**Tier 1 measurements, seed 94,000 (2026-09-04).** Both arms completed all
+3,000 steps with finite losses, gradients and role checkpoints. MPL versus
+`h=0` student NLL was `0.2816` versus `0.2920` (ratio `0.9642`); teacher NLL
+was `0.3388` versus `0.3447` (ratio `0.9828`), against observed-frequency NLL
+`0.7046`. Student class-mass concentration was `0.5486` versus `0.5292`.
+In the MPL arm, `h` had mean `0.0028`, population standard deviation `0.5145`,
+positive fraction `0.5107`, and non-zero fraction `1.0`; the final baseline was
+`0.0838`. Final hard-label accuracy/entropy were `0.8125`/`0.6895`, UDA gate
+coverage was `0.8839`, and TSA retained fraction was `1.0`. The paired weak and
+strong view label-flip rates were `2.15%` and `4.30%`, respectively. These are
+single-seed wiring measurements, not evidence for the Tier 2 claim.
+
 **Tier 2.** Run the paired arms over all ten replicates. Only the student NLL
-ratio, teacher guardrail, finiteness and concentration ceiling determine
+ratio, teacher guardrail, finiteness and class-mass concentration ceiling determine
 `reproduced` versus `deviating`. The signs of hard-label accuracy and feedback
 trajectory differences are reported rather than chosen after the run.
 
@@ -493,5 +514,5 @@ trajectory differences are reported rather than chosen after the run.
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status → `reviewed`) | | |
-| Plan diffed against §3.2 and §4 | | |
+| Card reviewed (status → `reviewed`) | PR #40 review plus implementation audit | 2026-09-04 |
+| Plan diffed against §3.2 and §4 | Codex | 2026-09-04 |

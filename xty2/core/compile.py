@@ -57,6 +57,7 @@ from xty2.core.recipe import (
     ArrayFitAction,
     Executor,
     Objective,
+    ParameterRole,
     PseudoLabelAction,
     Recipe,
     Stage,
@@ -166,6 +167,11 @@ class CompiledStage:
     @property
     def trainable(self) -> tuple[str, ...]:
         return self.stage.trainable
+
+    @property
+    def roles(self) -> tuple[ParameterRole, ...]:
+        """Independent parameter owners for ``meta_gradient`` stages."""
+        return self.stage.roles
 
     @property
     def initialise_from(self) -> str | None:
@@ -346,6 +352,22 @@ class ExecutionPlan:
             lines.append("  allow leakage: true (predictive only)")
         if compiled.teacher is not None:
             lines.append(f"  teacher: {compiled.teacher.describe()}")
+        if compiled.stage.meta_gradient is not None:
+            meta = compiled.stage.meta_gradient
+            lines.append("  meta-gradient")
+            lines.append(
+                f"    inner={meta.inner_role} outer={meta.outer_role} "
+                f"inner_steps={meta.inner_steps} outer_steps={meta.outer_steps}"
+            )
+            lines.append("    update order: " + " -> ".join(meta.update_order))
+            for detail in meta.feedback.describe():
+                lines.append(f"    feedback: {detail}")
+            for role in compiled.roles:
+                lines.append(
+                    f"    role {role.name}: trainable {', '.join(role.trainable)}"
+                )
+                for detail in role.optimiser.describe_lines():
+                    lines.append(f"      {detail}")
         if isinstance(compiled.action, PseudoLabelAction):
             lines.append(f"  action: {compiled.action.describe()}")
             lines.append(f"  action rows: {_rows(compiled.action_rows or ('all',))}")
@@ -362,11 +384,12 @@ class ExecutionPlan:
         lines.append(f"  sampler: {sampler[0]}")
         lines += [f"    {line.strip()}" for line in sampler[1:]]
         if compiled.objectives:
-            lines += [
-                f"  steps: {compiled.steps}",
-                "  optimisation",
-                *(f"    {line}" for line in compiled.optimiser.describe_lines()),
-            ]
+            lines.append(f"  steps: {compiled.steps}")
+            if compiled.executor != "meta_gradient":
+                lines += [
+                    "  optimisation",
+                    *(f"    {line}" for line in compiled.optimiser.describe_lines()),
+                ]
         lines.append(f"  forward passes ({len(compiled.passes)})")
         for forward in compiled.passes:
             components = " -> ".join(forward.components) or "nothing"
@@ -402,7 +425,11 @@ class ExecutionPlan:
         if not compiled.objectives:
             lines.append("    none")
         lines.append("  trainable")
-        lines.append(f"    {_names(compiled.trainable)}")
+        if compiled.roles:
+            for role in compiled.roles:
+                lines.append(f"    {role.name}: {_names(role.trainable)}")
+        else:
+            lines.append(f"    {_names(compiled.trainable)}")
         return lines
 
     def _hyperparameter_lines(self) -> list[str]:
@@ -487,6 +514,13 @@ class CompiledRun:
         teacher objective self-consistency under one parameter set.
         """
         compiled = self.stage(stage) if isinstance(stage, str) else stage
+        if compiled.executor == "meta_gradient":
+            raise TrainingError(
+                f"stage {compiled.name!r} uses meta_gradient and cannot be "
+                "collapsed into one CompiledRun.state call. Execute it with "
+                "run_meta_gradient so pre/post role state and update order "
+                "remain explicit."
+            )
         # The requirement tracks the *passes*, not the declaration. A stage
         # whose teacher is an evaluation EMA (`role="evaluation"`) plans no
         # teacher pass, so demanding its parameter set here would force every
@@ -662,6 +696,14 @@ def _realisable(views: tuple[ViewSpec, ...], stage: Stage) -> frozenset[Realisat
     the `ViewSpec` and reports with the view named.
     """
     view_names = (IDENTITY_VIEW, *(view.name for view in views))
+    if stage.executor == "meta_gradient":
+        realised = {
+            Realisation(view=view, role=role.name, state=state)
+            for view in view_names
+            for role in stage.roles
+            for state in ("pre_update", "post_update")
+        }
+        return frozenset(realised)
     realised = {Realisation(view=view) for view in view_names}
     if stage.teacher is not None:
         realised.update(Realisation(view=view, params="teacher") for view in view_names)
@@ -712,6 +754,8 @@ def _compile_stage(
                 plan_details=_objective_plan_details(objective, where),
             )
         )
+    if stage.executor == "meta_gradient":
+        _check_meta_gradient_objectives(stage, objectives, where)
 
     action_rows: tuple[Rows, ...] | None = None
     action_uses_y: bool | None = None
@@ -736,9 +780,12 @@ def _compile_stage(
         for realisation, ports in sorted(demanded.items())
     )
     if stage.objectives:
-        _check_trainable(graph, stage, passes, trained, where)
+        if stage.executor == "meta_gradient":
+            _check_role_trainables(graph, stage, passes, where)
+        else:
+            _check_trainable(graph, stage, passes, trained, where)
     _check_teacher_use(stage, passes, where)
-    if stage.objectives:
+    if stage.objectives and stage.executor != "meta_gradient":
         _check_weight_decay_scope(stage, where)
     return CompiledStage(
         stage=stage,
@@ -747,6 +794,65 @@ def _compile_stage(
         action_rows=action_rows,
         action_uses_y=action_uses_y,
     )
+
+
+def _check_meta_gradient_objectives(
+    stage: Stage, objectives: list[CompiledObjective], where: str
+) -> None:
+    """Tie phase names to the role/state requirements the plan advertises."""
+    meta = stage.meta_gradient
+    assert meta is not None
+    by_name = {objective.name: objective.objective for objective in objectives}
+    inner = by_name[meta.inner_objective]
+    feedback = by_name[meta.feedback_objective]
+    score = by_name[meta.meta_objective]
+    if getattr(inner, "meta_kind", None) != "sampled_teacher_treatment_nll":
+        raise CompileError(
+            f"{where} inner objective {meta.inner_objective!r} is not a "
+            "SampledTeacherTreatmentNLL"
+        )
+    if getattr(score, "meta_kind", None) != "meta_pseudo_label_score":
+        raise CompileError(
+            f"{where} meta objective {meta.meta_objective!r} is not a "
+            "MetaPseudoLabelScore"
+        )
+    inner_roles = {realisation.role for _, realisation in inner.requires}
+    if inner_roles != {meta.inner_role, meta.outer_role}:
+        raise CompileError(
+            f"{where} inner objective {meta.inner_objective!r} must read both "
+            f"roles {sorted((meta.inner_role, meta.outer_role))!r}, got "
+            f"{sorted(inner_roles)!r}"
+        )
+    if not feedback.requires or any(
+        realisation.role != meta.inner_role
+        or realisation.state != "post_update"
+        or realisation.params != "student"
+        for _, realisation in feedback.requires
+    ):
+        raise CompileError(
+            f"{where} feedback objective {meta.feedback_objective!r} must read "
+            f"only role={meta.inner_role}, state=post_update"
+        )
+    for name in (meta.inner_objective, meta.meta_objective, *meta.outer_objectives):
+        objective = by_name[name]
+        invalid = [
+            realisation
+            for _, realisation in objective.requires
+            if realisation.state != "pre_update" or realisation.params != "student"
+        ]
+        if invalid:
+            raise CompileError(
+                f"{where} objective {name!r} reads invalid meta-gradient "
+                f"states {[str(value) for value in invalid]!r}; only the "
+                "labelled feedback probe reads post_update"
+            )
+    for name in (meta.meta_objective, *meta.outer_objectives):
+        roles = {realisation.role for _, realisation in by_name[name].requires}
+        if roles != {meta.outer_role}:
+            raise CompileError(
+                f"{where} outer objective {name!r} must read only role "
+                f"{meta.outer_role!r}, got {sorted(roles)!r}"
+            )
 
 
 def _check_static_leakage(recipe: Recipe, stages: tuple[CompiledStage, ...]) -> None:
@@ -1153,6 +1259,59 @@ def _check_trainable(
         )
 
 
+def _check_role_trainables(
+    graph: ComponentGraph,
+    stage: Stage,
+    passes: tuple[ForwardPass, ...],
+    where: str,
+) -> None:
+    """Validate each meta-gradient role against only its own gradient paths."""
+    executed_by_role: dict[str, set[str]] = {}
+    for forward in passes:
+        executed_by_role.setdefault(forward.realisation.role, set()).update(
+            forward.components
+        )
+    trained_ports: dict[str, set[Port]] = {role.name: set() for role in stage.roles}
+    for weighted in stage.objectives:
+        detached = weighted.objective.detaches
+        for port, realisation in weighted.objective.requires:
+            if (port, realisation) not in detached:
+                trained_ports.setdefault(realisation.role, set()).add(port)
+    for role in stage.roles:
+        unknown = [name for name in role.trainable if name not in graph]
+        if unknown:
+            raise CompileError(
+                f"{where} role {role.name!r} declares unknown trainables "
+                f"{unknown!r}; graph components are {list(graph.names)!r}"
+            )
+        dead = [
+            name
+            for name in role.trainable
+            if name not in executed_by_role.get(role.name, set())
+        ]
+        if dead:
+            raise CompileError(
+                f"{where} role {role.name!r} trains {dead!r}, which none of "
+                "that role's planned passes execute"
+            )
+        reached = set(graph.subgraph_for(trained_ports.get(role.name, set())))
+        dead_by_detach = [name for name in role.trainable if name not in reached]
+        if dead_by_detach:
+            raise CompileError(
+                f"{where} role {role.name!r} trains {dead_by_detach!r}, but every "
+                "active objective reads those components only through a "
+                "stop-gradient"
+            )
+        decay = role.optimiser.weight_decay
+        if decay.applies and decay.components is not None:
+            outside = sorted(set(decay.components) - set(role.trainable))
+            if outside:
+                raise CompileError(
+                    f"{where} role {role.name!r} scopes weight decay to "
+                    f"{outside!r}, outside its trainables {list(role.trainable)!r}"
+                )
+
+
 def _check_weight_decay_scope(stage: Stage, where: str) -> None:
     """A component-scoped decay may name only components this stage trains."""
     decay = stage.optimiser.weight_decay
@@ -1214,8 +1373,23 @@ def _hyperparameters(
     """
     resolved: dict[str, Any] = {}
     owners: dict[str, str] = {}
+    role_names = tuple(
+        role.name
+        for stage in recipe.program
+        if stage.executor == "meta_gradient"
+        for role in stage.roles
+    )
     for component in recipe.system.components:
-        _merge_component(resolved, owners, component)
+        if role_names:
+            for role_name in role_names:
+                _merge_component(
+                    resolved,
+                    owners,
+                    component,
+                    label_override=f"{role_name}.{component.name}",
+                )
+        else:
+            _merge_component(resolved, owners, component)
     if recipe.data is not None:
         # Recipe-scoped, and the only owner at that scope: a split and the
         # standardisation fitted on it are one policy for the run, and a
@@ -1234,13 +1408,24 @@ def _hyperparameters(
                 stage_label,
                 scope=stage.name if scoped else None,
             )
-            _merge_owner(
-                resolved,
-                owners,
-                stage.optimiser,
-                f"the optimiser of {stage_label}",
-                scope=stage.name if scoped else None,
-            )
+            if stage.executor == "meta_gradient":
+                for parameter_role in stage.roles:
+                    _merge_owner(
+                        resolved,
+                        owners,
+                        parameter_role.optimiser,
+                        f"the optimiser of role {parameter_role.name!r} in "
+                        f"{stage_label}",
+                        scope=parameter_role.name,
+                    )
+            else:
+                _merge_owner(
+                    resolved,
+                    owners,
+                    stage.optimiser,
+                    f"the optimiser of {stage_label}",
+                    scope=stage.name if scoped else None,
+                )
         _merge_sampler(
             resolved,
             owners,
@@ -1271,7 +1456,13 @@ def _hyperparameters(
                 owners,
                 weighted.objective,
                 f"objective {weighted.name!r} in stage {stage.name!r}",
-                scope=f"{stage.name}.{weighted.name}" if scoped else None,
+                scope=(
+                    weighted.name
+                    if stage.executor == "meta_gradient"
+                    else f"{stage.name}.{weighted.name}"
+                    if scoped
+                    else None
+                ),
             )
     for key, value in _loss_hyperparameters(stages).items():
         _merge_value(resolved, owners, key, value, "the program's weighted terms")
@@ -1281,11 +1472,16 @@ def _hyperparameters(
 
 
 def _merge_component(
-    resolved: dict[str, Any], owners: dict[str, str], component: object
+    resolved: dict[str, Any],
+    owners: dict[str, str],
+    component: object,
+    *,
+    label_override: str | None = None,
 ) -> None:
     """Merge one component, namespacing every `architecture.*` binding."""
     name = getattr(component, "name", type(component).__name__)
-    label = f"component {name!r}"
+    binding_name = label_override or str(name)
+    label = f"component {binding_name!r}"
     for key, value in card_hyperparameters(component).items():
         if not key.startswith("architecture."):
             _merge_value(resolved, owners, key, value, label)
@@ -1302,11 +1498,12 @@ def _merge_component(
                 f"already set the scalar {existing!r}. Architecture bindings "
                 "are keyed by component so the plan cannot collapse modules."
             )
-        if name in values:
+        if binding_name in values:
             raise CompileError(
-                f"card key {key!r} has two architecture bindings for component {name!r}"
+                f"card key {key!r} has two architecture bindings for component "
+                f"{binding_name!r}"
             )
-        values[str(name)] = value
+        values[binding_name] = value
         owners.setdefault(key, label)
 
 

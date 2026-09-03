@@ -35,6 +35,7 @@ once over resolved rows, and ``cross_fit`` repeats the gradient fit per actual
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -42,16 +43,27 @@ from types import MappingProxyType
 from typing import Any
 
 import torch
-from torch import Tensor
+from torch import Tensor, nn
 
 from xty2.core.batch import XTYBatch
-from xty2.core.compile import CompiledRun, CompiledStage
+from xty2.core.compile import CompiledObjective, CompiledRun, CompiledStage
 from xty2.core.data import Dataset, ExternalBatches, TrainingPopulation
 from xty2.core.errors import ArtifactError, TrainingError
-from xty2.core.graph import ComponentGraph
-from xty2.core.loss import StatefulObjective, TrainContext, treatment_distribution
+from xty2.core.graph import ComponentGraph, State
+from xty2.core.loss import (
+    LossTerm,
+    StatefulObjective,
+    TrainContext,
+    apply_reduction,
+    treatment_distribution,
+)
 from xty2.core.recipe import ArrayFitAction, PseudoLabelAction
 from xty2.core.rows import resolve_rows
+from xty2.objectives.meta_pseudo_labels import (
+    MetaFeedbackCoefficient,
+    MetaPseudoLabelScore,
+    SampledTeacherTreatmentNLL,
+)
 from xty2.training.artifacts import Checkpoint, PseudoLabels, RunDirectory
 from xty2.training.loading import build_population, check_fitted_on, iterate
 from xty2.training.loss_mixer import (
@@ -140,6 +152,17 @@ class StepRecord:
     rows: int
     terms: tuple[ObjectiveLog, ...]
     gradients: GradientReport | None = None
+    role_lrs: Mapping[str, float] = field(default_factory=dict)
+    role_grad_norms: Mapping[str, float] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "terms", tuple(self.terms))
+        object.__setattr__(self, "role_lrs", MappingProxyType(dict(self.role_lrs)))
+        object.__setattr__(
+            self,
+            "role_grad_norms",
+            MappingProxyType(dict(self.role_grad_norms)),
+        )
 
     def as_json(self) -> dict[str, Any]:
         """The record as plain JSON-able data, for the run directory's log."""
@@ -173,6 +196,10 @@ class StepRecord:
                     for (left, right), value in self.gradients.cosines.items()
                 },
             }
+        if self.role_lrs:
+            record["role_lrs"] = dict(self.role_lrs)
+        if self.role_grad_norms:
+            record["role_grad_norms"] = dict(self.role_grad_norms)
         return record
 
 
@@ -211,6 +238,8 @@ class StageResult:
     records: tuple[StepRecord, ...]
     _checkpoint: Checkpoint | None = field(repr=False)
     fold_checkpoints: Mapping[int, Checkpoint] = field(default_factory=dict)
+    role_checkpoints: Mapping[str, Checkpoint] = field(default_factory=dict)
+    role_graphs: Mapping[str, ComponentGraph] = field(default_factory=dict, repr=False)
     pseudo_labels: PseudoLabels | None = None
     teacher: EMATeacher | None = None
     population: TrainingPopulation | None = None
@@ -225,6 +254,16 @@ class StageResult:
             self,
             "fold_checkpoints",
             MappingProxyType(dict(sorted(self.fold_checkpoints.items()))),
+        )
+        object.__setattr__(
+            self,
+            "role_checkpoints",
+            MappingProxyType(dict(sorted(self.role_checkpoints.items()))),
+        )
+        object.__setattr__(
+            self,
+            "role_graphs",
+            MappingProxyType(dict(sorted(self.role_graphs.items()))),
         )
         object.__setattr__(
             self, "objective_states", MappingProxyType(dict(self.objective_states))
@@ -250,8 +289,9 @@ class StageResult:
         if self._checkpoint is None:
             raise TrainingError(
                 f"stage {self.stage!r} has no single checkpoint. Cross-fit "
-                "stages expose fold_checkpoints and action-only stages expose "
-                "their pseudo-label artifact."
+                "stages expose fold_checkpoints, meta-gradient stages expose "
+                "role_checkpoints, and action-only stages expose their "
+                "pseudo-label artifact."
             )
         return self._checkpoint
 
@@ -272,6 +312,8 @@ class StageResult:
             lines.append(f"  {self._checkpoint.describe()}")
         for fold, checkpoint in sorted(self.fold_checkpoints.items()):
             lines.append(f"  fold {fold}: {checkpoint.describe()}")
+        for role, checkpoint in sorted(self.role_checkpoints.items()):
+            lines.append(f"  role {role}: {checkpoint.describe()}")
         if self.pseudo_labels is not None:
             lines.append(f"  {self.pseudo_labels.describe()}")
         return "\n".join(lines)
@@ -605,6 +647,11 @@ def run_stage(
     """
     compiled = _resolve(run, stage)
     if compiled.executor != "gradient":
+        if compiled.executor == "meta_gradient":
+            raise TrainingError(
+                f"stage {compiled.name!r} declares executor='meta_gradient'; "
+                "call run_meta_gradient and supply its role and hard-label seeds"
+            )
         raise TrainingError(
             f"stage {compiled.name!r} declares executor={compiled.executor!r}; "
             "call run_array_fit or run_cross_fit so the declared executor is "
@@ -641,6 +688,430 @@ def run_stage(
         selection=selection,
     )
     return replace(result, population=population)
+
+
+def run_meta_gradient(
+    run: CompiledRun,
+    stage: str | CompiledStage,
+    batches: BatchSource | Dataset,
+    *,
+    seed: int,
+    role_seeds: Mapping[str, int],
+    hard_label_seed: int,
+    run_dir: RunDirectory | None = None,
+) -> StageResult:
+    """Run one reviewed, atomic one-inner-step/one-outer-step stage.
+
+    Role initialisation and categorical sampling have explicit seeds because
+    the MPL card pairs those streams independently of batch/view RNG.  The
+    executor owns both graph copies and both optimiser states; neither can be
+    aliased by a caller.
+    """
+    compiled = _resolve(run, stage)
+    if compiled.executor != "meta_gradient":
+        raise TrainingError(
+            f"stage {compiled.name!r} declares executor={compiled.executor!r}, "
+            "not 'meta_gradient'"
+        )
+    meta = compiled.stage.meta_gradient
+    if meta is None:  # pragma: no cover - Stage rejects this
+        raise TrainingError(f"meta-gradient stage {compiled.name!r} has no contract")
+    supplied = dict(role_seeds)
+    expected = {role.name for role in compiled.roles}
+    if set(supplied) != expected:
+        raise TrainingError(
+            f"meta-gradient stage {compiled.name!r} needs role seeds for "
+            f"{sorted(expected)!r}, got {sorted(supplied)!r}"
+        )
+    if any(type(value) is not int for value in supplied.values()):
+        raise TrainingError("meta-gradient role seeds must be integers")
+    if type(hard_label_seed) is not int:
+        raise TrainingError("hard_label_seed must be an integer")
+    source, population = _feed(run, compiled, batches, seed=seed)
+    role_graphs = {
+        role.name: _initialised_role_graph(run.graph, supplied[role.name])
+        for role in compiled.roles
+    }
+    parameter_ids = [
+        {id(parameter) for parameter in graph.parameters()}
+        for graph in role_graphs.values()
+    ]
+    if len(parameter_ids) != 2 or parameter_ids[0] & parameter_ids[1]:
+        raise TrainingError("meta-gradient role graphs share Parameter objects")
+    result = _run_meta_gradient_stage(
+        run,
+        compiled,
+        source,
+        role_graphs=role_graphs,
+        seed=seed,
+        hard_label_seed=hard_label_seed,
+        population=population,
+        run_dir=run_dir,
+    )
+    return replace(result, population=population)
+
+
+def _initialised_role_graph(source: ComponentGraph, seed: int) -> ComponentGraph:
+    """Clone one declaration and independently replay its declared init."""
+    graph = copy.deepcopy(source)
+    torch.manual_seed(seed)
+    for component in graph.components:
+        initialisation = getattr(component, "initialisation", None)
+        linear_layers = [
+            module for module in component.modules() if isinstance(module, nn.Linear)
+        ]
+        if not linear_layers:
+            continue
+        if initialisation == "normal std=0.1/sqrt(fan_in), bias=0":
+            for layer in linear_layers:
+                nn.init.normal_(
+                    layer.weight,
+                    mean=0.0,
+                    std=0.1 / (layer.in_features**0.5),
+                )
+                if layer.bias is not None:
+                    nn.init.zeros_(layer.bias)
+            continue
+        if initialisation == "torch Linear default Kaiming-uniform":
+            for layer in linear_layers:
+                layer.reset_parameters()
+            continue
+        raise TrainingError(
+            f"component {component.name!r} cannot initialise an independent "
+            f"parameter role from declared policy {initialisation!r}"
+        )
+    graph.zero_grad(set_to_none=True)
+    return graph
+
+
+def _run_meta_gradient_stage(
+    run: CompiledRun,
+    compiled: CompiledStage,
+    batches: BatchSource,
+    *,
+    role_graphs: Mapping[str, ComponentGraph],
+    seed: int,
+    hard_label_seed: int,
+    population: TrainingPopulation | None,
+    run_dir: RunDirectory | None,
+) -> StageResult:
+    if compiled.steps > MAX_STAGE_STEPS:
+        raise TrainingError(
+            f"stage {compiled.name!r} runs {compiled.steps} steps, beyond the "
+            f"{MAX_STAGE_STEPS} collision-free view-key budget"
+        )
+    meta = compiled.stage.meta_gradient
+    assert meta is not None
+    feedback = meta.feedback
+    if not isinstance(feedback, MetaFeedbackCoefficient):
+        raise TrainingError(
+            "the shipped meta_gradient executor currently implements the "
+            "reviewed MetaFeedbackCoefficient contract only"
+        )
+    by_role = {role.name: role for role in compiled.roles}
+    inner_role = by_role[meta.inner_role]
+    outer_role = by_role[meta.outer_role]
+    inner_graph = role_graphs[meta.inner_role]
+    outer_graph = role_graphs[meta.outer_role]
+    inner_objective = _compiled_objective(compiled, meta.inner_objective)
+    feedback_objective = _compiled_objective(compiled, meta.feedback_objective)
+    score_objective = _compiled_objective(compiled, meta.meta_objective)
+    if not isinstance(inner_objective.objective, SampledTeacherTreatmentNLL):
+        raise TrainingError("meta-gradient inner objective has the wrong contract")
+    if not isinstance(score_objective.objective, MetaPseudoLabelScore):
+        raise TrainingError("meta-gradient score objective has the wrong contract")
+
+    records: list[StepRecord] = []
+    seen: list[Tensor] = []
+    baseline = feedback.new_state()
+    sample_generator = torch.Generator(device=next(inner_graph.parameters()).device)
+    sample_generator.manual_seed(hard_label_seed)
+    source = iter(batches)
+    plan_path = run_dir.write_plan(run.plan) if run_dir is not None else None
+
+    from contextlib import ExitStack
+
+    with ExitStack() as stack:
+        inner_named = stack.enter_context(
+            trainable_only(inner_graph, inner_role.trainable)
+        )
+        outer_named = stack.enter_context(
+            trainable_only(outer_graph, outer_role.trainable)
+        )
+        inner_parameters = tuple(parameter for _, parameter in inner_named)
+        outer_parameters = tuple(parameter for _, parameter in outer_named)
+        inner_optimiser = inner_role.optimiser.build(inner_named)
+        outer_optimiser = outer_role.optimiser.build(outer_named)
+        inner_graph.train()
+        outer_graph.train()
+        torch.manual_seed(seed)
+        for step in range(compiled.steps):
+            batch = _next_batch(source, step, compiled)
+            run.recipe.schema.validate_batch(batch)
+            views = _meta_views(
+                run, compiled, batch, rng_key=seed + step, population=population
+            )
+            pre = _meta_state(
+                run, compiled, views, role_graphs, within_step="pre_update"
+            )
+            ctx = TrainContext(
+                global_step=step, schema=run.recipe.schema, stage=compiled.name
+            )
+            inner_rows = resolve_rows(batch, *inner_objective.rows)
+            sampled = inner_objective.objective.sample(
+                pre, inner_rows, generator=sample_generator
+            )
+            inner_term = inner_objective.objective.sampled_loss(
+                pre, inner_rows, sampled
+            )
+            inner_contribution, inner_log = _meta_log(
+                inner_objective, inner_term, batch, step
+            )
+            inner_optimiser.zero_grad(set_to_none=True)
+            if inner_contribution.requires_grad:
+                inner_contribution.backward()  # type: ignore[no-untyped-call]
+            pseudo_gradients = tuple(
+                None if parameter.grad is None else parameter.grad.detach().clone()
+                for parameter in inner_parameters
+            )
+            inner_grad_norm = inner_role.optimiser.clipping.apply(inner_parameters)
+            inner_lr = _set_learning_rate(
+                inner_optimiser, inner_role.optimiser.lr_at(step)
+            )
+            if inner_contribution.requires_grad:
+                inner_optimiser.step()
+
+            post = _meta_state(
+                run, compiled, views, role_graphs, within_step="post_update"
+            )
+            feedback_rows = resolve_rows(batch, *feedback_objective.rows)
+            feedback_term = feedback_objective.objective.compute(
+                post, batch, feedback_rows, ctx
+            )
+            labelled_gradients = torch.autograd.grad(
+                feedback_term.value,
+                inner_parameters,
+                allow_unused=True,
+            )
+            h_raw, h, baseline_value = feedback.compute(
+                pseudo_gradients, tuple(labelled_gradients), baseline
+            )
+            inner_optimiser.zero_grad(set_to_none=True)
+            _, feedback_log = _meta_log(feedback_objective, feedback_term, batch, step)
+
+            score_rows = resolve_rows(batch, *score_objective.rows)
+            score_term = score_objective.objective.score_loss(pre, score_rows, sampled)
+            score_base = apply_reduction(
+                score_term, score_objective.reduction, batch_size=batch.batch_size
+            ) * score_objective.weight(step)
+            score_contribution = h * score_base
+            teacher_total = score_contribution
+            score_diagnostics = {
+                "h_raw": float(h_raw),
+                "h": float(h),
+                "baseline": baseline_value,
+                "sampled_label_accuracy": float(
+                    (sampled == batch.t.index_select(0, score_rows)).float().mean()
+                ),
+                "sampled_label_entropy": _label_entropy(
+                    sampled, run.recipe.schema.treatment_cardinality
+                ),
+            }
+            score_log = _objective_log(
+                score_objective,
+                score_term,
+                batch,
+                step,
+                weighted=score_contribution,
+                diagnostics=score_diagnostics,
+            )
+            outer_logs: list[ObjectiveLog] = []
+            for name in meta.outer_objectives:
+                objective = _compiled_objective(compiled, name)
+                rows = resolve_rows(batch, *objective.rows)
+                term = objective.objective.compute(pre, batch, rows, ctx)
+                contribution, log = _meta_log(objective, term, batch, step)
+                teacher_total = teacher_total + contribution
+                outer_logs.append(log)
+
+            outer_optimiser.zero_grad(set_to_none=True)
+            if teacher_total.requires_grad:
+                teacher_total.backward()  # type: ignore[no-untyped-call]
+            outer_grad_norm = outer_role.optimiser.clipping.apply(outer_parameters)
+            outer_lr = _set_learning_rate(
+                outer_optimiser, outer_role.optimiser.lr_at(step)
+            )
+            if teacher_total.requires_grad:
+                outer_optimiser.step()
+            records.append(
+                StepRecord(
+                    step=step,
+                    lr=outer_lr,
+                    total=float(teacher_total.detach()),
+                    grad_norm=outer_grad_norm,
+                    rows=batch.batch_size,
+                    terms=(inner_log, feedback_log, score_log, *outer_logs),
+                    role_lrs={meta.inner_role: inner_lr, meta.outer_role: outer_lr},
+                    role_grad_norms={
+                        meta.inner_role: inner_grad_norm,
+                        meta.outer_role: outer_grad_norm,
+                    },
+                )
+            )
+            seen.append(batch.row_id.detach().clone())
+
+        role_checkpoints = {
+            role.name: _emit_role_checkpoint(
+                run,
+                compiled,
+                role_graphs[role.name],
+                role.trainable,
+                seen,
+                seed=seed,
+            )
+            for role in compiled.roles
+        }
+    paths: dict[str, str] = {}
+    if run_dir is not None and plan_path is not None:
+        paths["plan"] = str(plan_path)
+        for role, checkpoint in role_checkpoints.items():
+            paths[f"checkpoint.{role}"] = str(
+                run_dir.write_checkpoint(checkpoint, role=role)
+            )
+        paths["log"] = str(
+            run_dir.write_log(compiled.name, [record.as_json() for record in records])
+        )
+    return StageResult(
+        stage=compiled.name,
+        recipe=run.recipe.name,
+        seed=seed,
+        records=tuple(records),
+        _checkpoint=None,
+        role_checkpoints=role_checkpoints,
+        role_graphs=role_graphs,
+        objective_states={feedback.name: baseline},
+        paths=paths,
+    )
+
+
+def _compiled_objective(compiled: CompiledStage, name: str) -> CompiledObjective:
+    for objective in compiled.objectives:
+        if objective.name == name:
+            return objective
+    raise TrainingError(f"meta-gradient stage {compiled.name!r} has no {name!r}")
+
+
+def _label_entropy(labels: Tensor, classes: int) -> float:
+    counts = torch.bincount(labels, minlength=classes).to(dtype=torch.float32)
+    probabilities = counts / counts.sum()
+    positive = probabilities > 0
+    return float(-(probabilities[positive] * probabilities[positive].log()).sum())
+
+
+def _meta_views(
+    run: CompiledRun,
+    compiled: CompiledStage,
+    batch: XTYBatch,
+    *,
+    rng_key: int,
+    population: TrainingPopulation | None,
+) -> Mapping[tuple[str, int], XTYBatch]:
+    views: dict[tuple[str, int], XTYBatch] = {("identity", 0): batch}
+    for forward in compiled.passes:
+        key = (forward.realisation.view, forward.realisation.draw)
+        if key in views:
+            continue
+        views[key] = run.recipe.view(key[0]).apply(
+            batch,
+            run.recipe.schema,
+            rng_key=rng_key,
+            draw=key[1],
+            population=population,
+        )
+    return views
+
+
+def _meta_state(
+    run: CompiledRun,
+    compiled: CompiledStage,
+    views: Mapping[tuple[str, int], XTYBatch],
+    role_graphs: Mapping[str, ComponentGraph],
+    *,
+    within_step: str,
+) -> State:
+    values = {}
+    for forward in compiled.passes:
+        realisation = forward.realisation
+        if realisation.state != within_step:
+            continue
+        graph = role_graphs[realisation.role]
+        viewed = views[(realisation.view, realisation.draw)]
+        values[realisation] = graph.evaluate(
+            viewed, schema=run.recipe.schema, only=forward.components
+        )
+    return State(values)
+
+
+def _meta_log(
+    objective: CompiledObjective,
+    term: LossTerm,
+    batch: XTYBatch,
+    step: int,
+) -> tuple[Tensor, ObjectiveLog]:
+    contribution = apply_reduction(
+        term, objective.reduction, batch_size=batch.batch_size
+    ) * objective.weight(step)
+    return contribution, _objective_log(
+        objective, term, batch, step, weighted=contribution
+    )
+
+
+def _objective_log(
+    objective: CompiledObjective,
+    term: LossTerm,
+    batch: XTYBatch,
+    step: int,
+    *,
+    weighted: Tensor,
+    diagnostics: Mapping[str, float] | None = None,
+) -> ObjectiveLog:
+    merged = dict(term.diagnostics)
+    merged.update(diagnostics or {})
+    return ObjectiveLog(
+        name=objective.name,
+        rows=objective.rows,
+        reduction=objective.reduction,
+        value=float(term.value.detach()),
+        weight=objective.weight(step),
+        weighted=float(weighted.detach()),
+        n=term.n,
+        coverage=term.n / batch.batch_size,
+        diagnostics=merged,
+    )
+
+
+def _emit_role_checkpoint(
+    run: CompiledRun,
+    stage: CompiledStage,
+    graph: ComponentGraph,
+    components: Sequence[str],
+    row_ids: Sequence[Tensor],
+    *,
+    seed: int,
+) -> Checkpoint:
+    seen = torch.cat([rows.reshape(-1) for rows in row_ids])
+    return Checkpoint._issue(
+        recipe=run.recipe.name,
+        stage=stage.name,
+        fold=None,
+        trained_on_row_ids=torch.unique(seen.cpu()),
+        parameters=dict(_component_parameters(graph, components)),
+        buffers=dict(_component_buffers(graph, components)),
+        components=tuple(components),
+        steps=stage.steps,
+        seed=seed,
+        plan_digest=run.plan.digest,
+    )
 
 
 def run_array_fit(
@@ -823,7 +1294,7 @@ def run_program(
                 seed=stage_seed,
                 run_dir=run_dir,
             )
-        else:
+        elif compiled.executor == "cross_fit":
             result = _run_cross_fit(
                 run,
                 compiled,
@@ -832,6 +1303,12 @@ def run_program(
                 run_dir=run_dir,
                 probe=probe_map.get(compiled.name),
                 initialise_from=source_checkpoint,
+            )
+        else:
+            raise TrainingError(
+                f"program stage {compiled.name!r} uses meta_gradient; execute "
+                "it with run_meta_gradient so its role and hard-label seeds "
+                "are supplied explicitly"
             )
         result = replace(result, population=population)
         results.append(result)
@@ -1645,6 +2122,7 @@ __all__ = [
     "StepRecord",
     "run_array_fit",
     "run_cross_fit",
+    "run_meta_gradient",
     "run_program",
     "run_stage",
     "trainable_only",

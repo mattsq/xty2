@@ -30,6 +30,12 @@ from xty2.recipes.freematch import (
     freematch,
 )
 from xty2.recipes.mean_teacher import mean_teacher
+from xty2.recipes.meta_pseudo_labels import (
+    INNER_ROLE,
+    META_FEEDBACK,
+    OUTER_ROLE,
+    meta_pseudo_labels,
+)
 from xty2.recipes.paws import (
     LARGE_CORRUPTION_RATE,
     MISSING_ANCHORS,
@@ -85,10 +91,13 @@ __all__ = [
     "FIXMATCH_STEPS",
     "FLEXMATCH_STEPS",
     "FREEMATCH_STEPS",
+    "INNER_ROLE",
     "JOINT_FIT_STEPS",
     "LARGE_CORRUPTION_RATE",
+    "META_FEEDBACK",
     "MISSING_ANCHORS",
     "OUTCOME_WIDTHS",
+    "OUTER_ROLE",
     "PAWS_SAMPLER",
     "POSTERIOR_WIDTHS",
     "PRETRAIN_STEPS",
@@ -119,6 +128,7 @@ __all__ = [
     "flexmatch",
     "freematch",
     "mean_teacher",
+    "meta_pseudo_labels",
     "paws",
     "scarf",
     "simmatch",

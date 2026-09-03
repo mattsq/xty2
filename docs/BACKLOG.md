@@ -43,10 +43,10 @@ The variational latent treatment is also implemented and smoke-passing;
 cards before proposing a close relative; their active ledgers supersede the
 historical notes once carried here.
 
-Meta Pseudo Labels + UDA now has a draft research packet at
-`docs/recipes/meta_pseudo_labels.md`. It specifies the hard-label one-step
-estimator and the proposed meta-gradient executor boundary; stop for review
-before implementation.
+Meta Pseudo Labels + UDA is implemented and smoke-passing. Its authoritative
+card at `docs/recipes/meta_pseudo_labels.md` specifies the hard-label one-step
+estimator, the bounded `meta_gradient` executor boundary, and the remaining
+ten-seed Tier 2 study.
 
 ### Recommended stress-test sequence
 
@@ -151,11 +151,10 @@ does not discharge or depend on the `batch-row-repetition` ledger item.
 ### 2.11 Meta Pseudo Labels + UDA ★
 
 The teacher update depends on how a student trained on teacher labels performs
-on labelled data. If this cannot be represented by ordinary stages, it is
-evidence for the §15.3 meta-gradient boundary, not permission to hide a loop in
-a recipe function. `docs/recipes/meta_pseudo_labels.md` is the draft card and
-is authoritative for the selected variant, proposed executor shape, and
-predeclared evidence.
+on labelled data. The bounded `meta_gradient` executor represents that atomic
+inner/outer update explicitly rather than hiding a loop in a recipe function.
+`docs/recipes/meta_pseudo_labels.md` is authoritative for the selected variant,
+executor shape, and predeclared evidence.
 
 ### 2.12 SelfMatch, SimCLRv2 and Noisy Student
 

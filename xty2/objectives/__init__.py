@@ -59,6 +59,12 @@ from xty2.objectives.marginal import (
     GradPath,
     MissingTreatmentMarginalNLL,
 )
+from xty2.objectives.meta_pseudo_labels import (
+    MetaFeedbackCoefficient,
+    MetaFeedbackState,
+    MetaPseudoLabelScore,
+    SampledTeacherTreatmentNLL,
+)
 from xty2.objectives.pseudo_label import (
     PseudoLabelStopGrad,
     PseudoLabelTreatmentNLL,
@@ -118,6 +124,9 @@ __all__ = [
     "MemorySmoothedLabelGraph",
     "MemorySmoothedLabels",
     "MemorySmoothedPseudoLabelTreatmentNLL",
+    "MetaFeedbackCoefficient",
+    "MetaFeedbackState",
+    "MetaPseudoLabelScore",
     "MissingTreatmentMarginalNLL",
     "ObservedOutcomeMSE",
     "ObservedOutcomeNLL",
@@ -126,6 +135,7 @@ __all__ = [
     "PseudoLabelGraphContrastive",
     "PseudoLabelStopGrad",
     "PseudoLabelTreatmentNLL",
+    "SampledTeacherTreatmentNLL",
     "SelfAdaptiveFairness",
     "SelfAdaptiveThreshold",
     "SelfAdaptiveThresholdTreatmentNLL",

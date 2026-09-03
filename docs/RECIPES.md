@@ -21,7 +21,7 @@ its evidence. The status line inside each card is authoritative.
 | [`comatch.md`](recipes/comatch.md) | `comatch` | memory-smoothed pseudo-labels and a pseudo-label-graph contrastive term |
 | [`simmatch.md`](recipes/simmatch.md) | `simmatch` | labelled-instance memory and bidirectional semantic-instance pseudo-label propagation |
 | [`variational_treatment.md`](recipes/variational_treatment.md) | `variational_treatment` | amortised treatment posterior and discrete-latent ELBO |
-| [`meta_pseudo_labels.md`](recipes/meta_pseudo_labels.md) | none yet (`draft`) | one-step labelled-feedback meta-gradient from student to an independently trained UDA teacher |
+| [`meta_pseudo_labels.md`](recipes/meta_pseudo_labels.md) | `meta_pseudo_labels` | one-step labelled-feedback meta-gradient from student to an independently trained UDA teacher |
 
 A **Recipe** cell names a callable in `xty2/recipes/`; `none yet (draft)` marks
 a card that is still stopped for review, so no such name exists.

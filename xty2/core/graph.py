@@ -49,6 +49,7 @@ IDENTITY_VIEW: Final = "identity"
 """The view that is the batch itself. Real views arrive with `ViewSpec` (§5)."""
 
 Params = Literal["student", "teacher"]
+WithinStepState = Literal["pre_update", "post_update"]
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +73,8 @@ class Realisation:
     view: str = IDENTITY_VIEW
     params: Params = "student"
     draw: int = 0
+    role: str = "default"
+    state: WithinStepState = "pre_update"
     """Which independent sample of `view` this is (`DESIGN.md` §2.1).
 
     A view is a *distribution* over batches, and a method may need two samples
@@ -109,12 +112,26 @@ class Realisation:
                 "identity view is the batch itself — there is nothing to draw "
                 "a second sample of (DESIGN.md §2.1)."
             )
+        role = require_str("Realisation.role", self.role, error=GraphError)
+        if not role.isidentifier():
+            raise GraphError(
+                f"Realisation.role must be a Python identifier, got {role!r}. "
+                "Roles name independently owned parameter sets in the plan."
+            )
+        if self.state not in ("pre_update", "post_update"):
+            raise GraphError(
+                "Realisation.state must be 'pre_update' or 'post_update', got "
+                f"{self.state!r}. The axis names a position inside one explicit "
+                "meta-gradient step."
+            )
 
     def __str__(self) -> str:
         # Draw 0 is omitted so that every plan written before this axis existed
         # renders and hashes exactly as it did.
         draw = f" draw={self.draw}" if self.draw else ""
-        return f"view={self.view}{draw} params={self.params}"
+        role = f" role={self.role}" if self.role != "default" else ""
+        state = f" state={self.state}" if self.state != "pre_update" else ""
+        return f"view={self.view}{draw} params={self.params}{role}{state}"
 
 
 DEFAULT: Final = Realisation()
