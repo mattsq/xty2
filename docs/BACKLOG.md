@@ -111,14 +111,19 @@ before proposing a close relative, and read its §5.3 before proposing a shared
 thresholding abstraction — it answers the question `freematch.md` §5.3 left
 open. SequenceMatch remains the next threshold-policy comparison after it.
 
-Its ten-seed result is the reason to read §6 before borrowing the mechanism:
-the recipe beats the constant gate on held-out treatment NLL and raises the
-paper's quantity `f(p)` from 0.825 to 0.929, and it misses the card's own
-quality guardrail — the weighted pseudo-label impurity exceeds 1.25x the
-gate's retained-label impurity by 0.0088 ± 0.0018. That is the
-quantity-quality trade-off the paper claims to remove, declining to be removed
-on this fixture, and it was predeclared as a failure rather than discovered as
-one.
+Its first ten-seed result is still the reason to read §6 before borrowing the
+mechanism: on the balanced binary fixture the recipe beat the constant gate and
+raised quantity, but missed the predeclared gate-relative quality bound. A
+fidelity audit then found that target could not validate the whole published
+method because it made Uniform Alignment nearly inert and never ran the paper's
+no-UA ablation. The replacement `K = 4` long-tailed-to-balanced protocol does:
+UA beats no-UA on balanced EMA macro NLL (`0.936 ± 0.018`), SoftMatch beats the
+constant gate (`0.757 ± 0.034`), quantity rises by `0.210 ± 0.011`, and the
+Gaussian reduces its own model's unweighted pseudo-label impurity by
+`0.0310 ± 0.0039`. The card remains conservatively `deviating` because its
+predeclared *terminal* class-weight-dispersion reduction is positive but within
+its own noise (`0.0075 ± 0.0088`). Both result rows remain in the ledger; the
+second establishes that eq. (8) is active rather than erasing the first miss.
 
 ### 2.6 DoubleMatch
 

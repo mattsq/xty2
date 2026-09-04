@@ -17,6 +17,10 @@
 > an unrun Tier 1 direction. The first result remains recorded; §6 now
 > predeclares a replacement `K = 4` long-tailed-to-balanced target that makes
 > UA versus no-UA load-bearing rather than quietly treating eq. (8) as optional.
+> That second ten-seed result also remains conservatively `deviating`: seven of
+> eight requirements pass, including UA over no-UA and SoftMatch over the gate,
+> while the terminal class-weight-dispersion reduction is positive but smaller
+> than its own standard error. The two ledger rows preserve both questions.
 >
 > It is also the card `freematch.md` §5.3 named in advance. That section asked
 > whether the three gated pseudo-label objectives should collapse into one
@@ -519,14 +523,19 @@ one that would settle it. Three things changed:
 
 ### Tier 2 outcome
 
-On 2026-09-04, commit `7e55fdc8e921` produced a `deviating` result: This is the predeclared project-local SoftMatch mechanism target: whether continuous Gaussian weights improve missing-treatment classification while raising weighted quantity without losing the declared pseudo-label quality. It is not an image benchmark. Failed target(s): weighted_impurity_vs_1.25x_gate was 0.00881344 +/- 0.00175 against mean <= 0, by at least one stderr.
+On 2026-09-04, commit `06650170df38` produced a `deviating` result: This revised project-local target exercises both named SoftMatch contributions. The skewed K=4 training marginal gives Uniform Alignment work to do; balanced held-out macro NLL asks whether that correction generalises rather than merely fitting the skew. The class-weight diagnostic is appendix A.7's before/after-UA measurement on the same predictions. Within noise of the target: class_weight_CV_reduction_from_UA was 0.00753036 +/- 0.00879 against mean >= 0, by at least one stderr, inside its target by 0.00753 — less than its own standard error, so the run does not distinguish it from a miss.
 
-That result is valid for the original protocol and its tolerance has not been
-changed. It is not sufficient evidence for the complete paper method: its
-balanced `K = 2` fixture made UA nearly the identity and the `no_ua` arm never
-ran. The revised protocol below changes the evaluation question rather than
-widening the failed 1.25x bound. Its digest, metrics and result will be a second
-ledger row; the first row remains the audit trail for the superseded target.
+The required end-task comparisons do distinguish the method: UA/no-UA EMA
+macro NLL is `0.935682 +/- 0.0181`, and SoftMatch/constant is
+`0.756809 +/- 0.0341`. Quantity rises by `0.210099 +/- 0.0110`, and weighting
+reduces the same model's pseudo-label impurity by `0.0309795 +/- 0.00390`.
+Those results reverse the original target's central evidentiary weakness: eq.
+(8) is now exercised and ablated across ten paired seeds. They do not license
+changing the terminal CV requirement after seeing it. Appendix A.7 visualises
+class-wise balancing at the beginning of training, whereas this target chose a
+harder terminal reading; the mismatch explains why this diagnostic is not read
+as an equation-level implementation fault, but its predeclared uncertainty
+still keeps the card `deviating`.
 
 ## 6. Reproduction target
 
@@ -656,6 +665,7 @@ is dropped because it does not test either named SoftMatch contribution.
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
 | 2026-09-04 | `7e55fdc8e921` | ema_treatment_NLL_ratio<br>trained_treatment_NLL_ratio<br>terminal_quantity_advantage<br>weighted_impurity_vs_1.25x_gate<br>weighted_pseudo_label_impurity<br>held_out_outcome_NLL_ratio<br>terminal_mu_hat<br>terminal_sigma_squared | 0.923445 +/- 0.00715<br>0.937315 +/- 0.0118<br>0.104669 +/- 0.00945<br>0.00881344 +/- 0.00175<br>0.0754915 +/- 0.00248<br>0.999709 +/- 9.5e-05<br>0.916051 +/- 0.00281<br>0.0598245 +/- 0.000441 | no |
+| 2026-09-04 | `06650170df38` | ua_vs_no_ua_ema_macro_NLL_ratio<br>softmatch_vs_constant_ema_macro_NLL_ratio<br>class_weight_CV_reduction_from_UA<br>terminal_quantity_advantage<br>weighted_impurity_advantage<br>held_out_outcome_NLL_ratio<br>terminal_mu_hat<br>terminal_sigma_squared | 0.935682 +/- 0.0181<br>0.756809 +/- 0.0341<br>0.00753036 +/- 0.00879<br>0.210099 +/- 0.011<br>0.0309795 +/- 0.0039<br>1.0007 +/- 0.000677<br>0.840882 +/- 0.00304<br>0.0703225 +/- 0.000666 | no |
 
 ## 7. Unknowns
 
