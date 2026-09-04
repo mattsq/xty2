@@ -1,15 +1,14 @@
 # Recipe spec card: softmatch
 
-**Status:** `draft`
+**Status:** `smoke-passing`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
 > §6 only for benchmark/reporting work.
 
-> Written card-first, before any code, per `CLAUDE.md` rule 1. **No recipe,
-> objective or test exists yet**: this card is stopped for review, and
-> `BACKLOG.md` §2.5 names SoftMatch as the next threshold-policy comparison
-> after `fixmatch`, `flexmatch` and `freematch`.
+> Written card-first, before any code, per `CLAUDE.md` rule 1. The reviewed
+> card now has a recipe, objective, Tier 0 invariants, a Tier 1 paired fit and
+> a wired Tier 2 runner. The ten-seed Tier 2 result remains outstanding.
 >
 > It is also the card `freematch.md` §5.3 named in advance. That section asked
 > whether the three gated pseudo-label objectives should collapse into one
@@ -28,20 +27,14 @@
 | Paper | [SoftMatch: Addressing the Quantity-Quality Trade-off in Semi-supervised Learning](https://arxiv.org/abs/2301.10921) |
 | Authors, year | Hao Chen, Ran Tao, Yue Fan, Yidong Wang, Jindong Wang, Bernt Schiele, Xing Xie, Bhiksha Raj, Marios Savvides; 2023 |
 | DOI / arXiv | [arXiv:2301.10921](https://arxiv.org/abs/2301.10921); ICLR 2023 |
-| Version used | The ar5iv rendering of arXiv:2301.10921, fetched 2026-09-04. The rendering carries no version label and one was **not** verified, so this is recorded as what it is. §2.1 gives the framework and eqs. (1), (2); §2.2 gives definitions 2.1–2.3, eqs. (3), (4) and table 1; §3.1 gives eqs. (5)–(7); §3.2 gives UA and eqs. (8), (9); §4.1 the classic-image protocol; §4.5 the ablations; appendix A.1 the quantity/quality derivations; appendix A.2 Algorithm 1; appendix A.3.1 table 6; appendix A.5 tables 10–12. |
-| Reference implementation | [`Hhhhhhao/SoftMatch`](https://github.com/Hhhhhhao/SoftMatch) and the `SoftMatch` algorithm inside [`microsoft/Semi-supervised-learning`](https://github.com/microsoft/Semi-supervised-learning) (USB), the authors' own codebases — **not consulted**. This session's GitHub access is scoped to `mattsq/xty2`, and `flexmatch.md` and `freematch.md` set the precedent of not routing around that scope by a second-hand reading. Every row below is sourced from the paper, and Algorithm 1 is the source wherever the prose leaves a procedural gap. |
-| Reference impl. runnable? | Not attempted. |
+| Version used | [arXiv:2301.10921v2](https://arxiv.org/abs/2301.10921v2), revised 2023-03-15 and fetched 2026-09-04. §2.1 gives the framework and eqs. (1), (2); §2.2 gives definitions 2.1–2.3, eqs. (3), (4) and table 1; §3.1 gives eqs. (5)–(7); §3.2 gives UA and eqs. (8), (9); §4.1 the classic-image protocol; §4.5 the ablations; appendix A.1 the quantity/quality derivations; appendix A.2 Algorithm 1; appendix A.3.1 table 6; appendix A.5 tables 10–12. |
+| Reference implementation | The authors' paper-era [TorchSSL SoftMatch at `03193a1`](https://github.com/TorchSSL/TorchSSL/blob/03193a1b7883727db1ce9c092e083091e18aedbb/models/softmatch/softmatch.py), used for the paper's classic-image and ablation experiments, and [USB SoftMatch at `5c9ee21`](https://github.com/microsoft/Semi-supervised-learning/blob/5c9ee2148ab1a30e63fa05414f12033c6952d1fc/semilearn/algorithms/softmatch/softmatch.py), the first post-v2 SoftMatch revision. The redirect repository is [`Hhhhhhao/SoftMatch`](https://github.com/Hhhhhhao/SoftMatch). §7 records the two code paths' disagreements instead of silently selecting one. |
+| Reference impl. runnable? | Not run end-to-end: both historical stacks require their image datasets and environments. The pinned SoftMatch, weighting, alignment, optimiser and schedule sources were inspected directly. |
 
-That row costs this card three specific things and §7 says where: whether
-"divide the estimated variance `sigma_t` by 4" divides the variance or the
-standard deviation (§7.2), what momentum and initialisation the Uniform
-Alignment expectation uses and when in the step it is updated (§7.3, §7.4), and
-whether `mu_b`/`sigma_b` are taken over aligned or unaligned confidence
-(§7.6 — Algorithm 1 is internally explicit and the reading is followed, but a
-reference would confirm it is not a transcription slip). `PRIOR_ART.md` §1.5
-already records a second-hand structural observation about SemiLearn's
-SoftMatch hook — that its state has to be hand-registered for checkpointing —
-and nothing in this card depends on it.
+The paper is authoritative for the method. Where it is explicit, this card
+follows it even if one code path differs. Where it is ambiguous, the
+paper-era TorchSSL path used for §4.1 is the tie-breaker; USB is corroborating
+evidence and its disagreements are recorded in §7.
 
 ## 2. Estimand and claim
 
@@ -79,12 +72,16 @@ and nothing in this card depends on it.
   structural and are stated here rather than left to be discovered:
 
   1. **Every row trains at every step, and at `K = 2` the first step trains
-     every row at full weight.** Eq. (5) is strictly positive everywhere, so
+     every row at almost full weight.** Eq. (5) is strictly positive everywhere, so
      unlike every earlier card in this family SoftMatch never rejects a row —
      the paper's own bound is `f(p) >= lambda_max / 2` (appendix A.1). Worse
      for a two-class fixture: `mu_hat_0 = 1/C = 0.5` (§3.1) and a two-class
-     softmax has `max(p) >= 0.5` for every row, so at step 0 every row is on
-     the flat side of eq. (9) and receives exactly `lambda_max`. FixMatch's
+     softmax has `max(p) >= 0.5` for every row. Algorithm 1 and both pinned
+     implementations fold the first batch into the EMAs before weighting it,
+     so `mu_hat_1` is slightly above `0.5`: rows below that updated mean receive
+     weights just below `lambda_max`, while the initial variance near `1.0`
+     makes the difference tiny. The earlier draft incorrectly skipped that
+     first update and claimed an exactly flat first step. FixMatch's
      ungated warm-up (`fixmatch.md` §2) and FreeMatch's (`freematch.md` §2)
      are phases; SoftMatch's is the design. The consequence is that the
      Bayes-label flip rate of the strong view is charged against `p(t | x)` on
@@ -589,7 +586,8 @@ copy to keep in step; `freematch.md` §6.1 takes the same route.
 
 1. Eqs. (6) and (7) against hand-computed batch moments and a hand-rolled EMA,
    including the `B_U / (B_U - 1)` correction, over three synthetic steps.
-2. **The gate limit.** With `ConfidenceGaussian.variance` pinned near zero,
+2. **The gate limit.** With Uniform Alignment disabled (or its running marginal
+   uniform) and `ConfidenceGaussian.variance` pinned near zero,
    `SoftWeightedTreatmentNLL` equals `PseudoLabelTreatmentNLL` at
    `tau = mu_hat_t` to within floating-point tolerance. Table 1 says confidence
    thresholding is the degenerate case; this asserts it.
@@ -618,24 +616,25 @@ that held-out treatment NLL beats the `constant` arm on the smoke seed. The
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
-| — | — | — | — | not yet run (card is `draft`) |
+| — | — | — | — | not yet run (card is `smoke-passing`) |
 
 ## 7. Unknowns
 
 | # | Unspecified in paper | Our choice | Basis |
 |---|---|---|---|
 | 1 | `lambda_max` is symbolic in eqs. (2), (5) and (9) and never given a value in the text; Algorithm 1 line 9 writes `1.0` and §2.1's objective is `L = L_s + L_u` with no separate `w_u`. | `lambda_max = 1.0`, carried by `losses.weights` rather than by the policy (§3.2). | Algorithm 1 line 9, read as the paper's own instantiation of the symbol. Convention: this also matches FixMatch's and FreeMatch's `w_u = 1`, which §4.1's TorchSSL setup inherits. |
-| 2 | §4.1 says "divide the estimated variance `sigma_hat_t` by 4 for `2 sigma` of the Gaussian function", using the standard-deviation symbol with the word "variance". | Divide the **variance**: the exponent's denominator is `2 * sigma_hat_t^2 / n_sigma^2` with `n_sigma = 2`, so a confidence one `sigma_hat_t` below `mu_hat_t` is a two-sigma event for the weight. | The paper's own label. Appendix A.5's "variance range" table compares `sigma`, `2 sigma` and `3 sigma`, which only reads as a range of the weighting curve under this interpretation. The alternative — dividing the standard deviation, which is `n_sigma = 4` in the same expression — halves the curve's width again and is not what "2 sigma range" names. A reference implementation would settle it directly and was not consulted (§1). |
-| 3 | Eq. (8) writes `E_hat_{B_U}[p]` as "the EMA of batch predictions on unlabeled data" without giving its momentum or initialisation. | Momentum `m = 0.999`, the same EMA as eq. (7); initialised to `u(C)`, so `UA` is the identity at step 0. | Table 6 lists a single "Prediction EMA Momentum" of 0.999 alongside the model EMA, and eq. (8)'s estimate is the only other prediction EMA in the method. `u(C)` is convention: it is the value that makes UA inert before any data is seen, matching how eqs. (5)–(7) initialise to their own neutral points. |
-| 4 | Algorithm 1 never shows the `E_hat[p]` update, so its position within a step is unstated. | Update from this batch's weak-view predictions **before** computing eq. (9), i.e. between lines 7 and 8. | Algorithm 1's own ordering for the other three statistics (lines 4–7 precede line 9). Choosing the other order would make `UA` read a marginal one step stale while `mu_hat_t` and `sigma_hat_t` are current, which the algorithm gives no reason to do. Recorded because it is a real ordering choice and `freematch.md` §5.1 is the local precedent for scoring such a guess later. |
+| 2 | §4.1 says "divide the estimated variance `sigma_hat_t` by 4 for `2 sigma` of the Gaussian function", using the standard-deviation symbol with the word "variance". | Divide the **variance**: the exponent's denominator is `2 * sigma_hat_t^2 / n_sigma^2` with `n_sigma = 2`, so a confidence one `sigma_hat_t` below `mu_hat_t` is a two-sigma event for the weight. | Both pinned implementations compute `2 * variance / n_sigma^2`, resolving the wording directly; the paper's appendix A.5 names the same setting `2 sigma`. |
+| 3 | Eq. (8) gives neither the momentum nor the initial value of `E_hat[p]`. | Use `m = 0.999` and initialise the running marginal to `u(C)`. Fold the first batch in before its weights are computed. | Table 6 and both implementations use 0.999. TorchSSL initialises the running marginal to uniform and updates it before alignment; USB instead replaces a `None` state with the first batch mean. The classic-image path is the tie-breaker, and uniform is the neutral pre-batch value. |
+| 4 | Algorithm 1 omits the `E_hat[p]` update, so its position within a step is unstated. | Update from this batch's weak-view predictions **before** computing eq. (9), i.e. between lines 7 and 8. | Both pinned implementations update the running marginal before aligning and weighting the current batch. |
 | 5 | Neither §4.1 nor table 6 says whether the SGD momentum is Nesterov. | Nesterov. | Convention, and consistency: §4.1 states every classic-image experiment was run in TorchSSL, whose shared optimiser is Nesterov SGD, and `fixmatch.md` §7, `flexmatch.md` §7 and `freematch.md` §4 make the same call so that §6's pair differs in the weighting function alone. |
-| 6 | Algorithm 1 estimates `mu_b` and `sigma_b^2` from `max(p_i)` (lines 4–5) but compares `max(UA(p_i))` against them (line 9). The paper never states whether this is intended. | Follow Algorithm 1 literally: unaligned confidence for the moments, aligned confidence for the weight. | The paper's own procedure, which is internally consistent across §3.1 (eqs. 6, 7 are written on `max(p)`) and §3.2 (eq. 9 is written on `max(UA(p))`). Recorded because the two quantities are not on the same scale — alignment moves confidence towards the under-predicted class — so a card that silently aligned both would be porting a different method. At `K = 2` on a balanced marginal the gap is small (§2's fourth limitation), which is precisely why it must be written down rather than discovered on a skewed fixture later. |
+| 6 | Algorithm 1 estimates `mu_b` and `sigma_b^2` from `max(p_i)` (lines 4–5) but compares `max(UA(p_i))` against them (line 9). | Follow Algorithm 1 literally: unaligned confidence for the moments, aligned confidence for the weight. | TorchSSL agrees with the algorithm. USB aligns first and therefore updates the Gaussian from aligned confidence; that later code path conflicts with eqs. (6), (7) and Algorithm 1, so it is not selected. |
 | 7 | §2.1 defines `D_L` and `D_U` as separate sets and does not restate FixMatch's footnote 2 about labelled rows also appearing in the unlabelled batch. | `rows = all`: every training row is eligible for eq. (2). | §2.1 states the framework as FixMatch's and UDA's and §4.1 runs it in TorchSSL, so the inclusion comes with it; `fixmatch.md` §3.2, `flexmatch.md` §3.2 and `freematch.md` §3.2 take the same reading for the same term, and §6's pair would not be comparable if this card took a different one. |
 | 8 | Eq. (5) and Algorithm 1 line 9 both use a strict `<` for the exponential branch, so the breakpoint itself takes `lambda_max`; nothing in the paper contradicts it. | `<` exactly as written. | The source. Noted only because `fixmatch.md` §7 records the equivalent inconsistency in FixMatch, and its absence here is worth recording as an absence rather than as an oversight. |
+| 9 | The paper defines UA's target as `u(C)`, but paper-era TorchSSL aligns to an EMA of predictions on the labelled batch; USB defaults to a fixed uniform target. | Use the paper's fixed `u(C)` target. | Eq. (8), §3.2 and appendix A.5 are explicit, and USB corroborates them. TorchSSL's labelled-prediction target is the paper's ablated `p_hat_L(y)`-style alternative, not Uniform Alignment as published. |
 
 ## 8. Review
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status → `reviewed`) | | |
-| Plan diffed against §3.2 and §4 | | |
+| Card reviewed (status → `reviewed`) | Codex | 2026-09-04 |
+| Plan diffed against §3.2 and §4 | Codex | 2026-09-04 |

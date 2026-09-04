@@ -55,6 +55,11 @@ from xty2.recipes.scarf import (
     scarf,
 )
 from xty2.recipes.simmatch import SIMMATCH_STEPS, simmatch
+from xty2.recipes.softmatch import (
+    SOFTMATCH_STEPS,
+    SOFTMATCH_WEIGHTING,
+    softmatch,
+)
 from xty2.recipes.ssdml import SSDML_ENCODER_WIDTHS, ssdml
 from xty2.recipes.tarnet import (
     ENCODER_WIDTHS,
@@ -108,6 +113,8 @@ __all__ = [
     "SHARPENING",
     "SIMMATCH_STEPS",
     "SMALL_CORRUPTION_RATE",
+    "SOFTMATCH_STEPS",
+    "SOFTMATCH_WEIGHTING",
     "SSDML_ENCODER_WIDTHS",
     "STRONG_MASK_RATE",
     "SUPPORT_PER_TREATMENT",
@@ -132,6 +139,7 @@ __all__ = [
     "paws",
     "scarf",
     "simmatch",
+    "softmatch",
     "ssdml",
     "tarnet",
     "tarnet_extension",

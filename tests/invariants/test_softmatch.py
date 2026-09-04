@@ -1,0 +1,281 @@
+"""Tier 0 — SoftMatch's Gaussian state, weighting arithmetic, and recipe plan."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+import torch
+from xty2.core import (
+    CardKeyError,
+    CategoricalTreatment,
+    FeatureSpec,
+    LossError,
+    OutcomeSpec,
+    Port,
+    Realisation,
+    Schema,
+    State,
+    TrainContext,
+    compile,
+)
+from xty2.objectives import (
+    ConfidenceGaussian,
+    PseudoLabelTreatmentNLL,
+    SoftWeightedTreatmentNLL,
+    TruncatedGaussianWeighting,
+)
+from xty2.recipes import softmatch
+from xty2.recipes.fixmatch import STRONG_X, WEAK_X, WEAK_X_LABELLED
+from xty2.recipes.softmatch import SOFTMATCH_TERM, SOFTMATCH_WEIGHTING
+
+from tests.invariants.conftest import (
+    BATCH_SIZE,
+    NUM_TREATMENTS,
+    make_batch,
+    make_schema,
+)
+
+CARD = Path(__file__).resolve().parents[2] / "docs" / "recipes" / "softmatch.md"
+TARGET = Realisation(view="weak_x")
+PREDICTION = Realisation(view="strong_x")
+
+
+def _policy(
+    *, decay: float = 0.9, n_sigma: float = 2, alignment: str = "uniform"
+) -> TruncatedGaussianWeighting:
+    return TruncatedGaussianWeighting(
+        decay=decay,
+        n_sigma=n_sigma,
+        alignment=alignment,  # type: ignore[arg-type]
+    )
+
+
+def _objective(**overrides: object) -> SoftWeightedTreatmentNLL:
+    defaults: dict[str, object] = {
+        "port": Port.T_GIVEN_X,
+        "target": TARGET,
+        "prediction": PREDICTION,
+        "num_treatments": NUM_TREATMENTS,
+        "weighting": _policy(),
+        "sharpening": "hard",
+        "stop_grad": "target",
+        "rows": "all",
+    }
+    return SoftWeightedTreatmentNLL(**(defaults | overrides))  # type: ignore[arg-type]
+
+
+def _probabilities() -> torch.Tensor:
+    return torch.tensor(
+        [
+            [0.80, 0.15, 0.05],
+            [0.20, 0.70, 0.10],
+            [0.10, 0.20, 0.70],
+            [0.60, 0.25, 0.15],
+            [0.15, 0.55, 0.30],
+            [0.20, 0.35, 0.45],
+            [0.34, 0.33, 0.33],
+        ]
+    )
+
+
+def _state(target: torch.Tensor, prediction: torch.Tensor) -> State:
+    return State(
+        {
+            TARGET: {Port.T_GIVEN_X: CategoricalTreatment(target.log())},
+            PREDICTION: {Port.T_GIVEN_X: CategoricalTreatment(prediction.log())},
+        }
+    )
+
+
+def _context(gaussian: ConfidenceGaussian, step: int) -> TrainContext:
+    return TrainContext(
+        global_step=step,
+        schema=make_schema(),
+        stage="joint_fit",
+        objective_states={SOFTMATCH_TERM: gaussian},
+    )
+
+
+def _rows() -> torch.Tensor:
+    return torch.arange(BATCH_SIZE)
+
+
+def _recipe_schema() -> Schema:
+    return Schema(
+        features=tuple(FeatureSpec(f"x{i}", "continuous") for i in range(6)),
+        treatment_cardinality=2,
+        outcome=OutcomeSpec(),
+    )
+
+
+def test_the_three_emas_match_equations_six_to_eight_over_three_steps() -> None:
+    policy = _policy(decay=0.8)
+    state = ConfidenceGaussian(NUM_TREATMENTS, policy)
+    expected_mean = torch.tensor(1.0 / NUM_TREATMENTS, dtype=torch.float64)
+    expected_variance = torch.tensor(1.0, dtype=torch.float64)
+    expected_marginal = torch.full(
+        (NUM_TREATMENTS,), 1.0 / NUM_TREATMENTS, dtype=torch.float64
+    )
+
+    for step in range(3):
+        probs = torch.roll(_probabilities(), shifts=step, dims=0).double()
+        confidence = probs.max(dim=-1).values
+        expected_mean = 0.8 * expected_mean + 0.2 * confidence.mean()
+        expected_variance = 0.8 * expected_variance + 0.2 * confidence.var(
+            unbiased=True
+        )
+        expected_marginal = 0.8 * expected_marginal + 0.2 * probs.mean(dim=0)
+        state.observe(step, probs)
+
+        assert state.mean == pytest.approx(float(expected_mean))
+        assert state.variance == pytest.approx(float(expected_variance))
+        assert torch.allclose(state.marginal, expected_marginal)
+
+
+def test_the_first_batch_is_folded_in_before_it_is_weighted() -> None:
+    state = ConfidenceGaussian(NUM_TREATMENTS, _policy())
+    before = (state.mean, state.variance, state.marginal)
+    state.observe(0, _probabilities())
+    assert state.last_observed_step == 0
+    assert state.mean != before[0]
+    assert state.variance != before[1]
+    assert not torch.equal(state.marginal, before[2])
+
+
+def test_uniform_alignment_is_identity_for_a_uniform_running_marginal() -> None:
+    probs = _probabilities()
+    state = ConfidenceGaussian(NUM_TREATMENTS, _policy())
+    assert torch.allclose(state.aligned(probs), probs)
+
+    no_alignment = ConfidenceGaussian(NUM_TREATMENTS, _policy(alignment="none"))
+    no_alignment.observe(0, probs)
+    assert torch.equal(no_alignment.aligned(probs), probs)
+
+
+def test_uniform_alignment_changes_only_weights_not_pseudo_labels() -> None:
+    target = _probabilities()
+    prediction = torch.flip(target, dims=(1,))
+    gaussian = ConfidenceGaussian(NUM_TREATMENTS, _policy())
+    term = _objective().compute(
+        _state(target, prediction),
+        make_batch(),
+        _rows(),
+        _context(gaussian, 0),
+    )
+    expected_labels = target.argmax(dim=-1)
+    expected = -prediction.log().gather(1, expected_labels[:, None]).squeeze(1)
+    expected *= gaussian.weights(target)
+    assert float(term.value) == pytest.approx(float(expected.mean()))
+
+
+def test_weights_are_positive_bounded_and_flat_above_the_updated_mean() -> None:
+    probs = _probabilities()
+    state = ConfidenceGaussian(NUM_TREATMENTS, _policy(alignment="none"))
+    state.observe(0, probs)
+    weights = state.weights(probs)
+    confidence = probs.max(dim=-1).values
+    assert bool((weights > 0.0).all())
+    assert bool((weights <= 1.0).all())
+    assert torch.equal(
+        weights[confidence >= state.mean],
+        torch.ones_like(weights[confidence >= state.mean]),
+    )
+
+
+def test_near_zero_effective_variance_is_the_constant_gate_limit() -> None:
+    target = _probabilities()
+    prediction = torch.flip(target, dims=(1,))
+    policy = _policy(n_sigma=1e6, alignment="none")
+    gaussian = ConfidenceGaussian(NUM_TREATMENTS, policy)
+    gaussian.observe(0, target)
+    ours = _objective(weighting=policy).compute(
+        _state(target, prediction),
+        make_batch(),
+        _rows(),
+        _context(gaussian, 0),
+    )
+    gate = PseudoLabelTreatmentNLL(
+        port=Port.T_GIVEN_X,
+        target=TARGET,
+        prediction=PREDICTION,
+        threshold=gaussian.mean,
+        sharpening="hard",
+        stop_grad="target",
+        rows="all",
+    ).compute(
+        _state(target, prediction),
+        make_batch(),
+        _rows(),
+        TrainContext(global_step=0, schema=make_schema()),
+    )
+    assert float(ours.value) == pytest.approx(float(gate.value), abs=1e-7)
+
+
+def test_large_variance_is_the_ungated_pseudo_label_limit() -> None:
+    target = _probabilities()
+    prediction = torch.flip(target, dims=(1,))
+    policy = _policy(alignment="none")
+    gaussian = ConfidenceGaussian(NUM_TREATMENTS, policy)
+    gaussian._variance = torch.tensor(1e12, dtype=torch.float64)
+    gaussian._last_step = 0
+    gaussian._last_rows = BATCH_SIZE
+    ours = _objective(weighting=policy).compute(
+        _state(target, prediction),
+        make_batch(),
+        _rows(),
+        _context(gaussian, 0),
+    )
+    expected = -prediction.log().gather(1, target.argmax(dim=-1)[:, None]).mean()
+    assert float(ours.value) == pytest.approx(float(expected), rel=1e-6)
+
+
+def test_the_policy_and_objective_reject_unreviewed_shapes() -> None:
+    with pytest.raises(LossError, match="alignment"):
+        _policy(alignment="distribution")
+    with pytest.raises(LossError, match="positive"):
+        _policy(n_sigma=0)
+    with pytest.raises(LossError, match="at least two"):
+        ConfidenceGaussian(NUM_TREATMENTS, _policy()).observe(0, _probabilities()[:1])
+    with pytest.raises(CardKeyError, match=r"losses\.confidence_threshold"):
+        SoftWeightedTreatmentNLL(
+            port=Port.T_GIVEN_X,
+            target=TARGET,
+            prediction=PREDICTION,
+            num_treatments=NUM_TREATMENTS,
+            sharpening="hard",
+            stop_grad="target",
+        )
+
+
+def test_the_recipe_plan_is_the_reviewed_four_term_program() -> None:
+    recipe = softmatch(_recipe_schema())
+    stage = recipe.program[0]
+    assert [weighted.objective.name for weighted in stage.objectives] == [
+        "observed_outcome_nll",
+        "observed_treatment_nll",
+        SOFTMATCH_TERM,
+        "missing_treatment_marginal_nll",
+    ]
+    objective = stage.objectives[2].objective
+    assert isinstance(objective, SoftWeightedTreatmentNLL)
+    assert objective.target == WEAK_X
+    assert objective.prediction == STRONG_X
+    assert stage.objectives[1].objective.realisation == WEAK_X_LABELLED  # type: ignore[attr-defined]
+    assert objective.batch_coupled
+    assert objective.detaches == frozenset({(Port.T_GIVEN_X, WEAK_X)})
+
+    plan = compile(recipe).plan
+    assert plan.hyperparameters["losses.confidence_threshold"] == (SOFTMATCH_WEIGHTING)
+    assert plan.hyperparameters["losses.weights"][f"joint_fit.{SOFTMATCH_TERM}"] == 1.0
+    assert [view.name for view in recipe.views] == ["weak_x", "strong_x"]
+    assert [transform.p for transform in recipe.views[1].transforms] == [0.1, 0.2]  # type: ignore[attr-defined]
+
+
+def test_the_card_status_matches_the_smoke_evidence_and_names_the_recipe() -> None:
+    text = CARD.read_text(encoding="utf-8")
+    assert "**Status:** `smoke-passing`" in text
+    assert "| [`softmatch.md`](recipes/softmatch.md) | `softmatch` |" in (
+        CARD.parents[1] / "RECIPES.md"
+    ).read_text(encoding="utf-8")
+    assert repr(SOFTMATCH_WEIGHTING) in text

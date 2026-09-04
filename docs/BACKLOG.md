@@ -26,7 +26,6 @@ Git retains the exploratory chronology removed from this active queue.
 | Candidate | Why it is useful now | Principal boundary |
 |---|---|---|
 | CoMatch | tests whether class and instance structure can cooperate after SCARF did not improve the end task | mutual graph/pseudo-label interaction |
-| SoftMatch | replaces the pseudo-label gate with a weight, making the quantity-quality trade-off measurable | continuous per-row loss weighting |
 | PAWS | uses labelled support embeddings instead of instance negatives | stratified support sampling and metric labels |
 | ReMixMatch | deliberately combines several validated mechanisms | distribution alignment, adaptive augmentation, and row mixing |
 | SimMatch | refines labels across semantic and instance spaces | memory-bank lifecycle |
@@ -35,7 +34,8 @@ Git retains the exploratory chronology removed from this active queue.
 | Explicit treatment-observation model | promotes label availability to a statistical variable | missingness semantics |
 
 Already present: SCARF is deviating, FixMatch and FlexMatch are reproduced,
-DoubleMatch and FreeMatch are drafts, PAWS is implemented and smoke-passing, and
+DoubleMatch and FreeMatch are drafts; PAWS and SoftMatch are implemented and
+smoke-passing; and
 CoMatch is implemented (`docs/recipes/comatch.md`) with its full predeclared
 smoke study still open. SimMatch is implemented
 (`docs/recipes/simmatch.md`) with its Tier 1 study only partly run.
@@ -102,8 +102,8 @@ class-adjacency fixture, where confidence and predicted frequency diverge.
 Keep future state local and explicit, and preserve paired batches when comparing
 threshold policies.
 
-SoftMatch now has a drafted card, `docs/recipes/softmatch.md`, stopped for
-review. It is the first member of the family whose rule is not a gate: eq. (2)
+SoftMatch is implemented and smoke-passing. Its card is
+`docs/recipes/softmatch.md`. It is the first member of the family whose rule is not a gate: eq. (2)
 of that paper rewrites the whole lineage as one weighted cross-entropy and
 replaces the indicator with a truncated Gaussian on the confidence, so every
 row trains at every step with a positive weight. Read it before proposing a
