@@ -1,6 +1,6 @@
 # Recipe spec card: variational_treatment
 
-**Status:** `smoke-passing`
+**Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
@@ -296,6 +296,57 @@ component rather than restating the strings. Nothing to build, and the fix is a
 reference rather than a copy — but it is written here because a restated string
 that later drifts fails at compile time in a place that names neither document.
 
+### Tier 2 outcome
+
+On 2026-09-04, commit `0b147786358e` produced a `deviating` result: This is the predeclared project-local substitution target: does replacing xty2's exact sum over candidate treatments with M2's eq. (7) bound plus eq. (9)'s labelled posterior term cost the serving path anything measurable, while the amortised q(t|x,y) it adds stays close to the model posterior and beats p(t|x) on rows where y is observed. It is not a reproduction of Kingma et al., whose latent, decoder, datasets, metric and 300,000-update budget all differ (deviations 1, 3 and 5); no published number applies. Both arms are scored by exact marginalisation, so the variational arm is measured by what it bounds rather than by its own bound. Failed target(s): amortisation_gap_reduction was -0.000222511 +/- 0.000273 nat/row against mean >= 0 nat/row, by at least one stderr.
+
+Every other predeclared target passes, and none of them narrowly. The held-out
+exact marginal NLL ratio is `1.00141 +/- 0.00085` against a tolerance of `1.02`,
+so the substitution costs about a seventh of one percent of the quantity it
+bounds; the amortisation gap is `0.00447 +/- 0.00029` nats against a bound of
+`0.10`, twenty-two times inside it; and `q` beats the
+same arm's propensity by `0.0924 +/- 0.0048` nats on held-out rows where `y` is
+observed. The outcome and treatment guardrails are `0.9737 +/- 0.0017` and
+`1.0044 +/- 0.0038` against `1.05`. §2's mechanism sentence is therefore
+supported on this fixture: eq. (7) plus eq. (9) can stand in for exact
+enumeration at no measurable serving cost, and the head it adds is a usable
+amortised posterior.
+
+What missed is the trajectory half of the gap tolerance, and the audit says the
+clause had nothing to detect rather than that the objective is miswired. The
+gap does not start above its floor. Both `q` and the model posterior begin
+near-uniform, so `KL(q ‖ posterior)` begins near zero: it falls from about
+`0.027` nats at step 0 to about `0.003` within the first optimiser step and is
+then flat for the remaining 2,999, drifting very slightly *upward* — first-fifty
+`0.00361 +/- 0.00015` against last-fifty `0.00383 +/- 0.00017` — as the model
+posterior sharpens away from uniform and `q` follows it a little behind. The
+predeclared direction was written for a gap that closes over a run; on this
+fixture there is no gap to close, and the measured difference
+(`-0.000223 +/- 0.000273`) is not distinguishable from zero in either
+direction. Both windows ship as informational metrics in
+`runs/tier2/variational_treatment.json`, and the alternative reading of "its
+step-50 value" as the single step-50 draw rather than the first-fifty window
+does not change the sign.
+
+§6.2's Tier 1 item 3 asserts the same direction and passes, which the ten-seed
+run now explains rather than corroborates. On the Tier 1 seed the reduction is
+`+0.000576`, of which `+0.000479` is the single step-0 value inside the
+first-fifty window; excluding step 0 it is `+0.000097`, an order of magnitude
+below the Tier 2 replicate scatter. The smoke assertion is reading the
+initialisation transient, not a trend.
+
+The card stays `deviating` on the conservative rule `softmatch.md` applied to
+its own noisy diagnostic: a predeclared direction that the run cannot
+distinguish from its opposite is a miss, and a tolerance may not be rewritten
+after seeing the number it failed. This is recorded as a property of the
+protocol rather than of the objective — Tier 0 asserts the eq. (7) identity, its
+tightness at the posterior, both degenerate cases and the schema-built candidate
+matrix, and the held-out numbers above are what a `q` that tracks the posterior
+produces. Deciding the direction would need either a budget long enough for the
+model posterior to sharpen well past `q`'s ability to follow it (deviation 5
+fixes 3,000 steps) or an initialisation that starts `q` away from it. Both are
+card amendments and neither may be made on the strength of this row.
+
 ## 6. Reproduction target
 
 The target is a paired substitution on a fixed project-local DGP: eq. (7) plus
@@ -366,8 +417,9 @@ eq. (8).
 ### 6.2 Predeclared evidence
 
 Predeclared while the card was `draft`, before either arm was run. Tier 0 and
-Tier 1 now pass at the implementation on PR #24; the ten-seed reproduction
-target remains unrun and §6.3 therefore stays empty.
+Tier 1 pass at the implementation on PR #24. The ten-seed reproduction target
+has since been run and is recorded in §6.3; read the Tier 2 outcome above §6
+before item 3 below, whose direction that run does not support.
 
 **Tier 0 (invariants),** in `tests/invariants/test_variational_treatment.py`:
 
@@ -426,7 +478,7 @@ from its green status.
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
-| — | — | — | — | — |
+| 2026-09-04 | `0b147786358e` | held_out_marginal_NLL_ratio<br>amortisation_gap<br>amortisation_gap_reduction<br>posterior_advantage<br>held_out_outcome_NLL_ratio<br>held_out_treatment_NLL_ratio | 1.00141 +/- 0.000848<br>0.00446697 +/- 0.000288 nat/row<br>-0.000222511 +/- 0.000273 nat/row<br>-0.0923729 +/- 0.00479 nat/row<br>0.973735 +/- 0.0017<br>1.00442 +/- 0.00383 | no |
 
 ## 7. Unknowns
 
@@ -448,3 +500,4 @@ from its green status.
 | Card reviewed (status → `reviewed`) | GPT-5.6 Sol | 2026-08-29 |
 | Plan diffed against §3.2 and §4 | GPT-5.6 Sol | 2026-08-29 |
 | Implementation and Tier 1 audited (status → `smoke-passing`) | GPT-5.6 Sol | 2026-08-29 |
+| Tier 2 run and ledger recorded (status → `deviating`) | Claude | 2026-09-04 |

@@ -39,10 +39,13 @@ their recorded ten-seed runs. CoMatch is implemented
 (`docs/recipes/comatch.md`) with its full predeclared smoke study still open,
 and SimMatch is implemented (`docs/recipes/simmatch.md`) with its Tier 1 study
 only partly run.
-The variational latent treatment is also implemented and smoke-passing;
-`docs/recipes/variational_treatment.md` is its authoritative card. Read their
-cards before proposing a close relative; their active ledgers supersede the
-historical notes once carried here.
+The variational latent treatment is implemented and `deviating` on its
+recorded ten-seed run; `docs/recipes/variational_treatment.md` is its
+authoritative card, and its Tier 2 outcome is the one to read first, because
+every substitution target passed and the single miss is a predeclared
+*trajectory* the fixture gives nothing to move. Read their cards before
+proposing a close relative; their active ledgers supersede the historical notes
+once carried here.
 
 Meta Pseudo Labels + UDA is reproduced. Its authoritative
 card at `docs/recipes/meta_pseudo_labels.md` specifies the hard-label one-step
@@ -57,8 +60,8 @@ ten-seed Tier 2 study.
    code.
 3. SimMatch (`implemented`, study partly open): test explicit historical state.
 4. Meta Pseudo Labels + UDA (`reproduced`): test the optimisation boundary.
-5. A latent-treatment ELBO (`smoke-passing`, Tier 2 open): compose all three
-   native probabilistic quantities.
+5. A latent-treatment ELBO (`deviating`, ten-seed run recorded): compose all
+   three native probabilistic quantities.
 6. An explicit missingness model (no card yet): decide whether availability
    needs vocabulary.
 7. A crowded XTY experiment only after its ingredients pass independently.
@@ -233,14 +236,22 @@ streams.
 Entropy minimisation, EM, and ELBOs are useful because xty2 already exposes
 p(t\|x), q(t\|x,y), and p(y\|x,t). Require a single written probabilistic
 objective before composing terms. `docs/recipes/variational_treatment.md` is
-the first implemented, smoke-passing card of this kind: it ports M2's eq. (7)
+the first implemented card of this kind: it ports M2's eq. (7)
 and eq. (9) (Kingma et al., 2014) as one bound on the same observed-data
 likelihood `MissingTreatmentMarginalNLL` computes exactly, so its slack is a
 single measurable `KL(q ‖ posterior)` and its §6 is a paired substitution
 against exact marginalisation rather than a benchmark. In this discrete
 adaptation the exact posterior is already derivable by enumerating `K`; the
 learned `q` is an amortised posterior head and variational training mechanism,
-not an otherwise unavailable inference path.
+not an otherwise unavailable inference path. Its ten-seed run answers the
+substitution question and not the trajectory one: the bound costs
+`0.00141 +/- 0.00085` of held-out marginal NLL in ratio, `q` sits
+`0.00447 +/- 0.00029` nats from the model posterior and beats the propensity by
+`0.0924 +/- 0.0048` nats, while the predeclared requirement that the
+amortisation gap *shrink* over the run misses because the gap starts at its
+floor — both distributions begin near-uniform — and is flat thereafter. A
+successor wanting to measure amortisation as a learning curve needs a fixture
+or a budget where the gap opens first.
 
 ### 3.5 Multi-model SSL
 
