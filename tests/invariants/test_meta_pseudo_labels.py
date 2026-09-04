@@ -413,3 +413,17 @@ def test_role_checkpoints_round_trip_under_explicit_role_paths(
         loaded = directory.read_checkpoint("meta_train", role=role)
         assert loaded.plan_digest == checkpoint.plan_digest
         assert loaded.components == checkpoint.components
+
+
+def test_the_card_records_the_tier_two_result() -> None:
+    """Only the completed ten-seed protocol promotes the card to reproduced."""
+    card = CARD.read_text(encoding="utf-8")
+    assert "**Status:** `reproduced`" in card
+    ledger = card.split("### 6.3 Result ledger", 1)[1].split("## 7.", 1)[0]
+    for metric in (
+        "student_treatment_NLL_ratio",
+        "outer_teacher_treatment_NLL_ratio",
+        "all_losses_gradients_and_checkpoints_finite",
+        "terminal_student_class_mass_concentration",
+    ):
+        assert metric in ledger, metric
