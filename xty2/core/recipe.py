@@ -72,8 +72,18 @@ Purpose = Literal["causal", "predictive"]
 """What the recipe is for. `predictive` is what may opt out of the leakage
 rule (`DESIGN.md` §7.2); `causal` may not."""
 
-Executor = Literal["gradient", "array_fit", "cross_fit"]
-"""The three deliberately explicit stage executors (`DESIGN.md` §7)."""
+Executor = Literal["gradient", "array_fit", "cross_fit", "meta_gradient"]
+"""The deliberately explicit stage executors (`DESIGN.md` §7)."""
+
+META_GRADIENT_ORDER = (
+    "evaluate_and_sample",
+    "probe_inner_pre_update",
+    "step_inner_once",
+    "probe_inner_post_update",
+    "update_baseline_and_center",
+    "step_outer_once",
+)
+"""The bounded six-operation contract reviewed by ``meta_pseudo_labels``."""
 
 
 @runtime_checkable
@@ -102,6 +112,112 @@ class ArrayFitAction(Protocol):
         seed: int,
     ) -> Mapping[str, Tensor]:
         """Fit on ``rows`` and return a complete tensor state mapping."""
+
+
+@runtime_checkable
+class MetaFeedback(Protocol):
+    """The scalar feedback helper owned by a ``meta_gradient`` stage."""
+
+    @property
+    def name(self) -> str: ...
+
+    def describe(self) -> tuple[str, ...]: ...
+
+
+@dataclass(frozen=True)
+class ParameterRole:
+    """One independently initialised and optimised graph parameter set."""
+
+    name: str
+    trainable: tuple[str, ...]
+    optimiser: OptimiserSpec
+
+    def __post_init__(self) -> None:
+        name = require_str("ParameterRole.name", self.name, error=CompileError)
+        if not name.isidentifier() or name == "default":
+            raise CompileError(
+                f"ParameterRole.name must be a non-default Python identifier, got "
+                f"{name!r}"
+            )
+        object.__setattr__(self, "trainable", tuple(self.trainable))
+        if not self.trainable:
+            raise CompileError(f"parameter role {name!r} trains no components")
+        if len(set(self.trainable)) != len(self.trainable):
+            raise CompileError(
+                f"parameter role {name!r} lists duplicate trainables {self.trainable!r}"
+            )
+        if any(not component.isidentifier() for component in self.trainable):
+            raise CompileError(
+                f"parameter role {name!r} has invalid component names "
+                f"{self.trainable!r}"
+            )
+        if not isinstance(self.optimiser, OptimiserSpec):
+            raise CompileError(
+                f"parameter role {name!r} needs an OptimiserSpec, got "
+                f"{type(self.optimiser)}"
+            )
+
+
+@dataclass(frozen=True)
+class MetaGradientSpec:
+    """A narrow one-inner-step/one-outer-step executor declaration."""
+
+    inner_role: str
+    outer_role: str
+    inner_objective: str
+    feedback_objective: str
+    meta_objective: str
+    outer_objectives: tuple[str, ...]
+    feedback: MetaFeedback
+    update_order: tuple[str, ...]
+    inner_steps: int
+    outer_steps: int
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "inner_role",
+            "outer_role",
+            "inner_objective",
+            "feedback_objective",
+            "meta_objective",
+        ):
+            value = require_str(
+                f"MetaGradientSpec.{field_name}",
+                getattr(self, field_name),
+                error=CompileError,
+            )
+            if not value.isidentifier():
+                raise CompileError(
+                    f"MetaGradientSpec.{field_name} must be a Python identifier, "
+                    f"got {value!r}"
+                )
+        if self.inner_role == self.outer_role:
+            raise CompileError("meta-gradient inner and outer roles must be distinct")
+        object.__setattr__(self, "outer_objectives", tuple(self.outer_objectives))
+        if not self.outer_objectives:
+            raise CompileError("MetaGradientSpec needs at least one outer objective")
+        if any(not name.isidentifier() for name in self.outer_objectives):
+            raise CompileError(
+                f"MetaGradientSpec.outer_objectives has invalid names "
+                f"{self.outer_objectives!r}"
+            )
+        if not isinstance(self.feedback, MetaFeedback):
+            raise CompileError(
+                "MetaGradientSpec.feedback must provide a stable name and "
+                f"describe(), got {type(self.feedback)}"
+            )
+        object.__setattr__(self, "update_order", tuple(self.update_order))
+        if self.update_order != META_GRADIENT_ORDER:
+            raise CompileError(
+                "meta_gradient requires the reviewed six-step update order "
+                f"{META_GRADIENT_ORDER!r}, got {self.update_order!r}"
+            )
+        if self.inner_steps != 1 or self.outer_steps != 1:
+            raise CompileError(
+                "meta_gradient is deliberately bounded to exactly one inner "
+                f"and one outer step, got {self.inner_steps!r} and "
+                f"{self.outer_steps!r}"
+            )
 
 
 @dataclass(frozen=True)
@@ -573,6 +689,8 @@ class Stage:
     action: PseudoLabelAction | ArrayFitAction | None = None
     inputs: tuple[str, ...] = ()
     executor: Executor = "gradient"
+    roles: tuple[ParameterRole, ...] = ()
+    meta_gradient: MetaGradientSpec | None = None
     allow_leakage: bool = False
     optimiser: OptimiserSpec = REQUIRED
     steps: int = REQUIRED
@@ -586,6 +704,7 @@ class Stage:
         object.__setattr__(self, "objectives", tuple(self.objectives))
         object.__setattr__(self, "trainable", tuple(self.trainable))
         object.__setattr__(self, "inputs", tuple(self.inputs))
+        object.__setattr__(self, "roles", tuple(self.roles))
         if not require_str("stage name", self.name, error=CompileError).isidentifier():
             raise CompileError(
                 f"stage name {self.name!r} must be a Python identifier: it names "
@@ -615,10 +734,16 @@ class Stage:
                 f"stage {self.name!r} holds {type(self.teacher)} as its teacher; "
                 "expected TeacherSpec or None"
             )
-        if self.executor not in ("gradient", "array_fit", "cross_fit"):
+        if self.executor not in (
+            "gradient",
+            "array_fit",
+            "cross_fit",
+            "meta_gradient",
+        ):
             raise CompileError(
                 f"stage {self.name!r} has executor {self.executor!r}; expected "
-                "'gradient', 'array_fit' or 'cross_fit' (DESIGN.md §7)."
+                "'gradient', 'array_fit', 'cross_fit' or 'meta_gradient' "
+                "(DESIGN.md §7)."
             )
         if type(self.allow_leakage) is not bool:
             raise CompileError(
@@ -632,6 +757,7 @@ class Stage:
                 "stage whose outcome fit intentionally uses unsafe labels."
             )
         self._check_action()
+        self._check_roles()
         self._check_gradient_fields()
         self._check_sampler()
         duplicates = _duplicates(self.trainable)
@@ -653,6 +779,82 @@ class Stage:
                     f"stage {self.name!r} input {source_name!r} must be a Python "
                     "identifier naming an earlier pseudo-label stage"
                 )
+
+    def _check_roles(self) -> None:
+        """Keep independent role ownership exclusive to ``meta_gradient``."""
+        if self.executor != "meta_gradient":
+            if self.roles or self.meta_gradient is not None:
+                raise CompileError(
+                    f"stage {self.name!r} declares parameter roles or a "
+                    f"meta-gradient contract under executor={self.executor!r}; "
+                    "only executor='meta_gradient' owns independent roles"
+                )
+            return
+        if not isinstance(self.meta_gradient, MetaGradientSpec):
+            raise CompileError(
+                f"meta_gradient stage {self.name!r} needs a MetaGradientSpec"
+            )
+        if len(self.roles) != 2 or any(
+            not isinstance(role, ParameterRole) for role in self.roles
+        ):
+            raise CompileError(
+                f"meta_gradient stage {self.name!r} needs exactly two "
+                "ParameterRole declarations"
+            )
+        names = tuple(role.name for role in self.roles)
+        if len(set(names)) != len(names):
+            raise CompileError(
+                f"meta_gradient stage {self.name!r} repeats role names {names!r}"
+            )
+        expected = {self.meta_gradient.inner_role, self.meta_gradient.outer_role}
+        if set(names) != expected:
+            raise CompileError(
+                f"meta_gradient stage {self.name!r} declares roles {names!r}, "
+                f"but its contract names {sorted(expected)!r}"
+            )
+        if self.trainable:
+            raise CompileError(
+                f"meta_gradient stage {self.name!r} declares stage-level "
+                "trainables; each ParameterRole owns its trainables instead"
+            )
+        if self.teacher is not None:
+            raise CompileError(
+                f"meta_gradient stage {self.name!r} cannot also maintain an "
+                "EMA TeacherSpec; its outer role is independently optimised"
+            )
+        if self.action is not None or self.inputs or self.initialise_from is not None:
+            raise CompileError(
+                f"meta_gradient stage {self.name!r} is one atomic fit and "
+                "cannot also declare actions, artifact inputs, or checkpoint "
+                "initialisation"
+            )
+        declared = tuple(weighted.name for weighted in self.objectives)
+        expected_objectives = (
+            self.meta_gradient.inner_objective,
+            self.meta_gradient.feedback_objective,
+            self.meta_gradient.meta_objective,
+            *self.meta_gradient.outer_objectives,
+        )
+        if len(set(declared)) != len(declared) or set(declared) != set(
+            expected_objectives
+        ):
+            raise CompileError(
+                f"meta_gradient stage {self.name!r} objectives {declared!r} "
+                f"do not match its declared inner/probe/meta/outer contract "
+                f"{expected_objectives!r}"
+            )
+        feedback_weight = next(
+            weighted.schedule.nominal
+            for weighted in self.objectives
+            if weighted.name == self.meta_gradient.feedback_objective
+        )
+        if feedback_weight != 0.0:
+            probe = self.meta_gradient.feedback_objective
+            raise CompileError(
+                f"meta-gradient feedback probe {probe!r} "
+                f"must have nominal weight 0.0, got {feedback_weight!r}; it is "
+                "differentiated but never applied to the inner optimiser"
+            )
 
     def _check_action(self) -> None:
         """Keep each executor's public contract narrow and unambiguous."""
@@ -691,6 +893,13 @@ class Stage:
                     f"stage {self.name!r} uses array_fit and cannot initialise "
                     "the component graph from a checkpoint it does not fit. Use "
                     "artifact inputs for data dependencies."
+                )
+            return
+
+        if self.executor == "meta_gradient":
+            if action is not None:
+                raise CompileError(
+                    f"meta_gradient stage {self.name!r} cannot declare an action"
                 )
             return
 
@@ -782,7 +991,7 @@ class Stage:
             )
         if isinstance(self.sampler, ExternalBatches):
             return
-        if self.executor != "gradient":
+        if self.executor not in ("gradient", "meta_gradient"):
             raise CompileError(
                 f"stage {self.name!r} declares executor={self.executor!r} and a "
                 "sampler. An array or cross fit consumes one finite row-keyed "
@@ -814,10 +1023,12 @@ class Stage:
         """
         if not self.objectives:
             return
-        for field_name, key in (
-            ("optimiser", "the optimisation.* keys"),
+        required: tuple[tuple[str, str], ...] = (
             ("steps", "optimisation.total_steps_or_epochs"),
-        ):
+        )
+        if self.executor != "meta_gradient":
+            required = (("optimiser", "the optimisation.* keys"), *required)
+        for field_name, key in required:
             if is_required(getattr(self, field_name)):
                 raise CompileError(
                     f"stage {self.name!r} has objectives but no {field_name!r}, so "
@@ -825,7 +1036,9 @@ class Stage:
                     f"{key} and is governed by the paper, so it has no usable "
                     "default — the recipe sets it explicitly (DESIGN.md §9.1)."
                 )
-        if not isinstance(self.optimiser, OptimiserSpec):
+        if self.executor != "meta_gradient" and not isinstance(
+            self.optimiser, OptimiserSpec
+        ):
             raise CompileError(
                 f"stage {self.name!r} holds {type(self.optimiser)} as its "
                 "optimiser; it holds an OptimiserSpec (DESIGN.md §7)."

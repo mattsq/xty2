@@ -60,6 +60,10 @@ def benchmark_function(recipe: str) -> BenchmarkFunction:
         from xty2.evaluation.benchmarks.paws import run
 
         return run
+    if recipe == "meta_pseudo_labels":
+        from xty2.evaluation.benchmarks.meta_pseudo_labels import run
+
+        return run
     raise KeyError(
         f"unknown Tier 2 recipe {recipe!r}; expected one of {list(RECIPES)!r}"
     )
@@ -78,6 +82,7 @@ RECIPES = (
     "uda",
     "freematch",
     "paws",
+    "meta_pseudo_labels",
 )
 
 __all__ = ["RECIPES", "BenchmarkFunction", "benchmark_function"]

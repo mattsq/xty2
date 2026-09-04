@@ -64,6 +64,7 @@ ARTIFACT_FORMAT: Final = 1
 CHECKPOINT_FILE: Final = "checkpoint.pt"
 PSEUDO_LABELS_FILE: Final = "pseudo_labels.pt"
 FOLDS_DIR: Final = "folds"
+ROLES_DIR: Final = "roles"
 LOG_FILE: Final = "log.jsonl"
 PLAN_FILE: Final = "plan.txt"
 STAGES_DIR: Final = "stages"
@@ -867,7 +868,9 @@ class RunDirectory:
             return None
         return plan_digest_of(path.read_text(encoding="utf-8"))
 
-    def write_checkpoint(self, checkpoint: Checkpoint) -> Path:
+    def write_checkpoint(
+        self, checkpoint: Checkpoint, *, role: str | None = None
+    ) -> Path:
         """Write `checkpoint` under its own stage, against this run's plan.
 
         The checkpoint's `plan_digest` has to match the plan already in the
@@ -891,17 +894,33 @@ class RunDirectory:
                 f"{digest[:12]}. One run directory holds one compiled recipe "
                 "(DESIGN.md §7.1)."
             )
-        directory = (
-            self.stage_dir(checkpoint.stage)
-            if checkpoint.fold is None
-            else self.fold_dir(checkpoint.stage, checkpoint.fold)
-        )
+        if role is not None:
+            if checkpoint.fold is not None:
+                raise ArtifactError("a role checkpoint cannot also be fold-scoped")
+            if not role.isidentifier():
+                raise ArtifactError(
+                    f"checkpoint role must be an identifier, got {role!r}"
+                )
+            directory = self.stage_dir(checkpoint.stage) / ROLES_DIR / role
+            directory.mkdir(parents=True, exist_ok=True)
+        else:
+            directory = (
+                self.stage_dir(checkpoint.stage)
+                if checkpoint.fold is None
+                else self.fold_dir(checkpoint.stage, checkpoint.fold)
+            )
         return checkpoint.save(directory / CHECKPOINT_FILE)
 
-    def read_checkpoint(self, stage: str, *, fold: int | None = None) -> Checkpoint:
+    def read_checkpoint(
+        self, stage: str, *, fold: int | None = None, role: str | None = None
+    ) -> Checkpoint:
         """Read the checkpoint a stage wrote."""
         directory = self.root / STAGES_DIR / stage
-        if fold is not None:
+        if fold is not None and role is not None:
+            raise ArtifactError("a checkpoint read cannot name both fold and role")
+        if role is not None:
+            directory = directory / ROLES_DIR / role
+        elif fold is not None:
             directory = directory / FOLDS_DIR / str(fold)
         return Checkpoint.load(directory / CHECKPOINT_FILE)
 

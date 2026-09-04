@@ -99,15 +99,21 @@ to check the shape (§11.2).
 
 ### 2.1 Realisations: the same port under different conditions
 
-A `Realisation` is `(view, params, draw)`:
+A `Realisation` is `(view, params, draw, role, state)`:
 
 - `view` selects a declared `ViewSpec`, defaulting to `identity`;
 - `params` selects `student` or `teacher`;
-- `draw` selects an independent sample of that view.
+- `draw` selects an independent sample of that view;
+- `role` selects a named independently initialised parameter set, defaulting to
+  `default` for ordinary stages;
+- `state` selects `pre_update` or `post_update` within a bounded meta-gradient
+  iteration, defaulting to `pre_update`.
 
 `ViewSpec.draws` bounds the available draws. State is keyed by realisation, and
 the compiler plans the minimum forward passes needed by objective requirements.
-Draw zero preserves the original view seed and plan rendering.
+Default role/state and draw zero preserve the original view seed and plan
+rendering. `params="teacher"` remains reserved for the frozen EMA copy owned by
+`TeacherSpec`; independently optimised graphs use named roles instead.
 
 ### 2.2 Raw inputs are ports too
 
@@ -282,7 +288,10 @@ Executors are explicit:
 - `gradient` runs a compiled objective mix and may emit pseudo-labels;
 - `array_fit` calls one functional estimator on a finite row-keyed table;
 - `cross_fit` resets and fits a gradient stage once per actual fold, predicting
-  only its held-out fold.
+  only its held-out fold;
+- `meta_gradient` owns exactly two role-tagged graph instances and performs one
+  declared inner step, one post-update gradient probe, baseline centring, and
+  one declared outer step in a fixed compiler-validated order.
 
 Pseudo-label actions emit immutable side tables. Consumption joins by `row_id`
 into a fresh batch and never rewrites source treatment or missingness.
@@ -320,6 +329,9 @@ mutates its input dataset.
 A checkpoint records recipe, stage, fold, trained row ids, component state,
 steps, seed, and plan digest. A pseudo-label artifact records row ids, labels,
 the producing checkpoint for each row, and the source checkpoints.
+Meta-gradient stages emit one checkpoint per role under
+`stages/<stage>/roles/<role>/checkpoint.pt`; their scalar baseline is execution
+state and is not resumable checkpoint state.
 
 When an evaluation protocol declares validation-based early stopping,
 `MinimumValidationSelection` may observe the graph at a fixed interval while
@@ -393,7 +405,8 @@ stateful sampling remains deferred in §11.4.
 
 1. validates recipe, graph, program, data, and card-key declarations;
 2. checks every required port and realisation is produced;
-3. orders components and plans the minimum forward passes;
+3. orders components and plans the minimum forward passes, including explicit
+   role and within-step state realisations;
 4. rejects unknown or dead trainables, including paths cut by `detaches`;
 5. validates views and data policy against the schema;
 6. resolves row intersections and rejects structural emptiness;
@@ -402,8 +415,8 @@ stateful sampling remains deferred in §11.4.
 9. emits a stable, printable execution plan and digest.
 
 The plan lists components, lineage, views, stages, objectives, rows, schedules,
-optimisation, trainables, and resolved hyperparameters. It is the review and
-provenance surface.
+optimisation, trainables, role ownership, bounded meta-gradient order, and
+resolved hyperparameters. It is the review and provenance surface.
 
 ## 9. Registries and recipes
 
@@ -468,6 +481,7 @@ initial five proved the core architecture; later cards extended it under §11.2.
 | `flexmatch` | stage-local objective state and adaptive thresholds |
 | `freematch` | shared state across batch-coupled adaptive objectives |
 | `uda` | temperature-sharpened gated consistency and training-signal annealing |
+| `meta_pseudo_labels` | role-tagged inner/outer graphs and a bounded one-step meta-gradient |
 
 ## 11. Overdesign guardrails
 
