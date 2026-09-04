@@ -154,6 +154,9 @@ def test_uniform_alignment_is_identity_for_a_uniform_running_marginal() -> None:
     probs = _probabilities()
     state = ConfidenceGaussian(NUM_TREATMENTS, _policy())
     assert torch.allclose(state.aligned(probs), probs)
+    assert torch.allclose(
+        state.weights(probs), state.weights(probs, apply_alignment=False)
+    )
 
     no_alignment = ConfidenceGaussian(NUM_TREATMENTS, _policy(alignment="none"))
     no_alignment.observe(0, probs)
@@ -174,6 +177,25 @@ def test_uniform_alignment_changes_only_weights_not_pseudo_labels() -> None:
     expected = -prediction.log().gather(1, expected_labels[:, None]).squeeze(1)
     expected *= gaussian.weights(target)
     assert float(term.value) == pytest.approx(float(expected.mean()))
+
+
+def test_pre_ua_weight_profile_uses_the_same_gaussian_moments() -> None:
+    probs = torch.tensor(
+        [
+            [0.80, 0.10, 0.10],
+            [0.75, 0.15, 0.10],
+            [0.70, 0.20, 0.10],
+            [0.65, 0.25, 0.10],
+        ]
+    )
+    state = ConfidenceGaussian(NUM_TREATMENTS, _policy(decay=0.5))
+    state.observe(0, probs)
+    raw = state.weights(probs, apply_alignment=False)
+    confidence = probs.max(dim=-1).values
+    delta = torch.clamp(confidence - state.mean, max=0.0)
+    expected = torch.exp(-(delta.square() / (2.0 * state.variance / 2.0**2)))
+    assert torch.allclose(raw, expected)
+    assert not torch.allclose(state.weights(probs), raw)
 
 
 def test_weights_are_positive_bounded_and_flat_above_the_updated_mean() -> None:

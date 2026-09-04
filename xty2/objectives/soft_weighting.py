@@ -234,9 +234,16 @@ class ConfidenceGaussian:
         aligned = probs * ((1.0 / self._classes) / marginal)
         return aligned / aligned.sum(dim=-1, keepdim=True)
 
-    def weights(self, probs: Tensor) -> Tensor:
-        """Eq. (9), with ``lambda_max`` factored into the mixer weight."""
-        confidence = self.aligned(probs).max(dim=-1).values
+    def weights(self, probs: Tensor, *, apply_alignment: bool = True) -> Tensor:
+        """Eq. (9), optionally exposing eq. (5)'s pre-UA diagnostic profile.
+
+        ``apply_alignment=False`` does not change training. It evaluates the
+        paper's all-class-without-UA ablation with this state's same Gaussian
+        moments, which is also the before-UA half of appendix A.7's class-wise
+        weight diagnostic.
+        """
+        weighted_probs = self.aligned(probs) if apply_alignment else probs
+        confidence = weighted_probs.max(dim=-1).values
         mean = self._mean.to(device=probs.device, dtype=probs.dtype)
         variance = self._variance.to(device=probs.device, dtype=probs.dtype)
         delta = torch.clamp(confidence - mean, max=0.0)

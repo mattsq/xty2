@@ -9,11 +9,14 @@
 > Written card-first, before any code, per `CLAUDE.md` rule 1. The reviewed
 > card now has a recipe, objective, Tier 0 invariants, a Tier 1 paired fit and
 > a Tier 2 runner whose ten-seed result is recorded in §6.3. That result is
-> `deviating`: seven of the eight declared targets pass — the recipe beats the
+> `deviating`: seven of the eight original targets pass — the recipe beats the
 > constant gate on held-out treatment NLL and raises quantity — and the one
-> that fails is §6's quality guardrail, which is the clause §6 wrote so that it
-> could fail on its own and the cost §2's first limitation predicts. §6.2's
-> five-seed `no_ua`/`matched` directions remain outstanding.
+> that fails is §6's quality guardrail. A subsequent fidelity audit found that
+> the original balanced `K = 2` target made Uniform Alignment, one of the
+> paper's two named contributions, nearly inert and relegated its ablation to
+> an unrun Tier 1 direction. The first result remains recorded; §6 now
+> predeclares a replacement `K = 4` long-tailed-to-balanced target that makes
+> UA versus no-UA load-bearing rather than quietly treating eq. (8) as optional.
 >
 > It is also the card `freematch.md` §5.3 named in advance. That section asked
 > whether the three gated pseudo-label objectives should collapse into one
@@ -107,14 +110,16 @@ evidence and its disagreements are recorded in §7.
      measurable only against the §6 fixture's own ground truth, off the
      training path and after the fact. Quantity (eq. 3) needs nothing and is
      logged during training; quality is a benchmark metric only.
-  4. **`K = 2` with a balanced treatment marginal leaves Uniform Alignment
-     with almost nothing to do.** UA divides by a running estimate of the
-     model's mean prediction and renormalises towards `u(C)`; on a fixture
-     whose marginal is 0.5/0.5 the ratio is near 1 and eq. (9) is close to
-     eq. (5). This is the same finding `freematch.md` §2's third limitation
-     records for SAF, reached by a different route, and §6.2 predeclares the
-     paper's own `w/o UA` ablation (§4.5) as a Tier 1 arm so that the question
-     is answered with a number rather than asserted.
+  4. **The original `K = 2` balanced target left Uniform Alignment with almost
+     nothing to do.** UA divides by a running estimate of the model's mean
+     prediction and renormalises towards `u(C)`; on that fixture the ratio was
+     near 1 and eq. (9) was close to eq. (5). Treating the paper's own `w/o UA`
+     ablation as a lower-tier direction on a target chosen to make it inert was
+     not adequate evidence for the published method. Section 6 now uses the
+     existing `K = 4` skewed-prior fixture for training and a balanced held-out
+     population: the setting mirrors §4.2's long-tailed-to-balanced evaluation,
+     gives eq. (8) a non-uniform marginal to correct, and makes UA/no-UA a
+     required Tier 2 comparison.
   5. **A pseudo-label on `t` is not a label on `y`.** As in `fixmatch`,
      `flexmatch` and `freematch`: weighted rows train `p(t | x)` only, never
      `ObservedOutcomeNLL`, so no inferred treatment is used as if observed and
@@ -438,8 +443,8 @@ paragraph's two transforms against the compiled plan, as
 | 5 | `judgement` | — | Retain P5's `Ramp(0.0, 0.5, 1000)` on the marginal-likelihood term while the unsupervised weight stays constant. | The ramp belongs to the reviewed P5 term, not to SoftMatch; §2.2 and table 1 are explicit that a ramped `lambda` is a *different* weighting function, so ramping `w_u` here would silently port a method the card is not porting. | Identical to `fixmatch`'s, `flexmatch`'s and `freematch`'s arrangement, so the pair in §6 shares it. |
 | 6 | `judgement` | — | Port only the §4.1 configuration: all-class Gaussian estimation with UA. Do not implement §4.5's per-class Gaussians, its fixed `mu = 0.95, sigma^2 = 0.01` arm, or its linear, quadratic and truncated-Laplacian weighting functions. | Those are the paper's ablations of its own choice, not the method. §4.5 selects all-class + UA, and `FIDELITY.md` §4.1's "port methods lazily, in response to a reviewed need" applies: a second weighting family arrives with the card that needs it. The one ablation that *is* implemented is `alignment="none"`, because it is expressible in the declared policy field and §6.2 predeclares it as an arm. | None on the primary metric. It bounds what §6 can attribute: a failure of this recipe is a failure of the truncated Gaussian with all-class estimation, not of every `lambda` in §4.5. |
 | 7 | `framework-limitation` | `augmentation-vocabulary` | No RandAugment and no augmentation-strength vocabulary: the strong view's strength is a fixed scalar. | The argument is `fixmatch.md` deviation 10's and is not restated. SoftMatch adds nothing to the case either way — its contribution is the weighting function, and table 6 runs the same RandAugment the earlier cards already deviate from. | Removes whatever augmentation diversity buys, equally from both arms of §6's pair, so it is a limit on what the numbers describe rather than a confound within them. |
-| 8 | `framework-limitation` | `batch-row-repetition` | Set the §6 label budget to 64 rather than a scarcer regime, holding `B_L = 64` and `B_U = 448` at the paper's values. | `XTYBatch.row_id` must be unique (`DESIGN.md` §7.1), so a labelled quota of `B_L` cannot be drawn from a population smaller than `B_L` without repeating a row, and the scarcest budget expressible is `B_L` itself. The alternative — lowering `B_L` — would deviate from a number the paper states. | Table 2's largest margins are the 40-label CIFAR-10, 400-label CIFAR-100 and 40-label STL-10 settings, where quantity matters most because so few rows clear a fixed gate. At 64 labels over `K = 2` this fixture is not in that regime, so the mechanic is being measured where it has least to gain. It moves both arms of the pair equally. |
-| 9 | `judgement` | — | Declare the `alignment="none"` comparison a Tier 1 arm rather than a second Tier 2 target. | §2's fourth limitation predicts UA is near-inert at `K = 2` on a balanced marginal, and `freematch.md` deviation 10 made the same call for SAF for the same reason: making it a reproduction target would multiply the nightly cost of a card whose declared claim is the paired one. | None on the §6 metric. What changes is what §6.2 may claim about UA: a direction on the declared Tier 1 seeds, not a target. |
+| 8 | `framework-limitation` | `batch-row-repetition` | Set the §6 label budget to 64 rather than 40, holding `B_L = 64` and `B_U = 448` at the paper's classic-image values. | `XTYBatch.row_id` must be unique (`DESIGN.md` §7.1), so a labelled quota of `B_L` cannot be drawn from a population smaller than `B_L` without repeating a row, and the scarcest total budget expressible is `B_L` itself. The alternative — lowering `B_L` — would deviate from a number the paper states. | The revised `K = 4` long-tailed training prior puts about four observed labels in the rarest class, rather than the original balanced `K = 2` target's roughly 32 per class. It therefore exercises the scarce tail without pretending the draw law reproduces CIFAR-10's 40-label loader. All arms share the limitation. |
+| 9 | `withdrawn` | — | The original target declared `alignment="none"` a Tier 1 arm because UA was expected to be inert at balanced `K = 2`. The revised target makes it a required Tier 2 arm. | The paper names truncated-Gaussian weighting **and** Uniform Alignment as SoftMatch, §4.2 calls UA key on imbalanced SSL, and appendix A.7 measures its class-wise weight balancing directly. A target engineered to make the second contribution inert cannot establish fidelity of the whole method. | The nightly now pays for a third paired fit and can fail independently if UA neither balances class-wise weights nor improves balanced held-out prediction over eq. (5). |
 
 ### 5.1 Framework additions made for this card
 
@@ -516,36 +521,54 @@ one that would settle it. Three things changed:
 
 On 2026-09-04, commit `7e55fdc8e921` produced a `deviating` result: This is the predeclared project-local SoftMatch mechanism target: whether continuous Gaussian weights improve missing-treatment classification while raising weighted quantity without losing the declared pseudo-label quality. It is not an image benchmark. Failed target(s): weighted_impurity_vs_1.25x_gate was 0.00881344 +/- 0.00175 against mean <= 0, by at least one stderr.
 
+That result is valid for the original protocol and its tolerance has not been
+changed. It is not sufficient evidence for the complete paper method: its
+balanced `K = 2` fixture made UA nearly the identity and the `no_ua` arm never
+ran. The revised protocol below changes the evaluation question rather than
+widening the failed 1.25x bound. Its digest, metrics and result will be a second
+ledger row; the first row remains the audit trail for the superseded target.
+
 ## 6. Reproduction target
 
 The published CIFAR-10/100, SVHN, STL-10, ImageNet and text error rates cannot
 validate this port: the inputs, the labels, the architecture and the metric all
 differ, and the estimand is a treatment assignment rather than an image class.
 The target below is a fixed project-local *mechanism* target in the form
-`fixmatch.md` §6 and `freematch.md` §6 use.
+`fixmatch.md` §6 and `freematch.md` §6 use. It adopts the latter card's
+precedent of changing `K` and the cluster prior when a balanced binary fixture
+cannot exercise a class-wise mechanism.
 
-**This result will be measured without two mechanics the paper's framework
-states**, and `DESIGN.md` §11.6 wants that beside the number rather than in the
-gap between sections: §5.7 (`augmentation-vocabulary`) fixes the strong view's
-strength where the reference runs RandAugment, and §5.8
-(`batch-row-repetition`) sets the label budget at 64 rather than in the
-scarce-label regime where table 2 reports SoftMatch's largest margins. Both
-apply equally to every arm.
+**This result will still be measured without two mechanics the paper's
+framework states**, and `DESIGN.md` §11.6 wants that beside the number rather
+than in the gap between sections: §5.7 (`augmentation-vocabulary`) fixes the
+strong view's strength where the reference runs RandAugment, and §5.8
+(`batch-row-repetition`) keeps 64 total labels. The revised four-class skew
+means the rarest class nevertheless has only about four observed labels, so the
+second limitation no longer turns into a well-supervised binary problem. Both
+limitations apply equally to every arm.
 
 ```yaml
 reproduction:
-  dataset: fixmatch.md §6.1's project-local seed-locked two-cluster XTY DGP (6 features, K=2), unmodified
-  variant: paired fit against a constant-gate arm — this recipe with eq. (2)'s lambda replaced by FixMatch's indicator at tau = 0.95, so both arms share deviation 2's views — same seeds and same batches
-  split: 1024 train rows with 64 observed treatments, 2048 held-out rows with every treatment observed
-  metric: held-out p(t|x) NLL ratio on the EMA parameters, SoftMatch over the constant-gate arm; the paper's own quantity f(p) (eq. 3) and quality g(p) (eq. 4) on the same batches as the trade-off guardrails
+  dataset: project-local seed-locked K=4 cluster XTY DGP (6 features), training prior (0.55, 0.25, 0.13, 0.07), balanced held-out prior, regular-simplex centres at separation 1.8
+  variant: three paired fits — SoftMatch with Uniform Alignment, the paper's all-class without-UA ablation (eq. 5), and the constant gate at tau = 0.95 — same initial states, seeds, views and batches
+  split: 1024 long-tailed train rows with 64 MCAR-observed treatments, 2048 balanced held-out rows with every treatment observed
+  metric: balanced held-out macro p(t|x) NLL ratios on EMA parameters, UA over no-UA and SoftMatch over the constant gate; reduction in class-wise mean-weight dispersion from applying UA to the same terminal predictions; quantity f(p) and quality g(p) guardrails
   published: none - no published number applies to this adaptation
   published_source: n/a
-  tolerance: ratio < 1.0 in mean on both the EMA and the trained parameters, by at least one standard error; terminal quantity f(p) above the paired arm's terminal mask rate by at least one standard error; terminal lambda-weighted impurity 1 - g(p) no worse than 1.25x the paired arm's retained-label impurity and below 0.15 absolutely; held-out outcome NLL within 1.05x of the paired arm; terminal mu_t above 1/K by at least one standard error and terminal sigma_t^2 below its 1.0 initialisation
+  tolerance: UA/no-UA EMA macro NLL ratio < 1.0 in mean by at least one standard error; SoftMatch/constant EMA macro NLL ratio < 1.0 by the same rule; class-wise mean-weight coefficient-of-variation after UA below the unaligned value on the same predictions by at least one standard error; terminal quantity f(p) above the constant gate's mask rate by at least one standard error; Gaussian-weighted pseudo-label impurity below the same model's unweighted pseudo-label impurity by at least one standard error; held-out outcome NLL within 1.05x of the constant arm; terminal mu_t above 1/K by at least one standard error and terminal sigma_t^2 below its 1.0 initialisation
   seeds: 10
   report: mean_and_stderr
 ```
 
-Three clauses of that tolerance are the point of the card and each can fail:
+Four clauses of that tolerance are the point of the card and each can fail:
+
+* **The UA clauses make the omitted question load-bearing.** The first compares
+  eq. (9) against the paper's own all-class-without-UA ablation, on balanced
+  held-out rows so matching the skewed training prior is not itself rewarded.
+  The second reproduces appendix A.7's diagnostic on the same terminal
+  predictions: group weights by the unaligned pseudo-label, compute each
+  class's mean weight before and after UA, and require the coefficient of
+  variation across those means to fall.
 
 * **The quantity clause is the paper's central claim in its own units.** For
   the constant-gate arm `lambda` is `1(max(p) >= tau)`, so `f(p)` *is* the mask
@@ -554,10 +577,12 @@ Three clauses of that tolerance are the point of the card and each can fail:
   only `f(p) >= lambda_max / 2`, while `fixmatch.md` §6.3 records a terminal
   mask rate of 0.784 ± 0.016 on this near-separable fixture. A gate can beat
   half.
-* **The quality clause is the other half of the trade-off**, and it is the
-  clause that stops a win on NLL from being reported as a vindication of the
-  method's claim. SoftMatch enrols every row, so some rise in impurity is
-  expected; 1.25x is the predeclared bound on "some".
+* **The quality clause is the other half of the trade-off.** It compares the
+  Gaussian-weighted impurity against the unweighted impurity of the *same*
+  model and predictions. That asks whether eq. (5) actually concentrates mass
+  on more reliable pseudo-labels without confusing the answer with a gate that
+  trains a different model on a different effective sample size. The original
+  gate-relative 1.25x clause and its failure remain in §6.3.
 * **The `sigma_t^2` clause is the mechanism guardrail.** `sigma_hat_0^2 = 1.0`
   is enormous next to the range of a confidence, so the weighting function
   starts almost flat and only becomes selective as the variance collapses. A
@@ -571,21 +596,23 @@ itself a deviation.
 
 ### 6.1 Fixed DGP and the declared arms
 
-**Fixture.** `fixmatch.md` §6.1's DGP in full and without modification, so that
-the pair differs in the weighting function and in nothing else — the mechanism,
-the seeds, the 64-label MCAR budget, the `B_L = 64` / `B_U = 448` quota, the
-outcome standardisation fitted on the training rows, and the replicate seeds
-`s_r = 90000 + 100 r` for `r in {0..9}`. Restating it here would be a second
-copy to keep in step; `freematch.md` §6.1 takes the same route.
+**Fixture.** `benchmarks/common.py`'s generalisation of `fixmatch.md` §6.1 at
+`K = 4`: regular-simplex centres at the same pairwise separation `1.8`, rotated
+across the same four signal columns, assignment mass `0.98` on the generating
+cluster, and non-monotone outcome multipliers `(0.0, 1.0, 0.4, 1.6)`. Training
+uses prior `(0.55, 0.25, 0.13, 0.07)` and held-out evaluation uses the uniform
+prior, the long-tailed-to-balanced shape of paper §4.2. The 64-label MCAR
+budget, `B_L = 64` / `B_U = 448` quota, outcome scaling, and replicate seeds
+`s_r = 90000 + 100 r` for `r in {0..9}` stay unchanged. Every arm sees the same
+draws and initial parameters.
 
 **Arms.**
 
 | Arm | What it is | Tier |
 |---|---|---|
-| `softmatch` | this card at the §4 declarations | 2, ten seeds |
-| `constant` | `fixmatch`'s eq. (4) at `tau = 0.95`, this card's views, same batches | 2, ten seeds, paired |
-| `no_ua` | `alignment="none"`, i.e. eq. (5) in place of eq. (9) — the paper's §4.5 `w/o UA` ablation | 1, five seeds (deviation 9) |
-| `matched` | the constant gate at the `mu_hat_t` this recipe converges to | 1, five seeds — `freematch.md` §6.4 found this arm recovers 29–56% of the apparent gain there, so it is declared here in advance rather than after the fact |
+| `softmatch` | this card at the §4 declarations, including eq. (8) | 2, ten seeds |
+| `no_ua` | `alignment="none"`, eq. (5) in place of eq. (9) — the paper's §4.5 ablation | 2, ten seeds, paired |
+| `constant` | `fixmatch`'s eq. (4) at `tau = 0.95`, this card's views | 2, ten seeds, paired |
 
 ### 6.2 Predeclared evidence
 
@@ -613,19 +640,14 @@ Plus the two the family already runs on every card: the declared views compared
 against the compiled plan, and the card-key cross-check against
 `plan.hyperparameters`.
 
-**Tier 1 — smoke.** A short paired fit on the §6.1 fixture asserting that the
+**Tier 1 — smoke.** The existing short paired fit on the original binary
+fixture asserts that the
 unsupervised term is non-degenerate (terminal `f(p)` strictly inside
 `(0.5, 1.0)`), that `mu_hat_t` rises above `1/K` and `sigma_hat_t^2` falls, and
-that held-out treatment NLL beats the `constant` arm on the smoke seed. The
-`no_ua` and `matched` arms of §6.1 run here, five seeds, reported as directions.
-
-**The five-seed `no_ua` and `matched` study is declared and not yet run.**
-`tests/smoke/test_softmatch.py` fits the `softmatch`/`constant` pair on the
-smoke seed and asserts only that the other two arms are *expressible* — the
-`alignment="none"` policy and the gate matched to the `mu_hat_t` this recipe
-reaches. Recorded here rather than left in the gap between a declaration and a
-test, because `freematch.md` §6.2's directions are the shape this section is
-promising and nothing has produced them yet.
+that held-out treatment NLL beats the `constant` arm on the smoke seed. It also
+asserts that the no-UA policy is expressible. The former five-seed direction is
+superseded by the required ten-seed no-UA arm above; the post-hoc matched gate
+is dropped because it does not test either named SoftMatch contribution.
 
 **Tier 2 — the block above**, nightly, ten seeds.
 
