@@ -33,30 +33,34 @@ Git retains the exploratory chronology removed from this active queue.
 | Variational latent treatment | uses q(t\|x,y), p(t\|x), and p(y\|x,t) together | ELBO composition |
 | Explicit treatment-observation model | promotes label availability to a statistical variable | missingness semantics |
 
-Already present: SCARF is deviating, FixMatch and FlexMatch are reproduced,
-DoubleMatch and FreeMatch are drafts, PAWS is implemented and smoke-passing,
-SoftMatch is deviating on its recorded ten-seed run, and CoMatch is implemented
-(`docs/recipes/comatch.md`) with its full predeclared smoke study still open.
-SimMatch is implemented (`docs/recipes/simmatch.md`) with its Tier 1 study only
-partly run.
+Already present: SCARF, FixMatch, FlexMatch, FreeMatch, PAWS, UDA, and Meta
+Pseudo Labels + UDA are reproduced; DoubleMatch and SoftMatch are deviating on
+their recorded ten-seed runs. CoMatch is implemented
+(`docs/recipes/comatch.md`) with its full predeclared smoke study still open,
+and SimMatch is implemented (`docs/recipes/simmatch.md`) with its Tier 1 study
+only partly run.
 The variational latent treatment is also implemented and smoke-passing;
 `docs/recipes/variational_treatment.md` is its authoritative card. Read their
 cards before proposing a close relative; their active ledgers supersede the
 historical notes once carried here.
 
-Meta Pseudo Labels + UDA is implemented and smoke-passing. Its authoritative
+Meta Pseudo Labels + UDA is reproduced. Its authoritative
 card at `docs/recipes/meta_pseudo_labels.md` specifies the hard-label one-step
-estimator, the bounded `meta_gradient` executor boundary, and the remaining
+estimator, the bounded `meta_gradient` executor boundary, and the completed
 ten-seed Tier 2 study.
 
 ### Recommended stress-test sequence
 
-1. CoMatch or PAWS: test class-compatible representation learning.
-2. ReMixMatch: crowd one recipe without adding procedural recipe code.
-3. SimMatch: test explicit historical state.
-4. Meta Pseudo Labels + UDA: test the optimisation boundary.
-5. A latent-treatment ELBO: compose all three native probabilistic quantities.
-6. An explicit missingness model: decide whether availability needs vocabulary.
+1. CoMatch (`implemented`, study open) or PAWS (`reproduced`): test
+   class-compatible representation learning.
+2. ReMixMatch (no card yet): crowd one recipe without adding procedural recipe
+   code.
+3. SimMatch (`implemented`, study partly open): test explicit historical state.
+4. Meta Pseudo Labels + UDA (`reproduced`): test the optimisation boundary.
+5. A latent-treatment ELBO (`smoke-passing`, Tier 2 open): compose all three
+   native probabilistic quantities.
+6. An explicit missingness model (no card yet): decide whether availability
+   needs vocabulary.
 7. A crowded XTY experiment only after its ingredients pass independently.
 
 Each step should probe one architectural claim, not reproduce a leaderboard.
@@ -82,9 +86,11 @@ crowded-recipe test once its ingredients exist independently.
 
 ### 2.4 UDA
 
-UDA needs weak/strong consistency, confidence masking, sharpening, and training
-signal annealing. Most of it should fit existing views, objectives, and
-schedules; its acceptance test should isolate TSA and sharpening.
+UDA is implemented and reproduced. Its weak/strong consistency, confidence
+masking, sharpening, and training-signal annealing fit existing views,
+objectives, and schedules; `docs/recipes/uda.md` records the ten-seed primary
+attribution and reports TSA and sharpening as mechanism effects rather than
+post-hoc acceptance criteria.
 
 ### 2.5 FixMatch and adaptive descendants
 
@@ -127,10 +133,13 @@ second establishes that eq. (8) is active rather than erasing the first miss.
 
 ### 2.6 DoubleMatch
 
-DoubleMatch is a shipped draft. Its row-population claim is load-bearing:
-feature consistency trains all eligible unlabelled rows, including rows rejected
-by the pseudo-label gate. A future result must compare the exact zero-weight
-ablation and monitor representation scale, concentration, and alignment.
+DoubleMatch is implemented and `deviating`. Its row-population claim is
+load-bearing: feature consistency trains all eligible unlabelled rows,
+including rows rejected by the pseudo-label gate. Its ten-seed result compares
+the exact zero-weight ablation and records representation scale, concentration,
+and alignment; the treatment-NLL ratio was too close to its own uncertainty to
+distinguish the nominal pass from a miss. `docs/recipes/doublematch.md` is
+authoritative.
 
 ### 2.7 CoMatch ★
 
@@ -166,8 +175,8 @@ are open.
 PAWS builds soft assignments from labelled support representations. Its sampler
 should be expressible as a stratified Quota beside an unlabelled quota; this is
 why QuotaSampler is generic rather than labelled/unlabelled-specific.
-Implemented and smoke-passing: `docs/recipes/paws.md` confirms the sampler
-shape, records the mechanism diagnostics, and predeclares the remaining Tier 2
+Implemented and reproduced: `docs/recipes/paws.md` confirms the sampler shape,
+records the mechanism diagnostics, and records the passing ten-seed Tier 2
 target. Its source requires distinct support images within an iteration, so it
 does not discharge or depend on the `batch-row-repetition` ledger item.
 
@@ -177,7 +186,8 @@ The teacher update depends on how a student trained on teacher labels performs
 on labelled data. The bounded `meta_gradient` executor represents that atomic
 inner/outer update explicitly rather than hiding a loop in a recipe function.
 `docs/recipes/meta_pseudo_labels.md` is authoritative for the selected variant,
-executor shape, and predeclared evidence.
+executor shape, and completed evidence; its ten-seed Tier 2 target is
+`reproduced`.
 
 ### 2.12 SelfMatch, SimCLRv2 and Noisy Student
 
