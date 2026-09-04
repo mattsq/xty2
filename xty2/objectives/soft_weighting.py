@@ -1,4 +1,40 @@
-"""SoftMatch's truncated-Gaussian pseudo-label weighting (paper eqs. 2, 5-9)."""
+"""SoftMatch's truncated-Gaussian pseudo-label weighting (`softmatch.md`).
+
+FixMatch keeps an artificial label when its probability clears one fixed `tau`;
+FlexMatch and FreeMatch when it clears a threshold earned from the training
+history. SoftMatch keeps *every* row and scales it instead: §2.1 rewrites the
+whole family as one weighted cross-entropy (eq. 2) whose members differ only in
+`lambda(p)`, and §3.1 replaces the indicator with a truncated Gaussian on the
+confidence (eq. 5), centred and scaled by EMAs of the model's own batch
+confidence moments (eqs. 6, 7). §3.2 adds Uniform Alignment (eqs. 8, 9).
+
+Four readings of Algorithm 1 carry the fidelity of the port, and each is
+visible in a declaration or in the plan rather than buried in `compute`:
+
+* **The statistics are updated from the current batch, before that batch is
+  weighted.** Lines 4-7 precede line 9, so a row's weight depends on the
+  confidences of the *other* rows of its own batch and `batch_coupled` is
+  `True` — as in FreeMatch, and unlike FlexMatch. Unlike FreeMatch, step 0
+  folds its batch in rather than skipping it: eqs. (6) and (7) state no `t = 0`
+  exception and both pinned implementations update before weighting, which is
+  what makes the first step *almost* flat rather than exactly flat
+  (card §2's first limitation).
+* **The moments are estimated from unaligned confidence and compared against
+  an aligned one.** Lines 4-5 read `max(p_i)`; line 9 reads `max(UA(p_i))`.
+  Card §7's sixth unknown records that TorchSSL agrees with the algorithm and
+  the later USB path does not, and that this port follows the algorithm.
+* **UA changes the weight and not the label.** §3.2 is explicit that original
+  predictions compute the pseudo-label and normalised ones the sample weight,
+  so `labels` here is the arg max of the *unaligned* target. It is the stated
+  difference from Distribution Alignment and the easiest thing to get wrong.
+* **`lambda_max` is not in the policy.** It multiplies every row identically,
+  so it factors out exactly into the mixer's `Weighted(..., weight=...)`, and
+  card §4 binds it to `losses.weights` where a reader already looks for it.
+
+One objective owns the three EMAs and nothing else reads them, so the sibling
+state read `freematch` needed (`DESIGN.md` §4) is not engaged and the
+idempotence obligation that comes with it does not arise.
+"""
 
 from __future__ import annotations
 
@@ -76,7 +112,22 @@ class TruncatedGaussianWeighting:
 
 
 class ConfidenceGaussian:
-    """Executor-owned EMAs for confidence mean, variance, and class marginal."""
+    """`mu_hat_t`, `sigma_hat_t^2` and `E_hat[p]`: the EMAs of eqs. (7) and (8).
+
+    The state a `SoftWeightedTreatmentNLL` carries across the steps of one
+    stage. Built by the executor once per stage *execution* — never held on an
+    objective, so a recipe stays an immutable declaration and two runs of one
+    compiled recipe are identical (`core/loss.py`, `StatefulObjective`).
+
+    It needs no `TrainingPopulation`: every statistic is an average over the
+    batch, so there is no `N` to count and no row identity to key. That is the
+    third consumer of the signature `flexmatch.md` §5.1 chose for exactly this
+    reason.
+
+    All three are held in float64. They are running sums over thousands of
+    steps at `m = 0.999`, where a float32 EMA loses the tail of its own history
+    to rounding; `aligned` and `weights` cast at the point of use.
+    """
 
     __slots__ = (
         "_classes",
@@ -126,7 +177,25 @@ class ConfidenceGaussian:
         return self._last_step
 
     def observe(self, step: int, probs: Tensor) -> None:
-        """Fold the current unaligned weak-view batch in before weighting it."""
+        """Algorithm 1 lines 4-7, folding one batch into the three EMAs.
+
+        Called before the same batch is weighted, and from `compute` alone —
+        this state has one writer and one reader. The step guard is therefore
+        not the sibling-read obligation `SelfAdaptiveThresholds` carries but a
+        cheaper property: a term recomputed at one step (a diagnostic pass, a
+        mixer that evaluates twice) must not decay the EMAs twice, because the
+        second fold would move a number no reader of the declaration could see.
+        A repeat at one step whose row count differs is refused rather than
+        ignored, for the reason `freematch.md` §3.2 gives about one population.
+
+        Args:
+            step: `ctx.global_step`. Step 0 folds its batch in: eqs. (6) and
+                (7) state no `t = 0` exception and Algorithm 1 updates before
+                it weights, which is card §2's first limitation.
+            probs: `[n, K]` **unaligned** weak-view probabilities over the rows
+                the objective is entitled to, already detached. Unaligned
+                because eq. (6) reads `max(p_i)`, not `max(UA(p_i))`.
+        """
         if probs.ndim != 2 or probs.shape[1] != self._classes:
             raise LossError(
                 f"ConfidenceGaussian.observe needs [n, {self._classes}] "
@@ -177,7 +246,42 @@ class ConfidenceGaussian:
 
 @dataclass(frozen=True)
 class SoftWeightedTreatmentNLL:
-    """Eq. (2): hard weak-view labels weighted by eq. (9)."""
+    """`lambda(p_b) * -log p(t = arg max p_b | x)` — eq. (2) at eq. (9).
+
+    FixMatch's eq. (4) with the 0/1 gate replaced by the continuous weight of
+    eqs. (5)-(9), and with the statistics update of Algorithm 1 lines 4-7
+    alongside it. The weight is computed here, from the model's own
+    predictions, in the place `PseudoLabelTreatmentNLL` computes its mask —
+    it is not `batch.weight`, which is a property of a row supplied by the data
+    and reaches `ObservedOutcomeNLL` alone (`pseudo_label.py`, card §5.2).
+
+    Attributes:
+        port: The treatment-distribution port both sides read.
+        target: The realisation the artificial label comes from — the weak
+            view, `p_i = p(y | omega(u_i))`. It is also the realisation the
+            three EMAs are estimated from, unaligned.
+        prediction: The realisation the label is charged against — the strong
+            view, `p(y | Omega(u_i))`.
+        num_treatments: `C`. Not paper-governed and not a card key — it is a
+            property of the schema, and a component takes it the same way. It
+            is a field rather than something read from the batch because
+            `initial_state` runs before any batch exists, and `compute` checks
+            it against `ctx.schema` for the reason `DESIGN.md` §3.1 gives.
+        weighting: The whole `lambda(p)` rule. Binds
+            `losses.confidence_threshold`, so it has no default
+            (`DESIGN.md` §9.1) — and holds no threshold, which is why the key
+            carries a policy object rather than a float (card §4).
+        sharpening: How the label is formed. Binds `losses.sharpening`. Eq. (2)
+            charges a hard arg max and UA is a normalisation rather than a
+            temperature, so `hard` is the only reviewed value.
+        stop_grad: Which side is detached. Binds `gradients.detached_targets`.
+        rows: The population the term is entitled to, and the population the
+            EMAs are averaged over. FixMatch's footnote 2 — inherited through
+            §2.1's restatement of that framework (card §7's seventh unknown) —
+            puts every labelled row into `U` as well, so this recipe's value is
+            `all`.
+        name: Keys the per-objective log (§6.2) and the per-stage state.
+    """
 
     port: Port
     target: Realisation

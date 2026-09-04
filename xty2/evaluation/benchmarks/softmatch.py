@@ -178,8 +178,8 @@ def _replicate(index: int) -> dict[str, float]:
     ):
         raise RuntimeError("softmatch paired arms saw different training rows")
 
-    soft = _evaluate(soft_run, soft_result, train, test, soft=True)
-    constant = _evaluate(constant_run, constant_result, train, test, soft=False)
+    soft = _evaluate(soft_run, soft_result, test, soft=True)
+    constant = _evaluate(constant_run, constant_result, test, soft=False)
     for name in ("ema_treatment_nll", "trained_treatment_nll", "outcome_nll"):
         if constant[name] <= 0.0:
             raise RuntimeError(f"constant arm produced non-positive {name}")
@@ -234,7 +234,6 @@ def _constant_gate(recipe: Recipe) -> Recipe:
 def _evaluate(
     run: CompiledRun,
     result: StageResult,
-    train: ClusterPopulation,
     test: ClusterPopulation,
     *,
     soft: bool,
@@ -276,7 +275,7 @@ def _evaluate(
                 train_propensity.probs.max(dim=-1).values >= _CONSTANT_TAU
             ).float()
             mu_hat = sigma_squared = 0.0
-        wrong = (labels != train.batch.t).float()
+        wrong = (labels != population.rows.t).float()
         impurity = (
             float((weights * wrong).sum() / weights.sum())
             if float(weights.sum()) > 0.0
