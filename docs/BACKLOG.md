@@ -26,6 +26,7 @@ Git retains the exploratory chronology removed from this active queue.
 | Candidate | Why it is useful now | Principal boundary |
 |---|---|---|
 | CoMatch | tests whether class and instance structure can cooperate after SCARF did not improve the end task | mutual graph/pseudo-label interaction |
+| SoftMatch | replaces the pseudo-label gate with a weight, making the quantity-quality trade-off measurable | continuous per-row loss weighting |
 | PAWS | uses labelled support embeddings instead of instance negatives | stratified support sampling and metric labels |
 | ReMixMatch | deliberately combines several validated mechanisms | distribution alignment, adaptive augmentation, and row mixing |
 | SimMatch | refines labels across semantic and instance spaces | memory-bank lifecycle |
@@ -87,11 +88,10 @@ schedules; its acceptance test should isolate TSA and sharpening.
 
 ### 2.5 FixMatch and adaptive descendants
 
-FixMatch, FlexMatch, and FreeMatch are shipped cards; SoftMatch and
-SequenceMatch remain the next threshold-policy comparisons. FreeMatch is the
-second stateful consumer and the first to share one stage-owned state between
-two objectives: SAT and SAF are batch-coupled, and sibling access names the
-owning objective explicitly.
+FixMatch, FlexMatch, and FreeMatch are shipped cards. FreeMatch is the second
+stateful consumer and the first to share one stage-owned state between two
+objectives: SAT and SAF are batch-coupled, and sibling access names the owning
+objective explicitly.
 
 Its Tier 1 evidence also separates adaptation from threshold level. On the
 primary fixture the adaptive gate beats a matched constant arm in every seed;
@@ -101,6 +101,15 @@ inactive under prior skew alone but becomes load-bearing on the declared
 class-adjacency fixture, where confidence and predicted frequency diverge.
 Keep future state local and explicit, and preserve paired batches when comparing
 threshold policies.
+
+SoftMatch now has a drafted card, `docs/recipes/softmatch.md`, stopped for
+review. It is the first member of the family whose rule is not a gate: eq. (2)
+of that paper rewrites the whole lineage as one weighted cross-entropy and
+replaces the indicator with a truncated Gaussian on the confidence, so every
+row trains at every step with a positive weight. Read it before proposing a
+close relative, and read its §5.3 before proposing a shared thresholding
+abstraction — it answers the question `freematch.md` §5.3 left open.
+SequenceMatch remains the next threshold-policy comparison after it.
 
 ### 2.6 DoubleMatch
 
