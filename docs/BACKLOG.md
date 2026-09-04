@@ -34,10 +34,11 @@ Git retains the exploratory chronology removed from this active queue.
 | Explicit treatment-observation model | promotes label availability to a statistical variable | missingness semantics |
 
 Already present: SCARF is deviating, FixMatch and FlexMatch are reproduced,
-DoubleMatch and FreeMatch are drafts, PAWS is implemented and smoke-passing, and
-CoMatch is implemented (`docs/recipes/comatch.md`) with its full predeclared
-smoke study still open. SimMatch is implemented
-(`docs/recipes/simmatch.md`) with its Tier 1 study only partly run.
+DoubleMatch and FreeMatch are drafts, PAWS is implemented and smoke-passing,
+SoftMatch is deviating on its recorded ten-seed run, and CoMatch is implemented
+(`docs/recipes/comatch.md`) with its full predeclared smoke study still open.
+SimMatch is implemented (`docs/recipes/simmatch.md`) with its Tier 1 study only
+partly run.
 The variational latent treatment is also implemented and smoke-passing;
 `docs/recipes/variational_treatment.md` is its authoritative card. Read their
 cards before proposing a close relative; their active ledgers supersede the
@@ -87,11 +88,10 @@ schedules; its acceptance test should isolate TSA and sharpening.
 
 ### 2.5 FixMatch and adaptive descendants
 
-FixMatch, FlexMatch, and FreeMatch are shipped cards; SoftMatch and
-SequenceMatch remain the next threshold-policy comparisons. FreeMatch is the
-second stateful consumer and the first to share one stage-owned state between
-two objectives: SAT and SAF are batch-coupled, and sibling access names the
-owning objective explicitly.
+FixMatch, FlexMatch, and FreeMatch are shipped cards. FreeMatch is the second
+stateful consumer and the first to share one stage-owned state between two
+objectives: SAT and SAF are batch-coupled, and sibling access names the owning
+objective explicitly.
 
 Its Tier 1 evidence also separates adaptation from threshold level. On the
 primary fixture the adaptive gate beats a matched constant arm in every seed;
@@ -101,6 +101,29 @@ inactive under prior skew alone but becomes load-bearing on the declared
 class-adjacency fixture, where confidence and predicted frequency diverge.
 Keep future state local and explicit, and preserve paired batches when comparing
 threshold policies.
+
+SoftMatch is implemented and `deviating`. Its card is
+`docs/recipes/softmatch.md`. It is the first member of the family whose rule is
+not a gate: eq. (2) of that paper rewrites the whole lineage as one weighted
+cross-entropy and replaces the indicator with a truncated Gaussian on the
+confidence, so every row trains at every step with a positive weight. Read it
+before proposing a close relative, and read its §5.3 before proposing a shared
+thresholding abstraction — it answers the question `freematch.md` §5.3 left
+open. SequenceMatch remains the next threshold-policy comparison after it.
+
+Its first ten-seed result is still the reason to read §6 before borrowing the
+mechanism: on the balanced binary fixture the recipe beat the constant gate and
+raised quantity, but missed the predeclared gate-relative quality bound. A
+fidelity audit then found that target could not validate the whole published
+method because it made Uniform Alignment nearly inert and never ran the paper's
+no-UA ablation. The replacement `K = 4` long-tailed-to-balanced protocol does:
+UA beats no-UA on balanced EMA macro NLL (`0.936 ± 0.018`), SoftMatch beats the
+constant gate (`0.757 ± 0.034`), quantity rises by `0.210 ± 0.011`, and the
+Gaussian reduces its own model's unweighted pseudo-label impurity by
+`0.0310 ± 0.0039`. The card remains conservatively `deviating` because its
+predeclared *terminal* class-weight-dispersion reduction is positive but within
+its own noise (`0.0075 ± 0.0088`). Both result rows remain in the ledger; the
+second establishes that eq. (8) is active rather than erasing the first miss.
 
 ### 2.6 DoubleMatch
 

@@ -78,6 +78,12 @@ from xty2.objectives.simmatch import (
     SimilarityMatchingTemperatures,
     SimilarityMatchingTreatmentNLL,
 )
+from xty2.objectives.soft_weighting import (
+    Alignment,
+    ConfidenceGaussian,
+    SoftWeightedTreatmentNLL,
+    TruncatedGaussianWeighting,
+)
 from xty2.objectives.supervised import (
     ObservedOutcomeMSE,
     ObservedOutcomeNLL,
@@ -106,7 +112,9 @@ __all__ = [
     "LOG_FLOOR",
     "STOP_GRADIENTS",
     "UNUSED",
+    "Alignment",
     "CoMatchConfidenceThresholds",
+    "ConfidenceGaussian",
     "ConfidenceMaskedConsistencyLoss",
     "ConsistencyDivergence",
     "ConsistencyLoss",
@@ -144,11 +152,13 @@ __all__ = [
     "SimilarityMatchingSpec",
     "SimilarityMatchingTemperatures",
     "SimilarityMatchingTreatmentNLL",
+    "SoftWeightedTreatmentNLL",
     "StopGrad",
     "SupportSetClassifier",
     "SupportSetPseudoLabelConsistency",
     "TargetRole",
     "TrainingSignalAnnealedTreatmentNLL",
+    "TruncatedGaussianWeighting",
     "UDAConfidenceThresholds",
     "UDADivergence",
     "UDASchedule",

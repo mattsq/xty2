@@ -24,13 +24,13 @@ Replicate = Mapping[str, float]
 ReplicateFunction = Callable[[int], dict[str, float]]
 
 
-def continuous_schema(features: int) -> Schema:
-    """The all-continuous scalar-outcome schema used by all five cards."""
+def continuous_schema(features: int, *, treatments: int = 2) -> Schema:
+    """An all-continuous scalar-outcome schema for a categorical treatment."""
     return Schema(
         features=tuple(
             FeatureSpec(f"x{column}", "continuous") for column in range(features)
         ),
-        treatment_cardinality=2,
+        treatment_cardinality=treatments,
         outcome=OutcomeSpec(),
     )
 
