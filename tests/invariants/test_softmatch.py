@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -26,7 +27,13 @@ from xty2.objectives import (
     TruncatedGaussianWeighting,
 )
 from xty2.recipes import softmatch
-from xty2.recipes.fixmatch import STRONG_X, WEAK_X, WEAK_X_LABELLED
+from xty2.recipes.fixmatch import (
+    STRONG_X,
+    WEAK_MASK_RATE,
+    WEAK_X,
+    WEAK_X_LABELLED,
+)
+from xty2.recipes.flexmatch import STRONG_MASK_RATE
 from xty2.recipes.softmatch import SOFTMATCH_TERM, SOFTMATCH_WEIGHTING
 
 from tests.invariants.conftest import (
@@ -272,9 +279,179 @@ def test_the_recipe_plan_is_the_reviewed_four_term_program() -> None:
     assert [transform.p for transform in recipe.views[1].transforms] == [0.1, 0.2]  # type: ignore[attr-defined]
 
 
-def test_the_card_status_matches_the_smoke_evidence_and_names_the_recipe() -> None:
+# ---------------------------------------------------------------------------
+# The views (card §4's prose, which §4's YAML has no key for)
+# ---------------------------------------------------------------------------
+
+
+def test_the_two_declared_views_are_the_ones_the_compiled_plan_runs() -> None:
+    """Card §4's view paragraph asks for exactly this comparison.
+
+    "§4's YAML has no key for a view, so a Tier 0 test must compare this
+    paragraph's two transforms against the compiled plan, as
+    `tests/invariants/test_freematch.py` does." The weak view is `fixmatch`'s
+    at two draws; the strong one is `flexmatch`'s 0.1-then-0.2, which is
+    deviation 2 and the one thing §2's first limitation makes load-bearing
+    here.
+    """
+    plan = compile(softmatch(_recipe_schema())).plan
+    assert [view.name for view in plan.views] == ["weak_x", "strong_x"]
+    weak, strong = plan.views
+    assert weak.transforms == (
+        f"FeatureMask(p={WEAK_MASK_RATE}, columns=all, value=0.0)",
+    )
+    assert weak.draws == 2
+    assert strong.transforms == (
+        f"FeatureMask(p={WEAK_MASK_RATE}, columns=all, value=0.0)",
+        f"FeatureMask(p={STRONG_MASK_RATE}, columns=all, value=0.0)",
+    )
+    assert strong.draws == 1
+    assert STRONG_MASK_RATE == 0.2
+
+
+def test_the_cards_prose_about_the_views_matches_the_plan() -> None:
+    """The same staleness guard `freematch`'s Tier 0 carries, for the same reason."""
     text = CARD.read_text(encoding="utf-8")
-    assert "**Status:** `smoke-passing`" in text
+    mapping = text.split("### 3.2 Mapping to xty2", 1)[1].split("## 4.", 1)[0]
+    checklist = text.split("## 4. Mechanics checklist", 1)[1].split("## 5.", 1)[0]
+    for section, where in ((mapping, "§3.2"), (checklist, "§4")):
+        assert f"FeatureMask(p={STRONG_MASK_RATE})" in section, (
+            f"{where} does not name the strong view the plan runs "
+            f"(p={STRONG_MASK_RATE})"
+        )
+        assert f"FeatureMask(p={WEAK_MASK_RATE})" in section
+        for line in section.splitlines():
+            if "FeatureMask(p=0.5)" in line:
+                assert "fixmatch" in line or "deviation 2" in line, (
+                    f"{where} names FeatureMask(p=0.5) without saying it is "
+                    f"`fixmatch`'s: {line!r}"
+                )
+
+
+def test_the_term_declares_the_conventions_the_card_asks_it_to_publish() -> None:
+    """Card §6.2's fifth Tier 0 assertion: the digest carries both conventions.
+
+    `plan_details()` is what a reviewer diffs against §3.2 and §4, so the
+    denominator convention and the alignment target have to be *in* it rather
+    than merely true of the code.
+    """
+    stage = compile(softmatch(_recipe_schema())).stage("joint_fit")
+    assert stage.objectives[2].plan_details == (
+        "label = arg max of the unaligned target realisation",
+        "weight = truncated Gaussian of aligned confidence (eq. 9)",
+        "mu_hat and sigma_hat^2 use EMA decay 0.999 (eq. 7)",
+        "sigma_hat^2 uses the unbiased B_U/(B_U-1) batch variance",
+        "Gaussian denominator = 2 * sigma_hat^2 / 2^2",
+        "weight confidence alignment = uniform",
+        "uniform alignment target = u(K); pseudo-label remains unaligned",
+        "all three EMAs fold in this batch before this batch is weighted",
+        "denominator = every eligible row; weights multiply inside the mean",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Card §4 against the plan (`FIDELITY.md` §1.2, `CLAUDE.md` hard rule 4)
+# ---------------------------------------------------------------------------
+
+
+def _card_section_four() -> dict[str, str | dict[str, str]]:
+    """Card §4 as data: `{canonical_key: value}` or `{key: {scope: value}}`."""
+    text = CARD.read_text(encoding="utf-8")
+    section = text.split("## 4. Mechanics checklist", 1)[1].split(
+        "## 5. Deviations from the paper", 1
+    )[0]
+    match = re.search(r"```yaml\n(.*?)```", section, re.DOTALL)
+    assert match is not None
+    answered: dict[str, str | dict[str, str]] = {}
+    current = ""
+    key = ""
+    for line in match.group(1).splitlines():
+        statement = line.split("#", 1)[0].rstrip()
+        if not statement:
+            continue
+        indent = len(statement) - len(statement.lstrip())
+        name, _, value = statement.strip().partition(":")
+        if indent == 0:
+            current = name
+        elif indent == 2:
+            key = f"{current}.{name}"
+            if value.strip() == "n/a":
+                key = ""
+                continue
+            answered[key] = value.strip()
+        elif indent == 4 and key:
+            nested = answered.get(key)
+            if not isinstance(nested, dict):
+                nested = {}
+                answered[key] = nested
+            nested[name] = value.strip()
+    return answered
+
+
+def _rendered(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, tuple):
+        return "[" + ", ".join(str(item) for item in value) + "]"
+    return str(value)
+
+
+def test_every_answered_card_key_reaches_the_plan() -> None:
+    """`CLAUDE.md`: a non-`n/a` §4 key must reach `plan.hyperparameters`."""
+    plan = compile(softmatch(_recipe_schema())).plan
+    answered = set(_card_section_four())
+    missing = sorted(answered - set(plan.hyperparameters))
+    assert not missing, "card keys missing from plan: " + ", ".join(missing)
+    assert "losses.confidence_threshold" in answered
+    assert plan.hyperparameters["losses.confidence_threshold"] == SOFTMATCH_WEIGHTING
+
+
+def test_the_card_and_the_plan_agree_on_every_value_section_four_states() -> None:
+    """Key presence is not the cross-check; the values are."""
+    hyperparameters = compile(softmatch(_recipe_schema())).plan.hyperparameters
+    mismatched: list[str] = []
+    symbolic = {"architecture.widths_depths": {"K": "2", "X_REPR": "200"}}
+    checked = 0
+    for key, stated in _card_section_four().items():
+        planned = hyperparameters.get(key)
+        if planned is None:
+            mismatched.append(f"{key}: absent from the plan")
+            continue
+        if isinstance(stated, str):
+            if not isinstance(planned, dict) and _rendered(planned) != stated:
+                mismatched.append(f"{key}: card {stated!r} vs plan {planned!r}")
+            checked += 1
+            continue
+        assert isinstance(planned, dict), f"{key} is scoped in the card only"
+        for scope, value in stated.items():
+            if scope not in planned:
+                mismatched.append(f"{key}[{scope}]: absent from the plan")
+                continue
+            resolved = value
+            for symbol, concrete in symbolic.get(key, {}).items():
+                resolved = resolved.replace(symbol, concrete)
+            if _rendered(planned[scope]) != resolved:
+                mismatched.append(
+                    f"{key}[{scope}]: card {resolved!r} vs plan {planned[scope]!r}"
+                )
+            checked += 1
+    assert not mismatched, "card and plan disagree: " + "; ".join(mismatched)
+    assert checked >= 55
+
+
+def test_the_card_status_matches_the_tier2_evidence_and_names_the_recipe() -> None:
+    """§6.3 carries a recorded ten-seed run, so the status is its outcome.
+
+    `deviating` rather than `reproduced` because one of the eight declared
+    targets — §6's quality guardrail on the weighted pseudo-label impurity —
+    is missed, and `FIDELITY.md` §3 forbids retuning a tolerance after seeing
+    a result. The written §5 explanation the status requires is asserted here
+    too, because `assert_result_matches_card` only sees it on a nightly.
+    """
+    text = CARD.read_text(encoding="utf-8")
+    assert "**Status:** `deviating`" in text
+    assert "### Tier 2 outcome" in text
+    assert "weighted_impurity_vs_1.25x_gate" in text
     assert "| [`softmatch.md`](recipes/softmatch.md) | `softmatch` |" in (
         CARD.parents[1] / "RECIPES.md"
     ).read_text(encoding="utf-8")

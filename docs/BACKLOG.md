@@ -34,11 +34,11 @@ Git retains the exploratory chronology removed from this active queue.
 | Explicit treatment-observation model | promotes label availability to a statistical variable | missingness semantics |
 
 Already present: SCARF is deviating, FixMatch and FlexMatch are reproduced,
-DoubleMatch and FreeMatch are drafts; PAWS and SoftMatch are implemented and
-smoke-passing; and
-CoMatch is implemented (`docs/recipes/comatch.md`) with its full predeclared
-smoke study still open. SimMatch is implemented
-(`docs/recipes/simmatch.md`) with its Tier 1 study only partly run.
+DoubleMatch and FreeMatch are drafts, PAWS is implemented and smoke-passing,
+SoftMatch is deviating on its recorded ten-seed run, and CoMatch is implemented
+(`docs/recipes/comatch.md`) with its full predeclared smoke study still open.
+SimMatch is implemented (`docs/recipes/simmatch.md`) with its Tier 1 study only
+partly run.
 The variational latent treatment is also implemented and smoke-passing;
 `docs/recipes/variational_treatment.md` is its authoritative card. Read their
 cards before proposing a close relative; their active ledgers supersede the
@@ -102,14 +102,23 @@ class-adjacency fixture, where confidence and predicted frequency diverge.
 Keep future state local and explicit, and preserve paired batches when comparing
 threshold policies.
 
-SoftMatch is implemented and smoke-passing. Its card is
-`docs/recipes/softmatch.md`. It is the first member of the family whose rule is not a gate: eq. (2)
-of that paper rewrites the whole lineage as one weighted cross-entropy and
-replaces the indicator with a truncated Gaussian on the confidence, so every
-row trains at every step with a positive weight. Read it before proposing a
-close relative, and read its §5.3 before proposing a shared thresholding
-abstraction — it answers the question `freematch.md` §5.3 left open.
-SequenceMatch remains the next threshold-policy comparison after it.
+SoftMatch is implemented and `deviating`. Its card is
+`docs/recipes/softmatch.md`. It is the first member of the family whose rule is
+not a gate: eq. (2) of that paper rewrites the whole lineage as one weighted
+cross-entropy and replaces the indicator with a truncated Gaussian on the
+confidence, so every row trains at every step with a positive weight. Read it
+before proposing a close relative, and read its §5.3 before proposing a shared
+thresholding abstraction — it answers the question `freematch.md` §5.3 left
+open. SequenceMatch remains the next threshold-policy comparison after it.
+
+Its ten-seed result is the reason to read §6 before borrowing the mechanism:
+the recipe beats the constant gate on held-out treatment NLL and raises the
+paper's quantity `f(p)` from 0.825 to 0.929, and it misses the card's own
+quality guardrail — the weighted pseudo-label impurity exceeds 1.25x the
+gate's retained-label impurity by 0.0088 ± 0.0018. That is the
+quantity-quality trade-off the paper claims to remove, declining to be removed
+on this fixture, and it was predeclared as a failure rather than discovered as
+one.
 
 ### 2.6 DoubleMatch
 

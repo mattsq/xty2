@@ -1,6 +1,6 @@
 # Recipe spec card: softmatch
 
-**Status:** `smoke-passing`
+**Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
@@ -8,7 +8,12 @@
 
 > Written card-first, before any code, per `CLAUDE.md` rule 1. The reviewed
 > card now has a recipe, objective, Tier 0 invariants, a Tier 1 paired fit and
-> a wired Tier 2 runner. The ten-seed Tier 2 result remains outstanding.
+> a Tier 2 runner whose ten-seed result is recorded in §6.3. That result is
+> `deviating`: seven of the eight declared targets pass — the recipe beats the
+> constant gate on held-out treatment NLL and raises quantity — and the one
+> that fails is §6's quality guardrail, which is the clause §6 wrote so that it
+> could fail on its own and the cost §2's first limitation predicts. §6.2's
+> five-seed `no_ua`/`matched` directions remain outstanding.
 >
 > It is also the card `freematch.md` §5.3 named in advance. That section asked
 > whether the three gated pseudo-label objectives should collapse into one
@@ -507,6 +512,10 @@ one that would settle it. Three things changed:
   a card needs two recipes' weighting rules to be interchangeable at runtime,
   which nothing does today.
 
+### Tier 2 outcome
+
+On 2026-09-04, commit `7e55fdc8e921` produced a `deviating` result: This is the predeclared project-local SoftMatch mechanism target: whether continuous Gaussian weights improve missing-treatment classification while raising weighted quantity without losing the declared pseudo-label quality. It is not an image benchmark. Failed target(s): weighted_impurity_vs_1.25x_gate was 0.00881344 +/- 0.00175 against mean <= 0, by at least one stderr.
+
 ## 6. Reproduction target
 
 The published CIFAR-10/100, SVHN, STL-10, ImageNet and text error rates cannot
@@ -610,13 +619,21 @@ unsupervised term is non-degenerate (terminal `f(p)` strictly inside
 that held-out treatment NLL beats the `constant` arm on the smoke seed. The
 `no_ua` and `matched` arms of §6.1 run here, five seeds, reported as directions.
 
+**The five-seed `no_ua` and `matched` study is declared and not yet run.**
+`tests/smoke/test_softmatch.py` fits the `softmatch`/`constant` pair on the
+smoke seed and asserts only that the other two arms are *expressible* — the
+`alignment="none"` policy and the gate matched to the `mu_hat_t` this recipe
+reaches. Recorded here rather than left in the gap between a declaration and a
+test, because `freematch.md` §6.2's directions are the shape this section is
+promising and nothing has produced them yet.
+
 **Tier 2 — the block above**, nightly, ten seeds.
 
 ### 6.3 Result ledger
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
-| — | — | — | — | not yet run (card is `smoke-passing`) |
+| 2026-09-04 | `7e55fdc8e921` | ema_treatment_NLL_ratio<br>trained_treatment_NLL_ratio<br>terminal_quantity_advantage<br>weighted_impurity_vs_1.25x_gate<br>weighted_pseudo_label_impurity<br>held_out_outcome_NLL_ratio<br>terminal_mu_hat<br>terminal_sigma_squared | 0.923445 +/- 0.00715<br>0.937315 +/- 0.0118<br>0.104669 +/- 0.00945<br>0.00881344 +/- 0.00175<br>0.0754915 +/- 0.00248<br>0.999709 +/- 9.5e-05<br>0.916051 +/- 0.00281<br>0.0598245 +/- 0.000441 | no |
 
 ## 7. Unknowns
 

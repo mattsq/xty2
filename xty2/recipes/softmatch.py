@@ -48,9 +48,44 @@ from xty2.views import FeatureMask
 SOFTMATCH_WEIGHTING = TruncatedGaussianWeighting(
     decay=0.999, n_sigma=2, alignment="uniform"
 )
+"""Eqs. (5)-(9) as one rule, and card §4's `losses.confidence_threshold`.
+
+`decay` is `m`, the momentum table 6 gives for the EMAs of eq. (7) and, by
+card §7's third unknown, for eq. (8)'s running marginal too. `n_sigma` is
+§4.1's "divide the estimated variance by 4 for `2 sigma`", read as card §7's
+second unknown resolves it. `alignment="uniform"` is eq. (8)'s `u(C)` target;
+`"none"` is the paper's §4.5 `w/o UA` arm, which card §6.1 declares.
+
+The rule holds no threshold at all — `lambda(p)` has a breakpoint at
+`mu_hat_t` and a row below it still trains — which is why card §4 binds the
+whole policy object to one key rather than a float, as `flexmatch` and
+`freematch` already do for their own rules.
+"""
+
 SOFTMATCH_STEPS = FIXMATCH_STEPS
+"""Card §4, and the `K` of the cosine rate schedule.
+
+The paper trains for `2^20` steps; deviation 3 fixes the shared project-local
+budget instead, so that a difference between this recipe and its constant-gate
+arm is attributable to the weighting function rather than to the budget.
+"""
+
 UNSUPERVISED_WEIGHT = 1.0
+"""`lambda_max`, carried by `losses.weights` rather than by the policy.
+
+Eq. (2) multiplies every row by it and `Weighted` multiplies the whole term by
+`w`, so the two are the same operation and one of them is redundant. The value
+is Algorithm 1 line 9's own `1.0`, which is also what `L = L_s + L_u` says
+(card §7's first unknown).
+"""
+
 SOFTMATCH_TERM = "soft_weighted_treatment_nll"
+"""The name eq. (2)'s term is logged under, and what its per-stage state is keyed by.
+
+Named once rather than twice: `TrainContext.objective_state` looks the
+`ConfidenceGaussian` up by this string, and the Tier 1 and Tier 2 arms read
+`quantity`, `mu_hat` and `sigma_squared` out of the same log entry.
+"""
 
 DATA_POLICY = DataSpec(
     split=SplitSpec(
@@ -61,8 +96,12 @@ DATA_POLICY = DataSpec(
         train="train",
     ),
     preprocess=PreprocessSpec(features="none", outcome="zscore"),
+    # Card §6.1 reuses `fixmatch`'s fixture unchanged, budget included: the
+    # comparison arm is that recipe's gate, and a different label budget would
+    # make it a different comparison.
     missingness=MissingnessSpec(mechanism="mcar", observed=OBSERVED_TREATMENTS),
 )
+"""The four `data.*` card keys."""
 
 
 def softmatch(

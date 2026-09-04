@@ -24,6 +24,9 @@ its evidence. The status line inside each card is authoritative.
 | [`meta_pseudo_labels.md`](recipes/meta_pseudo_labels.md) | `meta_pseudo_labels` | one-step labelled-feedback meta-gradient from student to an independently trained UDA teacher |
 | [`softmatch.md`](recipes/softmatch.md) | `softmatch` | truncated-Gaussian per-row pseudo-label weights and uniform alignment |
 
+A **Recipe** cell names a callable in `xty2/recipes/`; `none yet (draft)` marks
+a card that is still stopped for review, so no such name exists.
+
 Use [`_TEMPLATE.md`](recipes/_TEMPLATE.md) for a new method and stop for review
 before implementation.
 
