@@ -62,8 +62,20 @@ from xty2.training import StageResult, run_stage
 
 _TRAIN_ROWS = 1_024
 _TEST_ROWS = 2_048
-_BASE_SEED = 94_000
-"""Tier 1 fits this card at 94_00x; Tier 2 reads the same world one seed apart."""
+_BASE_SEED = 90_000
+"""`fixmatch.md` §6.1's stream, which §6.1 adopts along with its generator.
+
+Not this card's Tier 1 seeds, and the difference is the whole point of the
+sentence: §6.1 changes exactly one thing about `fixmatch.md` §6.1 — the
+assignment overlap — and "seed streams" is on the list of things it takes
+unchanged. `s_r = 90000 + 100r` with the population draws at `s_r+1` and
+`s_r+2`, the initialisation at `s_r+6` and the stage at `s_r+10000` is that
+stream, offsets included. A benchmark that quietly picked its own would stamp
+this block's digest on numbers the block did not describe.
+
+`uda` and `meta_pseudo_labels` sit at 94_000 because their own §6.1 says so.
+This card's does not.
+"""
 
 _OVERLAP = 0.25
 """§6.1's one declared change to `fixmatch.md` §6.1.
