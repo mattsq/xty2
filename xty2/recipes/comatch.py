@@ -134,7 +134,7 @@ def comatch(
                     activation="elu",
                     normalisation="row_l2",
                     dropout=0.0,
-                    initialisation=CFRNET_INITIALISATION,
+                    initialisation=TORCH_LINEAR_INITIALISATION,
                 ),
                 ProjectionHead(
                     representation_dim=ENCODER_WIDTHS[-1],

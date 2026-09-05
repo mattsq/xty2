@@ -632,3 +632,8 @@ def test_batch_coupling_and_state_refuse_unreviewed_execution_paths() -> None:
             executor="cross_fit",
             action=PseudoLabelAction(port=Port.T_GIVEN_X),
         )
+
+
+def test_only_the_completed_ten_seed_protocol_sets_reproduced() -> None:
+    """`FIDELITY.md` §1.1: the recorded Tier 2 result promotes the card."""
+    assert "**Status:** `reproduced`" in CARD.read_text(encoding="utf-8")
