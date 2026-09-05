@@ -869,8 +869,11 @@ def _label_control(metrics: _Metrics) -> _LabelControl:
     """Re-read one finished bank through the true and a rolled label map.
 
     `prepare` is given no support rows, so it neither validates a batch against
-    `Q_l` nor writes a slot: the call is a pure read of the bank as the run left
-    it, which is what lets the permuted copy exist at all.
+    `Q_l` nor writes a slot: both calls are pure reads, which is what lets the
+    permuted copy exist at all. They read the bank as `_terminal_targets` left
+    it — that reading does supply support rows and so applies one more
+    equation (12) update — and both sides of this control read the same one, so
+    the only difference between them is the map.
     """
     run, result = metrics.run, metrics.result
     population = result.population

@@ -1,6 +1,6 @@
 # Recipe spec card: simmatch
 
-**Status:** `implemented`
+**Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity; §6 only for
@@ -349,12 +349,23 @@ into a component buffer.
 | `SimilarityMatchingTreatmentNLL` — equation (2) with the aggregated soft target `hat p`; owner of the memory | fidelity-bearing, reversible | this card | not required | Existing `PseudoLabelTreatmentNLL` hardens a target read directly from `T_GIVEN_X`; neither is true here. A flag would put two target-generating algorithms inside one objective. |
 | `LabeledMemoryInstanceConsistency` — equations (3)–(5), reading calibrated `hat q` from the named owner | fidelity-bearing, reversible | this card | not required | `InfoNCEContrastive` uses the identity as its target. The paper’s table 7 says that substitution loses 8.2 points, so the labelled distribution over memory slots is the mechanic rather than an interchangeable contrastive loss. |
 
+**Added since, for §6.2's arm 8 and nothing else.** `PropagatedTargets` carries
+the eligible rows' detached weak embeddings so equation (5) can log the
+same-row and cross-row cross-view cosines each step. It adds no port, value,
+schedule or plan field, and it changes no number the mixer sees; it exists
+because a per-step trajectory of the pair equation (5) is meant to align cannot
+be reconstructed from a step record that holds only one side of it.
+
 **Existing contracts deliberately reused.** `X_PROJ` and `ProjectionHead` come
 from SCARF/PAWS; `support_rows` comes from PAWS and was already exercised by
 CoMatch; objective state, `TrainingPopulation`, idempotent sibling reads, quota
 sampling, distribution-alignment precedent, soft sharpening `none`, and
 evaluation-only EMA all exist. Implementation should amend this card and stop
 again if any of those shapes proves insufficient.
+
+### Tier 2 outcome
+
+On 2026-09-05, commit `be173ef1a2e6` produced a `deviating` result: This is the predeclared project-local SimMatch mechanism target: do equations (8) and (10) — the instance distribution over labelled slots calibrated by the semantic prediction, and the semantic target smoothed by that distribution's class aggregate — improve a *treatment* propensity and the targets it trains on, against an otherwise identical fit whose two propagation arrows are switched off. It is not a reproduction of Zheng et al., whose inputs, labels, architecture, augmentation vocabulary, metric and CIFAR-scale budget all differ (deviations 2, 3, 4 and 10). Failed target(s): terminal_aggregate_hat_q_target_NLL_ratio was 1.63719 +/- 0.0342 against mean <= 1, by at least one stderr; cross_view_alignment_margin was 0.155997 +/- 0.0121 against mean >= 0.2, by at least one stderr.
 
 ## 6. Reproduction target
 
@@ -486,38 +497,189 @@ Before training, measure rather than assume:
 6. **Permuted memory labels:** apply one fixed non-identity permutation to
    `Q_l` after warm-up while retaining features and class counts. Both target
    improvements should disappear. This is a wiring control, not a useful
-   method arm.
+   method arm. (Run during implementation, in the literal retrained form and in
+   an isolated one that rolls the map on the full arm's own finished bank. The
+   aggregate's improvement disappears; `hat p`'s does not, because equation
+   (10) mixing in 10% of a constant is shrinkage. Predeclared expectation
+   falsified; the measurement and its consequence for §6's third tolerance are
+   under "What has run", and the tolerance is left as declared.)
 7. **Distribution alignment off**, on the balanced fixture and on a diagnostic
    variant with `p(t=1)=0.15`. Report predicted and true marginals. No skewed-
    fixture performance direction is required; a uniformising operation can be
    misspecified there.
 8. Report bank slot norm, class coverage, nearest-neighbour label agreement,
    gate rate, retained semantic-target impurity, same-row weak/strong cosine,
-   and cross-row cosine trajectories for every arm.
+   and cross-row cosine trajectories for every arm. (The two cosines are logged
+   by equation (5) each step for this, as diagnostics; see "What has run".)
 
 **Tier 2 (fixed ten-replicate target).** Run only the full and no-propagation
 pair under the YAML contract above. The Tier 1 arms diagnose a failure but do
 not enter the acceptance metric and cannot be selected after seeing Tier 2.
 
 **What has run.** All twelve Tier 0 invariants are in
-`tests/invariants/test_simmatch.py`. Tier 1 arm 1 is in
-`tests/smoke/test_simmatch.py`, at 600 optimiser steps on one seed, with the
-warm-up, coverage and propagation behaviour asserted against a real run and
-both propagated targets scored on the fixture's hidden treatments. Measured on
-that run: gate rate 0.15 → 0.72 with accepted confidence 0.98, instance loss
-3.974 → 3.951 against a uniform-slot 4.159, target entropy 3.73 → 3.42,
-nearest-slot label agreement 0.81, held-out treatment NLL 0.268 student and
-0.370 EMA against a 0.708 marginal-frequency baseline, and hidden-label target
-NLL 0.2635 for `hat p` against 0.2682 for `DA(p^w)`. One seed at a fifth of the
-declared budget supports no direction; §6's ten-replicate contract is where one
-may be read. Arms 2–8 and Tier 2 are open; the status line stays `implemented`
-until the predeclared Tier 1 study runs in full.
+`tests/invariants/test_simmatch.py`. The whole Tier 1 study is in
+`tests/smoke/test_simmatch.py`, at 600 optimiser steps on one seed of §6.1's
+stream, with every arm starting from the same initial parameters — asserted
+tensor by tensor — and drawing the same quota stream.
+
+§6.1's three pre-training measurements were taken rather than assumed. The
+Bayes-optimal treatment label — which on this DGP is the Bayes-optimal cluster
+label, because the assignment puts 0.98 on a cluster's own level — flips on
+**2.9%** of rows under the weak view and **18.5%** under the strong one. That
+second number is `fixmatch`'s 0.5 strong rate, which `flexmatch.md` §5.2
+already measured as not label-preserving and which deviation 2 inherits
+deliberately to keep the controlled comparison; every arm below carries it
+equally. Observed support is 27/37 over `K = 64`, and the true `p(t = 1)` is
+0.500 in train, 0.494 held out, and 0.152 on arm 7's skewed fixture.
+
+Held-out treatment NLL is the student's; `same − cross` is the terminal-window
+cross-view cosine margin; the last four columns are hidden-label NLLs of the
+terminal targets. The marginal-frequency baseline is 0.708 on the balanced
+fixture, which the first eight arms share.
+
+| Arm | held-out t-NLL | gate | `same − cross` | `hat p` | `p^w` | `agg hat q` | `agg q^w` |
+|---|---|---|---|---|---|---|---|
+| full | 0.2680 | 0.724 | 0.168 | 0.2870 | 0.2911 | 0.4222 | 0.2679 |
+| §6 pair's no-propagation ablation | 0.2822 | 0.737 | 0.001 | 0.3006 | 0.3006 | 0.6933 | n/a |
+| 2 — `alpha = 1` | 0.2683 | 0.739 | 0.168 | 0.2912 | 0.2912 | 0.4220 | n/a |
+| 3 — unfolding off | 0.2981 | 0.109 | 0.001 | 0.2979 | 0.3153 | 0.6945 | 0.6945 |
+| 4 — `lambda_in = 0` | 0.2836 | 0.466 | 0.034 | 0.2907 | 0.3034 | 0.3454 | 0.4286 |
+| 5 — bank momentum 0 | 0.2647 | 0.720 | 0.173 | 0.2853 | 0.2896 | 0.4173 | 0.2683 |
+| 6 — permuted `Q_l` | 0.2991 | 0.092 | 0.002 | 0.2980 | 0.3159 | 0.3250 | 0.7067 |
+| 7 — DA off, balanced | 0.2685 | 0.722 | 0.168 | 0.2874 | 0.2919 | 0.4214 | 0.2672 |
+| 7 — skewed, DA on | 0.2329 | 0.108 | 0.070 | 0.3422 | 0.3885 | 0.3030 | 0.2064 |
+| 7 — skewed, DA off | 0.2030 | 0.686 | 0.062 | 0.2155 | 0.2197 | 0.2766 | 0.2083 |
+
+Three readings. None of them is a direction: one seed at a fifth of the
+declared budget cannot support one, and §6's ten replicates cover the pair
+only. Arms 2, 3 and 4 carry predeclared expectations from the paper's table 5
+and figure 5, and this study reports where they landed without promoting a
+one-seed landing into a finding.
+
+1. **The cross-view geometry comes from equation (8)'s calibration and
+   equation (5)'s gradient, and not from equation (10).** The full arm's
+   terminal margin is 0.168. Arm 2 drops only equation (10) and is
+   indistinguishable from it (0.168). Arm 3 drops only the calibration and
+   loses essentially all of it (0.001), as does the §6 ablation, which drops
+   both (0.001), and arm 6, which keeps the calibration but rolls the labels it
+   reads (0.002). Arm 4, which keeps every piece of the arithmetic and removes
+   only equation (5)'s gradient, keeps a fifth (0.034) — what the shared
+   encoder produces on its own, with no instance loss pushing on it.
+   The mechanism is this. With `hat q = q^w` the instance loss has a degenerate
+   optimum: a collapsed space makes both `hat q` and `q^s` near-uniform over
+   the 64 slots, and the cross-entropy is satisfied without any geometry.
+   Calibrating `hat q` by `p^w` peaks the target on same-class slots, which
+   `q^s` can only match by moving.
+2. **Distribution alignment is inert on the balanced fixture and misspecified
+   on the skewed one.** Turning it off moves the balanced arm by 0.0005 in
+   held-out NLL — the fixture's true marginal is already uniform, so there is
+   nothing for a uniformising operation to do. On the `p(t = 1) = 0.152`
+   fixture the aligned arm's terminal predicted marginal is 0.208 against the
+   unaligned arm's 0.177, and the unaligned arm fits better. This is the
+   misspecification `paws.md` §6.2 records for me-max; §2 claims nothing about
+   a skewed treatment prevalence and this card does not start now.
+3. **Arm 6 falsifies its own predeclared expectation, and §6's third tolerance
+   inherits the consequence.** See below.
+
+**Arm 6, and what it costs the `hat p` reading.** The card predeclared that
+permuting `Q_l` would make "both target improvements disappear". Read in an
+isolated form the card did not specify — the full arm's *own* finished bank,
+its own student, its own view draw, and only the slot-to-class map rolled by
+one — half of that happens and half does not:
+
+| | `p^w` | `hat p` | `aggregate(q^w)` | spread of `aggregate(q^w)` |
+|---|---|---|---|---|
+| true `Q_l` | 0.29107 | 0.28656 | 0.26642 | 0.4280 |
+| rolled `Q_l` | 0.29107 | 0.28225 | 0.72898 | 0.0142 |
+| `0.9 p^w + 0.1 * class frequency` | 0.29107 | 0.28209 | — | — |
+
+The aggregate collapses exactly as a wiring control should: a roughly even
+random split of the slots carries a roughly even split of every row's
+similarity mass whatever that row looks like, so
+equation (9)'s output goes from an informative distribution to a near-constant
+one and its hidden-label NLL nearly triples. What does **not** disappear is
+`hat p`'s advantage over `p^w`. It cannot: equation (10) mixes in 10% of
+*something*, and 10% of a constant is shrinkage toward the class prior. The
+rolled reading lands on the constant-prior shrinkage baseline to within
+0.0002, and it is *better* than the true-label reading — with the true map the
+aggregate is informative but disagrees with `p^w` in a way that costs more NLL
+than it earns on this fixture.
+
+So §6's `terminal hat-p target-NLL ratio < 1.0` measures something real and
+passes it (§6.3), but on this fixture it is not by itself evidence that
+propagation propagated anything, and no reading of the ledger should treat it
+as such. The tolerance is left exactly as declared — weakening or redefining a
+predeclared metric after seeing it is the deviation `FIDELITY.md` §3 forbids —
+and this paragraph is the caveat that travels with it. A future amendment
+wanting a propagation-attributable version of this metric should predeclare the
+rolled-label control as its denominator, and re-run.
+
+**What arm 8 required, and what changed to supply it.** The same-row and
+cross-row cross-view cosines are now logged by equation (5) every step rather
+than recomputed afterwards, so the card's "trajectories for every arm" are a
+property of the realisations the loss charged. They are diagnostics only — no
+loss, gradient, hyperparameter or plan field moves — and they are computed in
+closed form at `O(nD)`, because `sum_ij z^w_i . z^s_j` is
+`(sum_i z^w_i) . (sum_j z^s_j)` and a 448-row gram every step is not what a
+diagnostic may cost.
 
 ### 6.3 Result ledger
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
-| — | — | — | — | — |
+| 2026-09-05 | `be173ef1a2e6` | student_treatment_NLL_ratio<br>ema_treatment_NLL_ratio<br>terminal_hat_p_target_NLL_ratio<br>terminal_aggregate_hat_q_target_NLL_ratio<br>held_out_outcome_NLL_ratio<br>terminal_gate_rate<br>bank_coverage_before_first_propagation<br>cross_view_alignment_margin | 0.958396 +/- 0.0392<br>0.979415 +/- 0.0113<br>0.955314 +/- 0.00617<br>1.63719 +/- 0.0342<br>1.00009 +/- 0.000173<br>0.705775 +/- 0.0177<br>1 +/- 0<br>0.155997 +/- 0.0121 | no |
+
+**Reading the 2026-09-05 row.** Six of the eight required metrics pass and two
+miss, so the status is `deviating`. What passed is the primary pair: the
+held-out treatment NLL ratio is below 1 by more than a standard error on both
+parameter sets (student 0.958 ± 0.039, EMA 0.979 ± 0.011), the outcome head is
+untouched (1.00009 ± 0.00017 against a 1.05 allowance), the gate reaches
+0.706 ± 0.018, and the bank was covered before the first propagated target in
+every replicate. Against a 0.698 marginal-frequency baseline the full arm's EMA
+reaches 0.287 and the ablation's 0.293.
+
+What missed:
+
+- **`terminal_aggregate_hat_q_target_NLL_ratio`, 1.637 ± 0.034 against < 1.**
+  This is not a fit failure, and the equations say why it was the wrong
+  direction to predeclare. Aggregating equation (8) gives
+  `aggregate(hat q) = normalize(p^w ⊙ aggregate(q^w))` — a product of two
+  experts that share an encoder. In absolute terms both factors are good
+  (`p^w` 0.342 ± 0.010, `aggregate(q^w)` 0.288 ± 0.005) and their product is
+  worse than either (0.473 ± 0.016), which is what multiplying two correlated,
+  already-confident distributions does to a log score. The paper never forms
+  this quantity: equation (9) aggregates `q^w`, and `hat q` exists for
+  equation (5). The card asked for a direction the source does not imply, and
+  the tolerance stays as written.
+- **`cross_view_alignment_margin`, 0.156 ± 0.012 against ≥ 0.2.** A genuine
+  miss of a project-local threshold, not a null mechanism: the paired ablation
+  reaches 0.00116 ± 0.00013, so equation (8) is worth two orders of magnitude
+  on this statistic and still lands short of the number this card guessed
+  before running anything. **Deviation 3's budget is not the explanation, and
+  the obvious guess that it is should be dropped rather than repeated.** That
+  deviation predicts an unfinished curriculum, but the margin does not behave
+  like one. Inside the Tier 1 run it climbs from 0.060 over the first hundred
+  post-warm-up steps to 0.168 by step 600 — and the ten-replicate 3,000-step
+  runs terminate *lower*, at 0.156 ± 0.012. The two are not a clean series (one
+  seed against ten, and deviation 3 re-bases the cosine schedule on whichever
+  budget it is given), but five times the budget moving the statistic slightly
+  the wrong way is not the signature of a curriculum that ran out of steps.
+  What does bound it is the fixture and deviation 4's trunk. At `K = 2` roughly
+  half of every "cross-row" pair is a same-cluster pair that *should* be
+  similar, so the attainable margin is capped by the DGP rather than by
+  training; and 64 labelled slots over two treatment levels give equation (5)
+  almost no uniformity pressure, where the source's bank spans ten classes and
+  a WideResNet. A threshold of 0.2 on a statistic whose ceiling this fixture
+  sets was never derived from anything; it is the weakest joint in §6 and the
+  one a re-review should replace with a bound computed from the DGP.
+
+Neither miss is an arithmetic disagreement with the source. The audit that
+preceded this reading covered the mixer, both objectives' equations, the views,
+the data policy, every §4 hyperparameter, both schedules, and the inherited
+FixMatch optimiser policy; §6.2's arms then attributed the surviving movement
+to equation (8) specifically. What a future amendment should reconsider is the
+two project-local thresholds and the propagation-attributable form of the
+`hat p` metric, predeclared before any re-run.
 
 ## 7. Unknowns
 
@@ -544,3 +706,5 @@ until the predeclared Tier 1 study runs in full.
 |---|---|---|
 | Card reviewed (status → `reviewed`) | Claude | 2026-08-31 |
 | Plan diffed against §3.2 and §4 | Claude | 2026-08-31 |
+| Tier 1 study run in full; §6.1 measurements taken | Claude | 2026-09-05 |
+| Tier 2 run, ten replicates (status → `deviating`) | Claude | 2026-09-05 |
