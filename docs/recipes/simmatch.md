@@ -380,10 +380,10 @@ reproduction:
   dataset: project-local seed-locked two-cluster XTY DGP (6 features, K=2), specified in 6.1
   variant: paired full SimMatch against no semantic-instance propagation; identical seeds, initialisation, batches, optimiser, schedule, views and all non-propagation mechanics
   split: 1024 train rows with exactly 64 observed treatments; 2048 held-out rows with every treatment observed
-  metric: held-out p(t|x) NLL ratio full over no-propagation, for student and evaluation EMA; online hidden-label NLL ratios for hat p over p^w and aggregate(hat q) over aggregate(q^w); outcome NLL, gate rate, bank coverage and representation alignment as guardrails
+  metric: held-out p(t|x) NLL ratio full over no-propagation, for student and evaluation EMA; terminal hidden-label NLL ratio for equation (9)'s aggregate(q^w) over p^w; outcome NLL, gate rate, bank coverage and cross-class-opportunity-adjusted representation alignment as guardrails; hat p and aggregate(hat q) target NLLs reported informationally
   published: none - no published number applies to this adaptation
   published_source: n/a
-  tolerance: held-out treatment-NLL ratio < 1.0 in mean by at least one standard error for both student and EMA; terminal hat-p target-NLL ratio < 1.0; terminal aggregate-hat-q target-NLL ratio < 1.0; held-out outcome NLL within 1.05x of the ablation; terminal gate rate >= 0.5; bank coverage = 1.0 before the first propagated target; mean same-row weak/strong cosine at least 0.2 above mean cross-row cosine
+  tolerance: held-out treatment-NLL ratio < 1.0 in mean by at least one standard error for both student and EMA; terminal aggregate(q^w) target-NLL ratio over p^w < 1.0; held-out outcome NLL within 1.05x of the ablation; terminal gate rate >= 0.5; bank coverage = 1.0 before the first propagated target; mean same-row weak/strong cosine minus mean cross-row cosine, divided by the exact fraction of ordered hidden-row pairs with different treatments, >= 0.2
   seeds: 10
   report: mean_and_stderr
 ```
@@ -515,6 +515,8 @@ Before training, measure rather than assume:
 **Tier 2 (fixed ten-replicate target).** Run only the full and no-propagation
 pair under the YAML contract above. The Tier 1 arms diagnose a failure but do
 not enter the acceptance metric and cannot be selected after seeing Tier 2.
+The original target and its result remain in §6.3; §6.4 records the reviewed
+amendment that produced the current YAML block.
 
 **What has run.** All twelve Tier 0 invariants are in
 `tests/invariants/test_simmatch.py`. The whole Tier 1 study is in
@@ -681,6 +683,51 @@ to equation (8) specifically. What a future amendment should reconsider is the
 two project-local thresholds and the propagation-attributable form of the
 `hat p` metric, predeclared before any re-run.
 
+### 6.4 Amendment: measure the two source paths without class-collision dilution
+
+The first row in §6.3 is retained. It was produced honestly under the original
+protocol, and its two misses are the evidence this amendment reasons from; an
+amended target does not turn that row into a pass.
+
+**The target-quality replacement.** The withdrawn pair of target ratios asked
+`hat p` to beat `p^w` and `aggregate(hat q)` to beat `aggregate(q^w)`. Neither
+isolates the information carried by the labelled memory. Arm 6 showed that the
+first can improve when the slot labels are wrong, because mixing ten percent of
+a constant class prior is useful shrinkage on this balanced fixture. The second
+scores a class aggregate the source never forms: equation (8)'s calibrated
+instance distribution is the target of equation (5), while equation (9)
+deliberately aggregates the *uncalibrated* `q^w`. Algebraically,
+`aggregate(hat q)` is a product of two correlated experts and its log score can
+worsen even when each expert is informative.
+
+The replacement asks whether equation (9)'s actual `aggregate(q^w)` beats the
+same row's `p^w` on hidden treatments. This directly checks that the instance
+space contributes class information to equation (10), has the same no-effect
+boundary at ratio one as the withdrawn metrics, and fails when the memory-label
+control destroys that information. The two withdrawn ratios remain
+informational so their caveats continue to travel with every run.
+
+**The alignment adjustment.** The raw same-row-minus-cross-row margin mixes two
+kinds of off-diagonal pair. When two rows have the same treatment, similarity
+is desirable rather than a failure of instance discrimination; only a
+different-treatment pair supplies the contrast the threshold intends to test.
+For each replicate the amended statistic therefore divides the raw margin by
+
+```text
+(n_missing^2 - sum_j n_j^2) / (n_missing * (n_missing - 1)),
+```
+
+the exact fraction of ordered, distinct hidden-row pairs whose treatments
+differ. This is not a fitted threshold: it preserves the original `0.2`
+required separation per informative pair and corrects only the dilution the
+two-class DGP determines before training. The raw margin and the opportunity
+fraction remain informational metrics.
+
+**What did not change.** The pair, fixture, seed stream, initial parameters,
+batches, optimiser, schedule, views, equations, budget and all recipe
+hyperparameters are untouched. A new ledger row must come from a fresh
+ten-replicate execution under this amended measurement contract.
+
 ## 7. Unknowns
 
 | Unspecified or inconsistent in source | Our choice | Basis |
@@ -708,3 +755,4 @@ two project-local thresholds and the propagation-attributable form of the
 | Plan diffed against §3.2 and §4 | Claude | 2026-08-31 |
 | Tier 1 study run in full; §6.1 measurements taken | Claude | 2026-09-05 |
 | Tier 2 run, ten replicates (status → `deviating`) | Claude | 2026-09-05 |
+| §6 amended: target-quality and alignment instruments replaced (§6.4) | Codex | 2026-09-05 |

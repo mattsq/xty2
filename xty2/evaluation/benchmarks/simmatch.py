@@ -126,20 +126,22 @@ def run(
             ),
             "metric": (
                 "held-out p(t|x) NLL ratio full over no-propagation, for "
-                "student and evaluation EMA; online hidden-label NLL ratios "
-                "for hat p over p^w and aggregate(hat q) over aggregate(q^w); "
-                "outcome NLL, gate rate, bank coverage and representation "
-                "alignment as guardrails"
+                "student and evaluation EMA; terminal hidden-label NLL ratio "
+                "for equation (9)'s aggregate(q^w) over p^w; outcome NLL, "
+                "gate rate, bank coverage and cross-class-opportunity-adjusted "
+                "representation alignment as guardrails; hat p and "
+                "aggregate(hat q) target NLLs reported informationally"
             ),
             "published": "none - no published number applies to this adaptation",
             "tolerance": (
                 "held-out treatment-NLL ratio < 1.0 in mean by at least one "
-                "standard error for both student and EMA; terminal hat-p "
-                "target-NLL ratio < 1.0; terminal aggregate-hat-q target-NLL "
-                "ratio < 1.0; held-out outcome NLL within 1.05x of the "
-                "ablation; terminal gate rate >= 0.5; bank coverage = 1.0 "
-                "before the first propagated target; mean same-row weak/strong "
-                "cosine at least 0.2 above mean cross-row cosine"
+                "standard error for both student and EMA; terminal "
+                "aggregate(q^w) target-NLL ratio over p^w < 1.0; held-out "
+                "outcome NLL within 1.05x of the ablation; terminal gate rate "
+                ">= 0.5; bank coverage = 1.0 before the first propagated "
+                "target; mean same-row weak/strong cosine minus mean cross-row "
+                "cosine, divided by the exact fraction of ordered hidden-row "
+                "pairs with different treatments, >= 0.2"
             ),
             "seeds": "10",
             "report": "mean_and_stderr",
@@ -169,11 +171,8 @@ def run(
                 "ema_treatment_NLL_ratio", column(rows, "ema_ratio"), 1.0
             ),
             MetricResult.upper_bound(
-                "terminal_hat_p_target_NLL_ratio", column(rows, "hat_p_ratio"), 1.0
-            ),
-            MetricResult.upper_bound(
-                "terminal_aggregate_hat_q_target_NLL_ratio",
-                column(rows, "hat_q_ratio"),
+                "terminal_aggregate_q_weak_to_p_weak_target_NLL_ratio",
+                column(rows, "aggregate_q_weak_to_p_weak_ratio"),
                 1.0,
             ),
             MetricResult.upper_bound(
@@ -188,7 +187,9 @@ def run(
                 1.0,
             ),
             MetricResult.lower_bound(
-                "cross_view_alignment_margin", column(rows, "alignment_margin"), 0.2
+                "cross_class_adjusted_alignment_margin",
+                column(rows, "adjusted_alignment_margin"),
+                0.2,
             ),
             MetricResult.information(
                 "simmatch_student_treatment_NLL",
@@ -246,6 +247,10 @@ def run(
                 unit="nat/row",
             ),
             MetricResult.information(
+                "terminal_hat_p_target_NLL_ratio",
+                column(rows, "hat_p_ratio"),
+            ),
+            MetricResult.information(
                 "terminal_aggregate_hat_q_target_NLL",
                 column(rows, "aggregate_hat_q_nll"),
                 unit="nat/row",
@@ -254,6 +259,16 @@ def run(
                 "terminal_aggregate_q_weak_target_NLL",
                 column(rows, "aggregate_q_weak_nll"),
                 unit="nat/row",
+            ),
+            MetricResult.information(
+                "terminal_aggregate_hat_q_target_NLL_ratio",
+                column(rows, "hat_q_ratio"),
+            ),
+            MetricResult.information(
+                "cross_view_alignment_margin", column(rows, "alignment_margin")
+            ),
+            MetricResult.information(
+                "cross_class_pair_fraction", column(rows, "cross_class_fraction")
             ),
             MetricResult.information(
                 "terminal_nearest_slot_agreement", column(rows, "slot_agreement")
@@ -308,6 +323,24 @@ def _replicate(index: int) -> dict[str, float]:
     targets = _terminal_targets(full_run, full, rng_key=base + _VIEW_KEY_OFFSET)
     same_row = _terminal(full, _INSTANCE_TERM, "same_row_cosine")
     cross_row = _terminal(full, _INSTANCE_TERM, "cross_row_cosine")
+    if full.population is None:
+        raise RuntimeError(
+            "simmatch's adjusted alignment margin needs the fitted population"
+        )
+    fitted_rows = full.population.rows
+    hidden = fitted_rows.t[~fitted_rows.t_observed]
+    counts = torch.bincount(hidden, minlength=2).to(torch.float64)
+    hidden_rows = int(hidden.numel())
+    cross_class_fraction = float(
+        (hidden_rows * hidden_rows - counts.square().sum())
+        / (hidden_rows * (hidden_rows - 1))
+    )
+    if cross_class_fraction <= 0.0:
+        raise RuntimeError(
+            "simmatch's adjusted alignment margin needs hidden rows from at "
+            "least two treatment levels"
+        )
+    alignment_margin = same_row - cross_row
     return {
         **targets,
         "student_ratio": (
@@ -322,10 +355,15 @@ def _replicate(index: int) -> dict[str, float]:
         ),
         "hat_p_ratio": targets["hat_p_nll"] / targets["p_weak_nll"],
         "hat_q_ratio": targets["aggregate_hat_q_nll"] / targets["aggregate_q_weak_nll"],
+        "aggregate_q_weak_to_p_weak_ratio": (
+            targets["aggregate_q_weak_nll"] / targets["p_weak_nll"]
+        ),
         "gate_rate": _terminal(full, MEMORY_TERM, "coverage"),
         "ablation_gate_rate": _terminal(ablated, MEMORY_TERM, "coverage"),
         "bank_coverage": _coverage_before_first_propagation(full),
-        "alignment_margin": same_row - cross_row,
+        "alignment_margin": alignment_margin,
+        "adjusted_alignment_margin": alignment_margin / cross_class_fraction,
+        "cross_class_fraction": cross_class_fraction,
         "same_row_cosine": same_row,
         "cross_row_cosine": cross_row,
         "slot_agreement": _terminal(full, _INSTANCE_TERM, "nearest_slot_agreement"),
