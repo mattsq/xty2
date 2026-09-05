@@ -1,6 +1,6 @@
 # Recipe spec card: variational_treatment
 
-**Status:** `deviating`
+**Status:** `reproduced`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
@@ -296,54 +296,6 @@ component rather than restating the strings. Nothing to build, and the fix is a
 reference rather than a copy — but it is written here because a restated string
 that later drifts fails at compile time in a place that names neither document.
 
-### Tier 2 outcome
-
-On 2026-09-05, commit `5ae0fe865425` produced a `deviating` result: This is the predeclared project-local substitution target: does replacing xty2's exact sum over candidate treatments with M2's eq. (7) bound plus eq. (9)'s labelled posterior term cost the serving path anything measurable, while the amortised q(t|x,y) it adds stays close to the model posterior and beats p(t|x) on rows where y is observed. It is not a reproduction of Kingma et al., whose latent, decoder, datasets, metric and 300,000-update budget all differ (deviations 1, 3 and 5); no published number applies. Both arms are scored by exact marginalisation, so the variational arm is measured by what it bounds rather than by its own bound. Failed target(s): amortisation_gap_reduction was -4.68541e-06 +/- 0.000286 nat/row against mean >= 0 nat/row, by at least one stderr.
-
-Every other predeclared target passes, and none of them narrowly. The held-out
-exact marginal NLL ratio is `1.00118 +/- 0.00065` against a tolerance of `1.02`,
-so the substitution costs about a tenth of one percent of the quantity it
-bounds; the amortisation gap is `0.00490 +/- 0.00038` nats against a bound of
-`0.10`, twenty times inside it; and `q` beats the same arm's propensity by
-`0.0799 +/- 0.0053` nats on held-out rows where `y` is observed. The outcome and
-treatment guardrails are `0.9745 +/- 0.0014` and `1.0085 +/- 0.0048` against
-`1.05`. §2's mechanism sentence is therefore supported on this fixture: eq. (7)
-plus eq. (9) can stand in for exact enumeration at no measurable serving cost,
-and the head it adds is a usable amortised posterior.
-
-What missed is the trajectory half of the gap tolerance, and the audit says the
-clause had nothing to detect rather than that the objective is miswired. The
-gap does not start above its floor. Both `q` and the model posterior begin
-near-uniform, so `KL(q ‖ posterior)` begins near zero: it falls from about
-`0.027` nats at step 0 to about `0.003` within the first optimiser step and is
-then flat for the remaining 2,999. First-fifty is `0.003857 +/- 0.000276` and
-last-fifty `0.003861 +/- 0.000185` — the same number to three figures — and
-their difference, `-0.0000047 +/- 0.000286`, is as close to exactly zero as ten
-replicates can report. The predeclared direction was written for a gap that
-closes over a run; on this fixture there is no gap to close. Both windows ship
-as informational metrics in `runs/tier2/variational_treatment.json`, and the
-alternative reading of "its step-50 value" as the single step-50 draw rather
-than the first-fifty window does not rescue the sign.
-
-§6.2's Tier 1 item 3 asserts the same direction and passes, which the ten-seed
-run now explains rather than corroborates. On the Tier 1 seed the reduction is
-`+0.000576`, of which `+0.000479` is the single step-0 value inside the
-first-fifty window; excluding step 0 it is `+0.000097`, well under the Tier 2
-replicate scatter. The smoke assertion is reading the initialisation transient,
-not a trend.
-
-The card stays `deviating` on the conservative rule `softmatch.md` applied to
-its own noisy diagnostic: a predeclared direction that the run cannot
-distinguish from its opposite is a miss, and a tolerance may not be rewritten
-after seeing the number it failed. This is recorded as a property of the
-protocol rather than of the objective — Tier 0 asserts the eq. (7) identity, its
-tightness at the posterior, both degenerate cases and the schema-built candidate
-matrix, and the held-out numbers above are what a `q` that tracks the posterior
-produces. Deciding the direction would need either a budget long enough for the
-model posterior to sharpen well past `q`'s ability to follow it (deviation 5
-fixes 3,000 steps) or an initialisation that starts `q` away from it. Both are
-card amendments and neither may be made on the strength of this row.
-
 ## 6. Reproduction target
 
 The target is a paired substitution on a fixed project-local DGP: eq. (7) plus
@@ -480,12 +432,13 @@ from its green status.
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
 | 2026-09-05 | `5ae0fe865425` | held_out_marginal_NLL_ratio<br>amortisation_gap<br>amortisation_gap_reduction<br>posterior_advantage<br>held_out_outcome_NLL_ratio<br>held_out_treatment_NLL_ratio | 1.00118 +/- 0.000652<br>0.00490335 +/- 0.000375 nat/row<br>-4.68541e-06 +/- 0.000286 nat/row<br>-0.0798819 +/- 0.00529 nat/row<br>0.974457 +/- 0.00142<br>1.00846 +/- 0.00477 | no |
+| 2026-09-05 | `1e7900b08274` | held_out_marginal_NLL_ratio<br>amortisation_gap<br>posterior_information_captured<br>model_posterior_information<br>posterior_advantage<br>held_out_outcome_NLL_ratio<br>held_out_treatment_NLL_ratio | 1.00118 +/- 0.000652<br>0.00490335 +/- 0.000375 nat/row<br>1.2881 +/- 0.044<br>0.0619601 +/- 0.00332 nat/row<br>-0.0798819 +/- 0.00529 nat/row<br>0.974457 +/- 0.00142<br>1.00846 +/- 0.00477 | yes |
 
 ### 6.4 Amendment: the gap-trajectory clause, and what replaced it
 
-The row above is retained rather than withdrawn. It was produced under the
-protocol reviewed at the time, on the seed stream §6.1 declares, and it is the
-evidence this amendment reasons from. `softmatch.md` §6.3 keeps both of its
+The first row above, at `5ae0fe865425`, is retained rather than withdrawn. It
+was produced under the protocol reviewed at the time, on the seed stream §6.1
+declares, and it is the evidence this amendment reasons from. `softmatch.md` §6.3 keeps both of its
 rows for the same reason: a superseded target that was honestly run is a
 finding, not a mistake.
 
@@ -550,10 +503,22 @@ motivated this section reported `posterior_information_captured` of `0.937`,
 `1.354` and `1.313` on seeds 90000, 90100 and 90200. It is a diagnostic and not
 Tier 2 evidence: the threshold `0.8` is set as "most of it" against a statistic
 whose failure mode is stated above, not fitted to those three values, and the
-ledger row below is a fresh ten-seed run under the amended block. A value above
-`1` is possible and is reported rather than clipped — eq. (9) supervises `q`
-against observed treatments, which the model posterior does not see, so `q` can
-be better calibrated against the truth than the product it approximates.
+second ledger row above is a fresh ten-seed run under the amended block. A
+value above `1` is possible and is reported rather than clipped — eq. (9)
+supervises `q` against observed treatments, which the model posterior does not
+see, so `q` can be better calibrated against the truth than the product it
+approximates.
+
+**Outcome.** Under the amended block the target passes on all seven required
+metrics and the card is `reproduced`. `posterior_information_captured` is
+`1.2881 +/- 0.044` against `0.8`, and `model_posterior_information` is
+`0.0620 +/- 0.0033` nats against `0.02`, so the denominator is real and the
+head recovers all of it. The value above `1` is the reported case above: `q`
+scores `0.5584 +/- 0.0136` nats against the model posterior's own
+`0.5763 +/- 0.0109`, because eq. (9) trains it on treatments the product never
+sees. The five metrics carried over from the first row are unchanged to every
+digit — same seeds, same fits, same arms — so this row differs from that one in
+what was asked of the run, not in the run.
 
 ## 7. Unknowns
 
@@ -577,3 +542,4 @@ be better calibrated against the truth than the product it approximates.
 | Implementation and Tier 1 audited (status → `smoke-passing`) | GPT-5.6 Sol | 2026-08-29 |
 | Tier 2 run and ledger recorded (status → `deviating`) | Claude | 2026-09-05 |
 | §6 amended: gap-trajectory clause replaced (§6.4) | mattsq | 2026-09-05 |
+| Tier 2 re-run under the amended §6 (status → `reproduced`) | Claude | 2026-09-05 |
