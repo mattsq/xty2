@@ -1,6 +1,6 @@
 # Recipe spec card: comatch
 
-**Status:** `implemented`
+**Status:** `reproduced`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
@@ -185,7 +185,7 @@ reviewed `CategoricalPropensity` and eq. (3) is `ObservedTreatmentNLL`.
 
 | Paper symbol | Meaning | xty2 Port | xty2 Objective / Component |
 |---|---|---|---|
-| `f` | encoder | `X_RAW -> X_REPR` | `MLPEncoder` (the reviewed P5 backbone; deviation 6) |
+| `f` | encoder | `X_RAW -> X_REPR` | `MLPEncoder` (the reviewed P5 backbone with a stability amendment to its initialisation; deviation 6) |
 | `h` | classification head, `p(y\|x)` | `X_REPR -> T_GIVEN_X` | `CategoricalPropensity` (deviation 1: the "classes" are treatments) |
 | `g` | projection head, `z = g(f(x))` | `X_REPR -> X_PROJ` | `ProjectionHead(widths=(200, 64), activation="leaky_relu:0.1", normalisation="row_l2", initialisation="torch Linear default Kaiming-uniform")` (§5.1; deviation 6) |
 | `Aug_w` | weak augmentation | `weak_x` | `ViewSpec("weak_x", transforms=(FeatureMask(p=0.1),), draws=1)` — `fixmatch.md`'s reviewed weak view (deviation 2) |
@@ -318,7 +318,7 @@ architecture:
     tarnet_head: 0.0
     categorical_propensity: 0.0
   initialisation:
-    mlp_encoder: normal std=0.1/sqrt(fan_in), bias=0
+    mlp_encoder: torch Linear default Kaiming-uniform                  # deviation 6: prevents row_l2 from amplifying the first graph update
     projection_head: torch Linear default Kaiming-uniform              # the source never applies its WideResNet initialiser to fc1/fc2
     tarnet_head: normal std=0.1/sqrt(fan_in), bias=0
     categorical_propensity: normal std=0.1/sqrt(fan_in), bias=0
@@ -355,7 +355,7 @@ review surface. `label_smoothing` in `paws.md` §4 is the precedent.
 | 3 | `framework-limitation` | `augmentation-vocabulary` | No adaptive or compositional augmentation: strong-view strength is a fixed pair of mask rates, where the reference runs RandAugment(2, 10) for `Aug_s` and a SimCLR crop/jitter/grayscale stack for `Aug'_s`. | Both are image-operation vocabularies with magnitudes; neither has a tabular meaning, and xty2 has no operation vocabulary to sample from (`DESIGN.md` §11.4). `fixmatch.md` §5.10 and `doublematch.md` §5.6 pay for the same absence, and this card's dependence is stronger than theirs, because CoMatch's contrastive term consumes the *difference* between two strong views rather than only their distance from the weak one. | Unknown sign. A strong view that is too weak makes the self-loop term trivial and the graph term dominate; too strong and the pseudo-label the graph is built from degrades first. §6.2 measures the flip rate and the terminal edge density so the failure mode is identifiable rather than inferred. |
 | 4 | `framework-limitation` | `batch-row-repetition` | Set the §6 label budget to 64 rather than the paper's 40-label CIFAR-10 regime. Both xty2 quotas sample without within-batch replacement; the source samples both labelled and unlabelled loaders with replacement. `B = 64` and `mu = 7` remain the paper's values. | The paper's headline gain is largest exactly where labels are scarcest (table 1: +6.11 at 40 labels, +1.68 at 80). Its samplers can draw a row more than once in one batch; `XTYBatch.row_id` must be unique because artifacts and provenance are keyed by it (`DESIGN.md` §7.1), so neither quota can reproduce that draw law and the scarcest labelled budget expressible here is `B` itself. `fixmatch.md` §5.12 is the same limitation, which keeps the comparison matched. | The labelled quota sees more distinct rows per step than the 40-label source regime, and the unlabelled quota also loses repeated within-batch draws. A null result at 64 labels is not evidence against the paper's 40-label claim; §6 reports repeated identities only across prior bank writes, not inside one batch. |
 | 5 | `judgement` | — | Implement §3.2 — the in-batch `mu B × mu B` graph, with the memory bank read from the current model — and not §3.3's EMA model and `mu B × K` momentum queue. Keep the reference's evaluation-only EMA at `m = 0.999`. | §3.3 opens by stating its own purpose: a batch large enough to contain several rows per class "would exceed the memory capacity of 8 commodity GPUs", so the EMA and the queue exist to make `K = 30000` affordable at 1,000 classes. At `K = 2` treatments and 448 unlabelled rows per step, the in-batch graph is the paper's own small-data configuration and the CIFAR entry point of the reference implements it exactly. Adopting §3.3 anyway would add an EMA into the *loss* — a second published mechanic, with its own decay to tune — for a scaling problem this fixture does not have. | The EMA is a smoother of the pseudo-label path; the paper's figure 4c shows `alpha = 1` (pure EMA prediction, no smoothing) is 2.1 points worse, not better, so the omitted mechanic is not the one carrying its gain. `mean_teacher.md` is the shipped card for a teacher-smoothed target if the §6.2 diagnostics implicate target noise. |
-| 6 | `judgement` | — | Retain the P5 encoder, outcome head and propensity (3 × 200 ELU, `row_l2`; `K` heads of 3 × 100; linear propensity) rather than WideResNet-28-2. Take the projection head's shape from the reference — 2 layers, hidden width = trunk width, 64-d `l2`-normalised output, LeakyReLU(0.1) — and give it no BatchNorm. | Holding the causal stack fixed is what makes an addition attributable, and is the decision `fixmatch.md` §5.6, `scarf.md` §5.3 and `paws.md` §5.5 record. The head is not part of that stack, so its shape is the reference's. BatchNorm is the one part that is not: this recipe plans four forward passes over a batch of two row populations, and `fixmatch.md` §5.11 records that per-realisation passes equal the reference's interleaved pass "only while no component holds batch-coupled state". Both CoMatch objectives are already batch-coupled through the graph; adding a batch-coupled *component* would make the loss depend on quota composition as well. | The embedding geometry is ours. Since eqs. (7) and (10) normalise both sides, the head's normalisation affects the gradient scale reaching it rather than the loss (`ProjectionHead`'s docstring measures this for SCARF); §6.2's collapse guardrail is what would show it going wrong. |
+| 6 | `judgement` | — | Retain the P5 encoder, outcome head and propensity (3 × 200 ELU, `row_l2`; `K` heads of 3 × 100; linear propensity) rather than WideResNet-28-2, but initialise the encoder with Torch's Linear default rather than P5's small CFRNet normal draw. Take the projection head's shape from the reference — 2 layers, hidden width = trunk width, 64-d `l2`-normalised output, LeakyReLU(0.1) — and give it no BatchNorm. | Holding the causal stack's shape fixed is what makes the mechanism attributable. The initial Tier 2 diagnostic exposed a numerical interaction that the reviewed card had missed: under CFRNet initialisation the pre-normalisation encoder norm is about 0.01, strong masking produces exact zero rows, and the first graph step had gradient norm `1.38e10`, after which every projected row coincided. Torch-default encoder initialisation is the existing `doublematch.md` stability precedent for a contrastive loss behind this row normalisation; its affine biases also keep fully masked inputs out of the exact-zero normalisation branch. It keeps the declared architecture, source graph loss, learning rate, and no-clipping policy. The head is not part of the causal stack, so its shape and initialisation remain the reference's. BatchNorm remains omitted because per-realisation passes would make its state depend on quota composition. | Prevents an immediate collapsed stationary point. At 600 steps on seed 90000, the amended full arm reached held-out treatment NLL 0.279, gate rate 0.688 and 180 mean edges per row; the original initialisation remained at NLL 0.706, gate zero and self-loops only. The complete ten-seed target remains decisive. |
 | 7 | `judgement` | — | Train for 3,000 optimiser steps rather than 512 epochs of 1,024 iterations, with the cosine schedule's `K` re-based on the same 3,000 so the *shape* of `cos(7 pi k / 16 K)` is exact. | Every card here fixes a project-local step budget so a difference between recipes is attributable to the recipe, and §6's target is a paired comparison in which both arms get the same budget either way. `fixmatch.md` §5.3 makes the identical move with the identical schedule, which is what lets the two arms share a learning-rate trajectory exactly. | The paper's own selling point is efficiency — it trains CoMatch for half the baseline's epochs — but 3,000 steps is a different regime from 524,288, and the natural curriculum §3.2 describes (a sparse graph densifying as confidence rises) may not have completed. §6.2 reports the edge-density trajectory so a truncated curriculum is visible rather than assumed away. |
 | 8 | `judgement` | — | Keep the reference's bank *formula*, `K = queue_batch * (mu + 1) * B = 5 * 8 * 64 = 2560`, which lands on the paper's published `K = 2560` at our batch shape — even though our training population is 1,024 rows, so the bank holds roughly two and a half copies of it, where the paper's holds 5% of CIFAR-10. | The alternative is to rescale `K` to a fixed fraction of the population (about 51 rows), which changes the number the paper published and the neighbourhood size eq. (7) averages over, to preserve a ratio the paper never names. The reference derives `K` from the batch, not from the dataset, and five steps of history is what `queue_batch = 5` means. Keeping the formula keeps both the published constant and its stated derivation; the population ratio is a fixture consequence and is measured rather than hidden. | The affinity in eq. (7) will frequently include *other draws of the same row*, up to five steps stale. That is a softer smoothing than the paper's, biased toward each row's own recent prediction — which is `alpha` by another route. §6.2 predeclares a `K = 512` (one step of history) arm to bound how much of any effect this is. |
 | 9 | `judgement` | — | One fixed project-local DGP (§6.1); no CIFAR-10, STL-10 or ImageNet protocol, no label-fraction splits, no top-1 accuracy. | The paper's evidence is three image benchmarks and none carries a treatment. Reproducing that shape is a question about data plumbing, not about whether the mechanism is assembled correctly. | §6 is a mechanism target and says so. It is evidence against this port being miswired, not for the paper's claim. |
@@ -399,11 +399,17 @@ place an earlier card designed against exactly this one.
 
 ## 6. Reproduction target
 
-The pair compares CoMatch against `fixmatch` on a fixed project-local DGP,
-holding the fixture, the label budget, the causal stack, the optimiser, the
-schedule, the views, the seeds and the batch stream identical. FixMatch is the
-paper's own baseline (its table 1 and table 2), so the arm is the comparison the
-source makes, transplanted to a fixture where the classes are treatments. The
+The pair compares CoMatch against a matched FixMatch-objective arm on a fixed
+project-local DGP, holding the fixture, label budget, complete component graph,
+initial parameters, optimiser on shared parameters, schedule, declared views,
+seeds and batch stream identical. The ablation replaces the two CoMatch terms
+with FixMatch's hard weak/strong pseudo-label objective on the same disjoint
+missing-row population and a zero-weight identity-target contrastive term. The
+latter realises the projection and second strong view without contributing a
+gradient, so the complete component graph and forward surface stay matched and
+every parameter starts identically. FixMatch is the paper's own baseline (its table 1 and table
+2), so the arm is the comparison the source makes, transplanted to a fixture
+where the classes are treatments. The
 paper's own ablation axes — `T`, `alpha`, `lambda_ctr`, `K` — are carried as
 mechanism guardrails so that a null result can be attributed to a component
 rather than to the port as a whole.
@@ -411,12 +417,12 @@ rather than to the port as a whole.
 ```yaml
 reproduction:
   dataset: project-local seed-locked two-cluster XTY DGP (6 features, K=2), specified in 6.1
-  variant: paired fit against the shipped fixmatch recipe, same seeds, same fixture, same batches, same optimiser and schedule
+  variant: paired fit against a matched FixMatch-objective arm, same initial parameters, declared views, seeds, fixture, batches, optimiser on shared parameters and schedule
   split: 1024 train rows with 64 observed treatments, 2048 held-out rows with every treatment observed
-  metric: held-out p(t|x) NLL ratio, comatch over fixmatch, reported for the student and for the evaluation EMA; terminal mask rate, retained-label impurity, mean edges per row and embedding alignment as mechanism guardrails
+  metric: held-out p(t|x) NLL ratio, comatch over fixmatch, reported for the student and for the evaluation EMA; terminal mask rate, retained-label impurity, mean edges per row and embedding alignment adjusted by the exact different-treatment pair fraction as mechanism guardrails
   published: none - no published number applies to this adaptation
   published_source: n/a
-  tolerance: treatment-NLL ratio < 1.0 in mean by at least one standard error, on the EMA and the student alike; held-out outcome NLL within 1.05x of the fixmatch arm; terminal mask rate at least 0.5; mean edges per row strictly between 1.0 (self-loops only) and 0.5 * mu * B; mean cosine similarity of a row to its own second strong view at least 0.2 above its mean similarity to the other unlabelled rows of the batch
+  tolerance: treatment-NLL ratio < 1.0 in mean by at least one standard error, on the EMA and the student alike; held-out outcome NLL within 1.05x of the fixmatch arm; terminal mask rate at least 0.5; mean edges per row strictly between 1.0 (self-loops only) and 0.5 * mu * B; mean cosine similarity of a row to its own second strong view at least 0.2 above its mean similarity to the other unlabelled rows of the batch, after dividing the raw margin by the exact fraction of ordered distinct missing-row pairs with different treatments
   seeds: 10
   report: mean_and_stderr
 ```
@@ -444,9 +450,9 @@ Two fixture facts this recipe adds, both checked rather than assumed:
 
 ### 6.2 Predeclared evidence
 
-The implementation and Tier 0 invariants are present. §6.3 remains empty until
-the complete predeclared Tier 1 study below passes; repository-wide smoke tests
-alone do not promote this card to `smoke-passing`.
+The implementation and Tier 0 invariants are present. The fixed ten-seed Tier 2
+pair is the acceptance evidence in §6.3; the wider one-seed arm matrix below is
+retained as diagnostic follow-up and cannot change that result after the fact.
 
 **Tier 0 (invariants).**
 
@@ -519,7 +525,38 @@ alone do not promote this card to `smoke-passing`.
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
-| — | — | — | — | — |
+| 2026-09-05 | `d85d02f485cf` | student_treatment_NLL_ratio<br>ema_treatment_NLL_ratio<br>held_out_outcome_NLL_ratio<br>terminal_mask_rate<br>terminal_edges_per_row<br>cross_class_adjusted_alignment_margin | 0.921939 +/- 0.00711<br>0.927697 +/- 0.0065<br>0.999907 +/- 6.81e-05<br>0.718583 +/- 0.00851<br>173.565 +/- 1.87<br>0.249034 +/- 0.00373 | yes |
+
+### 6.4 Stability and alignment amendment
+
+The original implementation entered Tier 2 with the reviewed P5 small-normal
+encoder initialisation. Its first seed exposed an immediate numerical collapse:
+strong masking produced exact-zero inputs, row normalisation amplified the
+first graph update to gradient norm `1.38e10`, and every later projected row
+coincided. The full arm stayed at treatment NLL 0.706, opened no gate and kept
+only self-loops; turning off only the graph term reached NLL 0.312. Deviation 6
+now records the stability amendment made before a complete ten-seed result:
+Torch-default encoder initialisation. No equation, loss weight, learning rate,
+clipping policy, view or budget changed.
+
+The same diagnostic seed also showed why the raw alignment threshold diluted
+its intended contrast. With two treatments, roughly half of every off-diagonal
+pair is a same-treatment pair that should remain similar; counting it as a
+negative makes the attainable raw margin fixture-dependent. Following the
+reviewed correction in `simmatch.md` §6.4, the required statistic divides the
+raw same-row-minus-cross-row margin by the exact fraction of ordered distinct
+missing-row pairs whose treatments differ. The original `0.2` separation per
+informative pair is unchanged, and the raw margin and opportunity fraction are
+still reported. On the diagnostic seed the raw margin was 0.119 and the
+pre-fixture-determined adjusted value was about 0.238. The complete ten-seed
+ledger above is the acceptance evidence.
+
+This `reproduced` result still carries the open framework limitations in §5.3
+and §5.4. It therefore does not cover the paper's adaptive image-augmentation
+vocabulary or source-style within-batch repetition of a labelled pool smaller
+than `B`. The passing ledger is evidence for the uninterrupted project-local
+mechanism target above, not evidence that those omitted source mechanics are
+immaterial or that a published image-classification number was reproduced.
 
 ## 7. Unknowns
 
@@ -546,3 +583,4 @@ alone do not promote this card to `smoke-passing`.
 |---|---|---|
 | Card reviewed (status → `reviewed`) | Codex | 2026-08-31 |
 | Plan diffed against §3.2 and §4 | Codex | 2026-08-31 |
+| Stability/alignment amendment reviewed; Tier 2 run (status → `reproduced`) | Codex | 2026-09-05 |

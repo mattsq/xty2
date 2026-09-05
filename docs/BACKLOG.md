@@ -34,11 +34,12 @@ Git retains the exploratory chronology removed from this active queue.
 | Explicit treatment-observation model | promotes label availability to a statistical variable | missingness semantics |
 
 Already present: SCARF, FixMatch, FlexMatch, FreeMatch, PAWS, UDA, and Meta
-Pseudo Labels + UDA are reproduced; DoubleMatch and SoftMatch are deviating on
-their recorded ten-seed runs. CoMatch is implemented
-(`docs/recipes/comatch.md`) with its full predeclared smoke study still open,
-and SimMatch is implemented (`docs/recipes/simmatch.md`) with its Tier 1 study
-only partly run.
+Pseudo Labels + UDA and CoMatch are reproduced; DoubleMatch and SoftMatch are
+deviating on their recorded ten-seed runs. CoMatch's card records the
+initialisation and alignment amendments that preceded its passing paired run;
+its wider one-seed ablation matrix remains diagnostic follow-up rather than
+acceptance evidence. SimMatch is implemented (`docs/recipes/simmatch.md`) with
+its Tier 1 study only partly run.
 The variational latent treatment is implemented and `reproduced`;
 `docs/recipes/variational_treatment.md` is its authoritative card. Read its
 §6.4 before borrowing the protocol: its first ten-seed run missed a predeclared
@@ -155,6 +156,12 @@ in-batch graph, not the §3.3 EMA/momentum-queue scale variant) onto one
 memory bank is objective state with the seven `§15.4` lifecycle answers written
 down, while the two directions of the co-training loop stay two objectives
 sharing one state through the sibling read `freematch` built.
+
+The amended ten-seed Tier 2 pair is reproduced: CoMatch's student and EMA
+treatment-NLL ratios against the matched FixMatch-objective arm are 0.922 and
+0.928, with outcome, gate, graph-density and adjusted-alignment guardrails all
+passing. The full result and the limits of that project-local claim are in the
+card's §6.3–§6.4 ledger.
 
 ### 2.8 SsCL
 
