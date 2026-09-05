@@ -540,7 +540,7 @@ judgement explaining why the choice survives the capability.
 | `checkpointed-objective-state` | serialisation and restoration of stage-local objective state | a reviewed method must resume a history-dependent objective bit-identically | `simmatch` §5.7 |
 | `batch-row-repetition` | repeated `row_id` values inside one batch | a faithful protocol requires a quota larger than its source population | `fixmatch` §5.12; `doublematch` §5.7; `flexmatch` §5.8; `freematch` §5.9; `comatch` §5.4; `simmatch` §5.5; `softmatch` §5.8 |
 | `lr-schedules` | schedule families beyond the implemented types | a reviewed card names one | — |
-| `augmentation-vocabulary` | a shared augmentation vocabulary and adaptive controller | multiple useful operations and magnitudes exist | `fixmatch` §5.10; `doublematch` §5.6; `flexmatch` §5.7; `freematch` §5.8; `comatch` §5.3; `simmatch` §5.8; `softmatch` §5.7 |
+| `augmentation-vocabulary` | a shared augmentation vocabulary and adaptive controller | multiple useful operations and magnitudes exist | `fixmatch` §5.10; `doublematch` §5.6; `flexmatch` §5.7; `freematch` §5.8; `comatch` §5.3; `simmatch` §5.8; `softmatch` §5.7; `remixmatch` §5.3 |
 | `staged-gate` | confidence gating on staged pseudo-label writeback | a reviewed staged method names the gate | — |
 | `repeated-cross-fitting` | several fold assignments and aggregation | a reviewed estimator requires repeated splitting and a second consumer checks the artifact shape | `ssdml` §5.6 |
 | `early-stopping` | validation-metric stage termination | a reviewed protocol cannot be stated as a fixed step budget | — |
