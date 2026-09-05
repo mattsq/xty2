@@ -23,6 +23,7 @@ its evidence. The status line inside each card is authoritative.
 | [`variational_treatment.md`](recipes/variational_treatment.md) | `variational_treatment` | amortised treatment posterior and discrete-latent ELBO |
 | [`meta_pseudo_labels.md`](recipes/meta_pseudo_labels.md) | `meta_pseudo_labels` | one-step labelled-feedback meta-gradient from student to an independently trained UDA teacher |
 | [`softmatch.md`](recipes/softmatch.md) | `softmatch` | truncated-Gaussian per-row pseudo-label weights and uniform alignment |
+| [`remixmatch.md`](recipes/remixmatch.md) | none yet (draft) | distribution alignment, augmentation anchoring, and MixUp row mixing across populations |
 
 A **Recipe** cell names a callable in `xty2/recipes/`; `none yet (draft)` marks
 a card that is still stopped for review, so no such name exists.
