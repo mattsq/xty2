@@ -68,6 +68,10 @@ def benchmark_function(recipe: str) -> BenchmarkFunction:
         from xty2.evaluation.benchmarks.softmatch import run
 
         return run
+    if recipe == "variational_treatment":
+        from xty2.evaluation.benchmarks.variational_treatment import run
+
+        return run
     raise KeyError(
         f"unknown Tier 2 recipe {recipe!r}; expected one of {list(RECIPES)!r}"
     )
@@ -88,6 +92,7 @@ RECIPES = (
     "paws",
     "meta_pseudo_labels",
     "softmatch",
+    "variational_treatment",
 )
 
 __all__ = ["RECIPES", "BenchmarkFunction", "benchmark_function"]
