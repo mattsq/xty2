@@ -1,6 +1,6 @@
 # Recipe spec card: simmatch
 
-**Status:** `deviating`
+**Status:** `reproduced`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity; §6 only for
@@ -363,10 +363,6 @@ sampling, distribution-alignment precedent, soft sharpening `none`, and
 evaluation-only EMA all exist. Implementation should amend this card and stop
 again if any of those shapes proves insufficient.
 
-### Tier 2 outcome
-
-On 2026-09-05, commit `be173ef1a2e6` produced a `deviating` result: This is the predeclared project-local SimMatch mechanism target: do equations (8) and (10) — the instance distribution over labelled slots calibrated by the semantic prediction, and the semantic target smoothed by that distribution's class aggregate — improve a *treatment* propensity and the targets it trains on, against an otherwise identical fit whose two propagation arrows are switched off. It is not a reproduction of Zheng et al., whose inputs, labels, architecture, augmentation vocabulary, metric and CIFAR-scale budget all differ (deviations 2, 3, 4 and 10). Failed target(s): terminal_aggregate_hat_q_target_NLL_ratio was 1.63719 +/- 0.0342 against mean <= 1, by at least one stderr; cross_view_alignment_margin was 0.155997 +/- 0.0121 against mean >= 0.2, by at least one stderr.
-
 ## 6. Reproduction target
 
 The primary pair isolates the two arrows that make SimMatch different. The full
@@ -630,6 +626,7 @@ diagnostic may cost.
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
 | 2026-09-05 | `be173ef1a2e6` | student_treatment_NLL_ratio<br>ema_treatment_NLL_ratio<br>terminal_hat_p_target_NLL_ratio<br>terminal_aggregate_hat_q_target_NLL_ratio<br>held_out_outcome_NLL_ratio<br>terminal_gate_rate<br>bank_coverage_before_first_propagation<br>cross_view_alignment_margin | 0.958396 +/- 0.0392<br>0.979415 +/- 0.0113<br>0.955314 +/- 0.00617<br>1.63719 +/- 0.0342<br>1.00009 +/- 0.000173<br>0.705775 +/- 0.0177<br>1 +/- 0<br>0.155997 +/- 0.0121 | no |
+| 2026-09-05 | `a8a7f1c991ed` | student_treatment_NLL_ratio<br>ema_treatment_NLL_ratio<br>terminal_aggregate_q_weak_to_p_weak_target_NLL_ratio<br>held_out_outcome_NLL_ratio<br>terminal_gate_rate<br>bank_coverage_before_first_propagation<br>cross_class_adjusted_alignment_margin | 0.941082 +/- 0.0281<br>0.973394 +/- 0.0100<br>0.846193 +/- 0.0142<br>1.00005 +/- 0.000152<br>0.7055 +/- 0.0176<br>1 +/- 0<br>0.311243 +/- 0.0231 | yes |
 
 **Reading the 2026-09-05 row.** Six of the eight required metrics pass and two
 miss, so the status is `deviating`. What passed is the primary pair: the
@@ -725,8 +722,19 @@ fraction remain informational metrics.
 
 **What did not change.** The pair, fixture, seed stream, initial parameters,
 batches, optimiser, schedule, views, equations, budget and all recipe
-hyperparameters are untouched. A new ledger row must come from a fresh
-ten-replicate execution under this amended measurement contract.
+hyperparameters are untouched.
+
+**Outcome.** A fresh ten-replicate execution under the amended contract passes
+all seven required metrics, so the card is `reproduced`. Equation (9)'s
+aggregate target-NLL ratio is `0.846 +/- 0.014` against `1.0`, and the
+cross-class-adjusted alignment margin is `0.311 +/- 0.023` against `0.2`.
+Both held-out treatment ratios still favour the full arm by more than one
+standard error (`0.941 +/- 0.028` student and `0.973 +/- 0.010` EMA); outcome
+NLL, gate rate and bank coverage pass their unchanged guardrails. The original
+failure remains visible in the same run: `aggregate(hat q)` over
+`aggregate(q^w)` is `1.636 +/- 0.035`, and the unadjusted alignment margin is
+`0.155 +/- 0.011`. They are informational now for the reasons above, not
+silently removed from the evidence.
 
 ## 7. Unknowns
 
@@ -756,3 +764,4 @@ ten-replicate execution under this amended measurement contract.
 | Tier 1 study run in full; §6.1 measurements taken | Claude | 2026-09-05 |
 | Tier 2 run, ten replicates (status → `deviating`) | Claude | 2026-09-05 |
 | §6 amended: target-quality and alignment instruments replaced (§6.4) | Codex | 2026-09-05 |
+| Tier 2 re-run under amended §6 (status → `reproduced`) | Codex | 2026-09-05 |
