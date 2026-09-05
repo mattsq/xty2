@@ -736,6 +736,13 @@ failure remains visible in the same run: `aggregate(hat q)` over
 `0.155 +/- 0.011`. They are informational now for the reasons above, not
 silently removed from the evidence.
 
+This `reproduced` result still carries the open framework limitations in
+§5.5, §5.7 and §5.8. It therefore does not cover source-style repetition of a
+labelled pool smaller than the batch, checkpoint/resume equivalence for the
+memory and alignment window, or the paper's image-augmentation vocabulary.
+The result is evidence for the uninterrupted project-local mechanism target
+above, not evidence that those omitted source mechanics are immaterial.
+
 ## 7. Unknowns
 
 | Unspecified or inconsistent in source | Our choice | Basis |
