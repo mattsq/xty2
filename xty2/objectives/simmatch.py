@@ -142,6 +142,11 @@ class PropagatedTargets:
             is taken against these same vectors.
         aligned: `[n, K_t]`, `DA(p^w)`, kept so the semantic ablation and the
             diagnostics can compare against the unpropagated target.
+        anchors: `[n, D]` the detached, row-normalised **weak** embeddings of
+            the eligible rows -- eq. (7)'s `z^w`. Carried so that the pair
+            eq. (5) is meant to align, `z^w` and `z^s` of the *same* row, can
+            be read as a per-step trajectory; card §6.2's arm 8 asks for it and
+            nothing else in a step's record holds both sides.
         propagated: Whether eqs. (8) and (10) ran this step.
         coverage: The fraction of slots that had been filled when the targets
             were prepared.
@@ -151,6 +156,7 @@ class PropagatedTargets:
     instance: Tensor | None
     bank: Tensor
     aligned: Tensor
+    anchors: Tensor
     propagated: bool
     coverage: float
 
@@ -321,6 +327,7 @@ class LabeledSimilarityMemory:
             instance=None if instance is None else instance.detach(),
             bank=bank.detach(),
             aligned=aligned.detach(),
+            anchors=weak.index_select(0, eligible_rows),
             propagated=propagated,
             coverage=self.coverage,
         )
@@ -730,13 +737,18 @@ class LabeledMemoryInstanceConsistency:
         per_row = torch.zeros(
             batch.batch_size, dtype=strong.dtype, device=strong.device
         )
+        anchors = F.normalize(strong.index_select(0, rows), dim=-1)
+        geometry = _cross_view_cosines(targets.anchors, anchors)
         if targets.instance is None:
             return reduce_rows(
                 per_row,
                 rows,
-                diagnostics={"bank_coverage": targets.coverage, "propagated": 0.0},
+                diagnostics={
+                    "bank_coverage": targets.coverage,
+                    "propagated": 0.0,
+                    **geometry,
+                },
             )
-        anchors = F.normalize(strong.index_select(0, rows), dim=-1)
         bank = targets.bank.to(device=anchors.device, dtype=anchors.dtype)
         strong_log_similarity = torch.log_softmax(
             anchors @ bank.transpose(0, 1) / self.spec.temperatures.instance_strong,
@@ -763,8 +775,43 @@ class LabeledMemoryInstanceConsistency:
                 (agreement == targets.semantic.argmax(dim=-1)).to(torch.float32).mean()
             ),
             "aggregated_confidence": float(aggregated.max(dim=-1).values.mean()),
+            **geometry,
         }
         return reduce_rows(per_row, rows, diagnostics=diagnostics)
+
+
+def _cross_view_cosines(weak: Tensor, strong: Tensor) -> dict[str, float]:
+    """Mean same-row and mean cross-row `cos(z^w, z^s)`, without an n-by-n gram.
+
+    Eq. (5) asks a row's strong embedding to sit where its weak one already
+    does. Whether it does is only readable against how close *any two* rows sit,
+    which is why card §6.2's arm 8 asks for both numbers every step and card §6
+    turns their difference into a tolerance.
+
+    Computed in closed form: `sum_ij z^w_i . z^s_j` is
+    `(sum_i z^w_i) . (sum_j z^s_j)`, so subtracting the diagonal gives the
+    off-diagonal total at `O(nD)` rather than the `O(n^2 D)` a 448-row gram
+    would cost every step. Both inputs are already row-normalised, so each
+    entry is a cosine.
+    """
+    with torch.no_grad():
+        aligned = weak.to(device=strong.device, dtype=strong.dtype)
+        rows = int(aligned.shape[0])
+        same = (aligned * strong).sum(dim=-1)
+        # One eligible row has no cross-row pair at all. Reporting its own
+        # cosine for both keeps the trajectory finite and makes the margin
+        # exactly zero, which is the honest reading of "no pair to compare".
+        if rows < 2:
+            return {
+                "same_row_cosine": float(same.mean()),
+                "cross_row_cosine": float(same.mean()),
+            }
+        total = aligned.sum(dim=0) @ strong.sum(dim=0)
+        cross = (total - same.sum()) / (rows * (rows - 1))
+        return {
+            "same_row_cosine": float(same.mean()),
+            "cross_row_cosine": float(cross),
+        }
 
 
 def _prepare(
