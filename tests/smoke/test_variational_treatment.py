@@ -161,6 +161,7 @@ class _Metrics:
     treatment_nll: float
     outcome_nll: float
     posterior_nll: float | None
+    model_posterior_nll: float | None
     amortisation_gap: float | None
 
 
@@ -190,6 +191,7 @@ def _evaluate(run: CompiledRun, result: StageResult, test: XTYBatch) -> _Metrics
             log_model_posterior = log_joint - torch.logsumexp(
                 log_joint, dim=-1, keepdim=True
             )
+            model_posterior_nll = float(F.nll_loss(log_model_posterior, scaled.t))
             gap = (
                 posterior_value.probs
                 * (posterior_value.log_probs - log_model_posterior)
@@ -197,6 +199,7 @@ def _evaluate(run: CompiledRun, result: StageResult, test: XTYBatch) -> _Metrics
             amortisation_gap = float(gap.mean())
         else:
             posterior_nll = None
+            model_posterior_nll = None
             amortisation_gap = None
 
     return _Metrics(
@@ -206,6 +209,7 @@ def _evaluate(run: CompiledRun, result: StageResult, test: XTYBatch) -> _Metrics
         treatment_nll=treatment_nll,
         outcome_nll=outcome_nll,
         posterior_nll=posterior_nll,
+        model_posterior_nll=model_posterior_nll,
         amortisation_gap=amortisation_gap,
     )
 
@@ -266,9 +270,18 @@ def test_the_bound_holds_on_every_logged_training_step(fits: _Fits) -> None:
         assert gap >= -1e-6
 
 
-def test_the_amortisation_gap_is_finite_and_learns_over_the_run(
+def test_the_amortisation_gap_is_finite_and_q_recovers_the_posterior(
     fits: _Fits,
 ) -> None:
+    """§6.2 item 3, as §6.4 amended it.
+
+    The first-50 and last-50 windows are still computed and still required to
+    be finite, but no direction is asserted between them: §6.4 records that the
+    run's only gap transient completes inside the first window, so the sign of
+    that comparison is a coin flip across seeds rather than a trend. What is
+    asserted instead is the outcome the trajectory was a proxy for — that `q`
+    recovers most of the y-information its own model posterior has.
+    """
     first = sum(_gap(fits.variational.result, step) for step in range(50)) / 50
     last = (
         sum(_gap(fits.variational.result, step) for step in range(STEPS - 50, STEPS))
@@ -277,7 +290,14 @@ def test_the_amortisation_gap_is_finite_and_learns_over_the_run(
     heldout = fits.variational.amortisation_gap
     assert heldout is not None
     assert math.isfinite(first) and math.isfinite(last) and math.isfinite(heldout)
-    assert last < first
+
+    propensity = fits.variational.treatment_nll
+    posterior = fits.variational.model_posterior_nll
+    amortised = fits.variational.posterior_nll
+    assert posterior is not None and amortised is not None
+    information = propensity - posterior
+    assert information > 0.02
+    assert (propensity - amortised) / information >= 0.8
 
 
 def test_posterior_supervision_ablation_runs_and_changes_q(fits: _Fits) -> None:

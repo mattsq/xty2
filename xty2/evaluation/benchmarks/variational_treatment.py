@@ -23,6 +23,7 @@ DGP is how two cards' numbers stop being about the recipes.
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from pathlib import Path
 
@@ -131,14 +132,18 @@ def run(
             ),
             "metric": (
                 "held-out exact marginal NLL ratio, variational arm over exact "
-                "arm; amortisation gap, posterior advantage, and two likelihood "
-                "guardrails as declared in 6.2"
+                "arm; amortisation gap, posterior advantage, the share of its "
+                "own model posterior's y-information the amortised head "
+                "recovers, and two likelihood guardrails as declared in 6.2"
             ),
             "published": "none - no published number applies to this adaptation",
             "tolerance": (
                 "held_out_marginal_NLL_ratio mean plus one stderr at most 1.02; "
-                "amortisation_gap mean plus one stderr at most 0.10 nats and "
-                "its terminal value below its step-50 value in mean; "
+                "amortisation_gap mean plus one stderr at most 0.10 nats; "
+                "posterior_information_captured mean minus one stderr at least "
+                "0.8, with model_posterior_information mean minus one stderr at "
+                "least 0.02 nats so that a fixture whose y carries no treatment "
+                "information voids this pair rather than passing it (6.4); "
                 "posterior_advantage mean plus one stderr strictly below 0.0 "
                 "nats; held_out_outcome_NLL_ratio and "
                 "held_out_treatment_NLL_ratio each at most 1.05"
@@ -168,14 +173,17 @@ def run(
                 0.10,
                 unit="nat/row",
             ),
-            # "Terminal below step-50" as a non-negative reduction. The card
-            # writes the clause as a comparison and the vocabulary here bounds
-            # one number, so the number is their difference; the two windows
-            # ship informationally beside it.
+            # §6.4's replacement for the withdrawn gap-trajectory clause: the
+            # share of its own model posterior's y-information that the
+            # amortised head recovers, and the denominator that voids the pair
+            # on a fixture where there is no such information to recover.
             MetricResult.lower_bound(
-                "amortisation_gap_reduction",
-                column(rows, "gap_reduction"),
-                0.0,
+                "posterior_information_captured", column(rows, "captured"), 0.8
+            ),
+            MetricResult.lower_bound(
+                "model_posterior_information",
+                column(rows, "model_information"),
+                0.02,
                 unit="nat/row",
             ),
             # "Strictly below 0.0" in the card against "<= 0.0" here, as
@@ -214,6 +222,16 @@ def run(
             MetricResult.information(
                 "held_out_propensity_NLL",
                 column(rows, "treatment_nll"),
+                unit="nat/row",
+            ),
+            MetricResult.information(
+                "held_out_model_posterior_NLL",
+                column(rows, "model_posterior_nll"),
+                unit="nat/row",
+            ),
+            MetricResult.information(
+                "posterior_travel_from_uniform",
+                column(rows, "posterior_travel"),
                 unit="nat/row",
             ),
             MetricResult.information(
@@ -291,7 +309,10 @@ def _replicate(index: int) -> dict[str, float]:
             variational_metrics["treatment_nll"] / exact_metrics["treatment_nll"]
         ),
         "held_out_gap": variational_metrics["amortisation_gap"],
-        "gap_reduction": first - last,
+        "captured": _captured(variational_metrics),
+        "model_information": _model_information(variational_metrics),
+        "model_posterior_nll": variational_metrics["model_posterior_nll"],
+        "posterior_travel": variational_metrics["posterior_travel"],
         "gap_first": first,
         "gap_last": last,
         "posterior_advantage": (
@@ -399,18 +420,60 @@ def _evaluate(
                     "variational_treatment benchmark expected a categorical "
                     "amortised posterior"
                 )
-            metrics["posterior_nll"] = float(F.nll_loss(posterior.log_probs, scaled.t))
-            # KL(q ‖ p(t|x,y)) against the arm's *own* model posterior, which
-            # deviation 1 leaves computable by normalising p(t|x) p(y|x,t) over
-            # the same K candidates. This is eq. (7)'s whole slack (§3.2).
+            # The arm's *own* model posterior, which deviation 1 leaves
+            # computable by normalising p(t|x) p(y|x,t) over the same K
+            # candidates. `KL(q ‖ ·)` against it is eq. (7)'s whole slack
+            # (§3.2); its own held-out NLL is §6.4's ceiling for `q`.
             log_model_posterior = log_joint - torch.logsumexp(
                 log_joint, dim=-1, keepdim=True
+            )
+            metrics["posterior_nll"] = float(F.nll_loss(posterior.log_probs, scaled.t))
+            metrics["model_posterior_nll"] = float(
+                F.nll_loss(log_model_posterior, scaled.t)
             )
             gap = (posterior.probs * (posterior.log_probs - log_model_posterior)).sum(
                 dim=-1
             )
             metrics["amortisation_gap"] = float(gap.mean())
+            # How far that posterior has travelled from the uniform it starts
+            # at: `log K - H(posterior)`. Informational, and §6.4's evidence
+            # that the fixture gives `q` a moving target rather than a
+            # stationary one it matches for free.
+            travel = (
+                log_model_posterior.exp() * (log_model_posterior + math.log(treatments))
+            ).sum(dim=-1)
+            metrics["posterior_travel"] = float(travel.mean())
     return metrics
+
+
+def _model_information(metrics: dict[str, float]) -> float:
+    """`NLL[p(t|x)] - NLL[p(t|x,y)]`: what observing `y` is worth to this arm.
+
+    §6.4's denominator and its own guard. On a fixture where `y` says nothing
+    about `t` this collapses toward zero, the captured share stops being
+    defined in any useful sense, and the tolerance voids the pair rather than
+    letting a small gap read as success.
+    """
+    return metrics["treatment_nll"] - metrics["model_posterior_nll"]
+
+
+def _captured(metrics: dict[str, float]) -> float:
+    """The share of that information the amortised head recovers (§6.4).
+
+    A `q` that ignores `y` scores 0 because it can do no better than the
+    propensity; a noisy one scores low or negative. Above 1 is possible and is
+    reported rather than clipped: eq. (9) supervises `q` against observed
+    treatments, which the model posterior never sees, so `q` can be better
+    calibrated against the truth than the product it approximates.
+    """
+    information = _model_information(metrics)
+    if information <= 0.0:
+        raise RuntimeError(
+            "this arm's model posterior did not beat its own propensity on the "
+            f"held-out rows (advantage {information:.6g} nat/row), so the "
+            "captured share section 6.4 declares has no denominator"
+        )
+    return (metrics["treatment_nll"] - metrics["posterior_nll"]) / information
 
 
 def _gap_windows(result: StageResult) -> tuple[float, float]:

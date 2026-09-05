@@ -370,10 +370,10 @@ reproduction:
   dataset: project-local seed-locked two-cluster XTY DGP (6 features, K=2) with overlapping treatment assignment, specified in 6.1
   variant: paired substitution of eq. (7) + eq. (9) for exact marginalisation; same fixture, seeds, batches, backbone, optimiser and step budget in both arms
   split: 1024 train rows with 64 observed treatments, 2048 held-out rows with every treatment and outcome observed
-  metric: held-out exact marginal NLL ratio, variational arm over exact arm; amortisation gap, posterior advantage, and two likelihood guardrails as declared in 6.2
+  metric: held-out exact marginal NLL ratio, variational arm over exact arm; amortisation gap, posterior advantage, the share of its own model posterior's y-information the amortised head recovers, and two likelihood guardrails as declared in 6.2
   published: none - no published number applies to this adaptation
   published_source: n/a
-  tolerance: held_out_marginal_NLL_ratio mean plus one stderr at most 1.02; amortisation_gap mean plus one stderr at most 0.10 nats and its terminal value below its step-50 value in mean; posterior_advantage mean plus one stderr strictly below 0.0 nats; held_out_outcome_NLL_ratio and held_out_treatment_NLL_ratio each at most 1.05
+  tolerance: held_out_marginal_NLL_ratio mean plus one stderr at most 1.02; amortisation_gap mean plus one stderr at most 0.10 nats; posterior_information_captured mean minus one stderr at least 0.8, with model_posterior_information mean minus one stderr at least 0.02 nats so that a fixture whose y carries no treatment information voids this pair rather than passing it (6.4); posterior_advantage mean plus one stderr strictly below 0.0 nats; held_out_outcome_NLL_ratio and held_out_treatment_NLL_ratio each at most 1.05
   seeds: 10
   report: mean_and_stderr
 ```
@@ -453,8 +453,12 @@ before item 3 below, whose direction that run does not support.
 2. **The bound holds in training, not only in a unit test:** at every logged
    step, arm A's eq. (7) value is at or above the exact marginal NLL of arm A's
    own components on the same batch.
-3. The amortisation gap and its trajectory: mean `KL(q ‖ posterior)` over the
-   first 50 and last 50 steps, and on the held-out rows at the end.
+3. The amortisation gap: mean `KL(q ‖ posterior)` on the held-out rows at the
+   end, and the share of the model posterior's own held-out `y`-information
+   that `q` recovers (§6.4's `posterior_information_captured`), at or above
+   `0.8` on the smoke seed. The first-50 and last-50 training windows are still
+   logged and reported, but **no direction is asserted between them**: §6.4
+   records why the run's only gap transient completes inside the first window.
 4. **The eq. (9) ablation** (`alpha = 0`). The paper's stated reason for the
    term is that `q` never sees a label; here `q` still receives gradients from
    eq. (7), so the ablation asks whether the labelled term is doing anything
@@ -477,6 +481,80 @@ from its green status.
 |---|---|---|---|---|
 | 2026-09-05 | `5ae0fe865425` | held_out_marginal_NLL_ratio<br>amortisation_gap<br>amortisation_gap_reduction<br>posterior_advantage<br>held_out_outcome_NLL_ratio<br>held_out_treatment_NLL_ratio | 1.00118 +/- 0.000652<br>0.00490335 +/- 0.000375 nat/row<br>-4.68541e-06 +/- 0.000286 nat/row<br>-0.0798819 +/- 0.00529 nat/row<br>0.974457 +/- 0.00142<br>1.00846 +/- 0.00477 | no |
 
+### 6.4 Amendment: the gap-trajectory clause, and what replaced it
+
+The row above is retained rather than withdrawn. It was produced under the
+protocol reviewed at the time, on the seed stream §6.1 declares, and it is the
+evidence this amendment reasons from. `softmatch.md` §6.3 keeps both of its
+rows for the same reason: a superseded target that was honestly run is a
+finding, not a mistake.
+
+**What the withdrawn clause required.** That `amortisation_gap`'s "terminal
+value" fall below its "step-50 value" in mean. Ten seeds returned
+`-0.0000047 +/- 0.000286` nat/row: not merely a miss, but a statistic with no
+resolving power, since it cannot distinguish its own sign.
+
+**Why it could not measure what it was for.** The clause presumes a gap that
+opens at initialisation and closes as `q` learns. This architecture makes that
+false by construction. `CategoricalPosterior` and the propensity both start
+near-uniform, so `KL(q ‖ posterior)` starts near its floor; and eq. (7)'s
+gradient with respect to `q` is minimised exactly at the model posterior, so
+`q` is pinned to it from the first step. The gap does fall — held-out
+`0.0112` at initialisation against `0.0044` at step 3,000 on seed 90000 — but
+the fall completes within one or two optimiser steps, inside the first-fifty
+window itself. Any window the card could name already contains the settled
+value. This is a property of the initialisation and the objective, not of the
+run, and it would have been derivable before the protocol was written.
+
+**That is not a weakness of the fixture, which was checked separately.** On
+seed 90000 the model posterior travels from `KL(posterior ‖ uniform) = 0.0000`
+at initialisation to `0.2790` at the end, so there is a moving target; and the
+fitted outcome heads give a log-likelihood ratio
+`log p(y|x,t=1) - log p(y|x,t=0)` with mean `-0.0007` and standard deviation
+`0.2883`, so observing `y` shifts the log-odds of `t` by a row-varying amount
+that is worth `0.065` nats of held-out NLL. The fixture supplies both the
+motion and the information the clause needed; only the instrument was wrong.
+Changing the fixture would also invalidate the five targets the row above
+passes, for a defect the fixture does not cause.
+
+**The replacement, and why this one.** `posterior_information_captured` is
+
+```text
+(NLL[p(t|x)] - NLL[q(t|x,y)]) / (NLL[p(t|x)] - NLL[p(t|x,y)])
+```
+
+on the held-out population in the variational arm: the share of its own model
+posterior's advantage over its own propensity that the amortised head
+recovers. It states §2's claim as a learning outcome rather than as a
+trajectory — a `q` that ignores `y` scores `0`, a noisy one scores low or
+negative, and only a head that has actually learned the `y`-correction scores
+near `1`. Both terms come from the same fitted arm, so no external reference is
+needed and the statistic is scale-free.
+
+Its companion `model_posterior_information` is the denominator,
+`NLL[p(t|x)] - NLL[p(t|x,y)]`, required at or above `0.02` nats. This is the
+guard the withdrawn clause lacked: on a fixture where `y` says nothing about
+`t`, the denominator collapses and the pair **voids** rather than passes, which
+is exactly the degenerate case a small gap alone cannot distinguish from
+success.
+
+**Two candidates were rejected.** A ratio of the gap to the posterior's
+distance from uniform is dominated by how well `p(t|x)` learns from `x`, so a
+`q` that ignored `y` entirely would pass it. A ratio of `KL(q ‖ posterior)` to
+`KL(p(t|x) ‖ posterior)` is the right question but an unusable statistic: a
+three-seed diagnostic returned `0.983`, `0.578` and `0.323`, scatter that ten
+replicates could not resolve against any threshold worth setting.
+
+**Predeclared, with its numbers withheld.** The three-seed diagnostic that
+motivated this section reported `posterior_information_captured` of `0.937`,
+`1.354` and `1.313` on seeds 90000, 90100 and 90200. It is a diagnostic and not
+Tier 2 evidence: the threshold `0.8` is set as "most of it" against a statistic
+whose failure mode is stated above, not fitted to those three values, and the
+ledger row below is a fresh ten-seed run under the amended block. A value above
+`1` is possible and is reported rather than clipped — eq. (9) supervises `q`
+against observed treatments, which the model posterior does not see, so `q` can
+be better calibrated against the truth than the product it approximates.
+
 ## 7. Unknowns
 
 | Unspecified in paper | Our choice | Basis |
@@ -498,3 +576,4 @@ from its green status.
 | Plan diffed against §3.2 and §4 | GPT-5.6 Sol | 2026-08-29 |
 | Implementation and Tier 1 audited (status → `smoke-passing`) | GPT-5.6 Sol | 2026-08-29 |
 | Tier 2 run and ledger recorded (status → `deviating`) | Claude | 2026-09-05 |
+| §6 amended: gap-trajectory clause replaced (§6.4) | mattsq | 2026-09-05 |
