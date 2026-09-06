@@ -45,6 +45,7 @@ from xty2.recipes.paws import (
     SUPPORT_PER_TREATMENT,
     paws,
 )
+from xty2.recipes.remixmatch import remixmatch
 from xty2.recipes.scarf import (
     CORRUPTION_RATE,
     JOINT_FIT_STEPS,
@@ -137,6 +138,7 @@ __all__ = [
     "mean_teacher",
     "meta_pseudo_labels",
     "paws",
+    "remixmatch",
     "scarf",
     "simmatch",
     "softmatch",

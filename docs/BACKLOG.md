@@ -57,7 +57,7 @@ ten-seed Tier 2 study.
 
 1. CoMatch (`implemented`, study open) or PAWS (`reproduced`): test
    class-compatible representation learning.
-2. ReMixMatch (`draft`, stopped for review): crowd one recipe without adding
+2. ReMixMatch (`implemented`, study open): crowd one recipe without adding
    procedural recipe code.
 3. SimMatch (`implemented`, study partly open): test explicit historical state.
 4. Meta Pseudo Labels + UDA (`reproduced`): test the optimisation boundary.
@@ -88,7 +88,7 @@ ReMixMatch combines MixMatch with distribution alignment, augmentation
 anchoring, rotation, and adaptive strong augmentation. It is the preferred
 crowded-recipe test once its ingredients exist independently.
 
-`docs/recipes/remixmatch.md` is now a `draft` card stopped for review and is
+`docs/recipes/remixmatch.md` is now an `implemented` card and is
 authoritative from here. Read its §5.1 before proposing any row-mixing or
 self-supervised-pretext work: it is the first card to propose the `BACKLOG.md`
 §15.1 synthetic-row vocabulary, and it names MixMatch (§2.2) and S4L (§2.1) as

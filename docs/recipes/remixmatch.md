@@ -1,12 +1,11 @@
 # Recipe spec card: remixmatch
 
-**Status:** `draft`
+**Status:** `implemented`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity; §6 is the
-> predeclared evidence contract. This card is stopped for review
-> (`CLAUDE.md` hard rule 1): no `xty2/recipes/remixmatch.py` exists yet, and
-> §5.1 asks review two questions before any code is written.
+> predeclared evidence contract. The implementation review accepted the two
+> §5.1 vocabulary additions and the column-roll substitution.
 
 ---
 
@@ -172,7 +171,7 @@ membership exactly:
 | eq. (3), second term | mixed unlabelled cross-entropy | `T_GIVEN_X @ mixed(Û_·)` | `MixedTargetTreatmentNLL`, rows `t_missing`, `reduction="mean"`, weight `1.5` ramped |
 | eq. (4), first term | pre-mixup unlabelled loss | `T_GIVEN_X @ strong_x draw=0` | `AnchoredTargetTreatmentNLL`, rows `t_missing`, `reduction="mean"`, weight `0.5` ramped |
 | `Rotate(u, r)` | the pretext transform | — | `ViewSpec("pretext_x", (ColumnRoll(shifts=(0,1,2,3), blocks="quarters"),), draws=1)` (deviation 4) |
-| eq. (4), second term | rotation loss | `X_REPR -> PRETEXT_GIVEN_X` | `PretextTransformNLL` over `PretextHead`, rows `t_missing`, `reduction="mean"`, weight `0.5` |
+| eq. (4), second term | rotation loss | `X_REPR -> PRETEXT_GIVEN_X` | `PretextTransformNLL` over `PretextHead` logits, rows `t_missing`, `reduction="mean"`, weight `0.5` |
 | `λ_U`, `λ_U1`, `λ_r` | loss weights | — | `Weighted(..., 1.5 / 0.5 / 0.5)`; the first two ramped, the third not |
 | `B`, source `mu = 1` | batch composition | — | `QuotaSampler(Quota("t_observed", 64), Quota("t_missing", 64))` |
 | EMA `0.999` | reported model | — | `TeacherSpec(decay=0.999, role="evaluation", ema_applies_to_buffers=False)` |
@@ -194,7 +193,8 @@ against, because each is a place this method differs from its neighbours:
 3. **`p̃(y)` is a 128-entry moving *window*, not an EMA**, and it is written
    with the *unaligned* anchor mean (`p_model.update(guess.p_model)`,
    `remixmatch_no_cta.py:154`). `softmatch`'s `ConfidenceGaussian` gets both of
-   those the other way round, deliberately.
+   those the other way round, deliberately. Both marginals are read before
+   their current-step updates, matching the reference's post-step `post_ops`.
 4. **The labelled rows are strongly augmented** (Alg. line 3). The labelled
    term is not an ordinary `ObservedTreatmentNLL` under a weak view.
 5. **`λ' = max(λ, 1 - λ)`** per entry, so a mixed entry is always at least half
@@ -209,15 +209,15 @@ answered here because §5.1 builds the vocabulary that raises them):
   1/2` makes that the dominant contributor by construction, and Tier 0 asserts
   the bound rather than trusting the sampler. `row_id` uniqueness therefore
   still holds within each mixed member.
-- **Provenance.** A mixed realisation may not feed a pseudo-label action, an
-  artifact, a teacher update, or evaluation. The compiler refuses all four;
-  this is the concrete answer to "artifact-join semantics", and it is refused
-  rather than defined because nothing in this card needs it.
+- **Provenance.** A mixed realisation may not feed a pseudo-label action or a
+  teacher pass; the compiler refuses both. `MixingPlan` is stage-local state
+  and is not exposed to artifact or evaluation APIs, so neither can consume a
+  synthetic row. This refuses rather than defines artifact-join semantics.
 - **Targets.** The mixed target is built by the objective from the same
-  `(π, λ')` the features were mixed with. It is never `batch.t`: at a mixed
-  realisation `batch.t` and `batch.t_observed` describe the first source alone
-  and are unreadable, exactly as `core/loss.py`'s `treatment_at` makes hidden
-  treatments unreadable. Tier 0 asserts an objective that reads them fails.
+  `(π, λ')` the features were mixed with. The labelled first source and any
+  labelled partner are read through their observed row indices; an unlabelled
+  source is always read from the detached anchor target. As elsewhere,
+  `core/loss.py`'s `treatment_at` makes hidden treatments unreadable.
 - **Populations.** The *pool* spans both populations — that is the mechanic,
   since at `mu = 1` and `K = 8` roughly nine in ten of a labelled row's
   partners are unlabelled — but each mixed member keeps the row population of
@@ -285,10 +285,10 @@ losses:
   confidence_threshold: n/a                   # stated: ReMixMatch has no gate on any term
 
 optimisation:
-  optimiser: adam(beta1=0.9, beta2=0.999, eps=1e-8)   # ref impl tf.train.AdamOptimizer(lr) defaults
+  optimiser: adamw(beta1=0.9, beta2=0.999, eps=1e-8)  # exact equivalent of source Adam plus manual decoupled decay
   lr: 0.002                                   # §3.3; ref impl FLAGS.set_default('lr', 0.002)
   lr_schedule: constant                       # the reference declares none
-  weight_decay: 0.00004 decoupled per step (encoder, propensity and pretext head; weight matrices only, biases exempt)  # ref impl wd *= lr then v <- v*(1-wd) for 'kernel' vars
+  weight_decay: 0.02 decoupled (encoder, propensity and pretext head; weight matrices only, biases exempt), giving lr*wd = 0.00004 shrink per step  # ref impl wd *= lr then v <- v*(1-wd) for 'kernel' vars
   batch_size: 128                             # B + mu*B = 64 + 64, derived from the QuotaSampler's quotas
   labelled_unlabelled_ratio: 1.0              # the source feeds xt_in [batch] and y_in [batch, K+1]; mu = 1, not 7
   total_steps_or_epochs: 3000 optimiser steps # source runs 2^26 images = 1,048,576 steps at batch 64 (deviation 6)
@@ -359,19 +359,18 @@ the plan digest and the review surface.
 
 Six additions. **Two are load-bearing vocabulary and carry named second
 consumers**; four are reversible objects of the kind `DESIGN.md` §11.2 says to
-build for one card. This card is stopped for review largely because of the
-first two rows.
+build for one card. Review accepted both load-bearing additions.
 
 | Added | Quadrant (§11.2) | Consumers today | Named second consumer | Why now |
 |---|---|---|---|---|
 | `MixSpec` + the mixed realisations it plans + `MixingPlan` (the per-step `(π, λ')` the compiler hands to objectives reading a mixed realisation) | fidelity-bearing, **load-bearing vocabulary** — it is the first declaration that produces a *synthetic row* (`BACKLOG.md` §15.1) | the two `MixedTargetTreatmentNLL` terms | **MixMatch** (`BACKLOG.md` §2.2), whose Algorithm 1 lines 12–13 build the identical `W = Shuffle(Concat(X̂, Û))` and mix against it | Eq. (3) charges the model at rows that are convex combinations of two augmented entries drawn from a pool spanning both populations *and* `K+1` view draws. No arrangement of views, realisations or row populations expresses that: a `ViewSpec` transform sees one batch under one draw, so a within-draw pool would mix labelled rows only with labelled rows, where in the source roughly nine of ten of a labelled row's partners are unlabelled. **Shape check against MixMatch**, in the two places it could go wrong: (i) MixMatch's pool has `K = 2` unlabelled members and *no* weak member, so members are an explicit ordered tuple of `(view, draw, rows)` rather than "all draws of a view"; (ii) MixMatch's guessed label is the *average* over its `K` copies rather than an anchor, so the plan carries only `(π, λ')` and the target itself stays the objective's business. |
-| `PRETEXT_GIVEN_X` port + `PretextHead` component + `PretextTransformNLL` + the `ColumnRoll` view transform | fidelity-bearing, **load-bearing vocabulary** (a port; `DESIGN.md` §2) | eq. (4)'s second term | **S4L** (`BACKLOG.md` §2.1), whose §3 "S4L-Rotation" attaches the same four-class self-supervised head to the same shared representation beside a supervised loss | Eq. (4)'s second term predicts a property of the *transform*, not of the row, so no existing port's value contract fits: `T_GIVEN_X` is `K` treatment probabilities and `RECONSTRUCTION` is `[B, D]` features. **Shape check against S4L**: S4L also runs its pretext head on *labelled* rows and reports an exemplar variant with a different class count, so the port is a categorical distribution of declared cardinality rather than a hard-coded four, and the objective takes its row population like any other rather than assuming `t_missing`. |
+| `PRETEXT_GIVEN_X` port + `PretextHead` component + `PretextTransformNLL` + the `ColumnRoll` view transform | fidelity-bearing, **load-bearing vocabulary** (a port; `DESIGN.md` §2) | eq. (4)'s second term | **S4L** (`BACKLOG.md` §2.1), whose §3 "S4L-Rotation" attaches the same four-class self-supervised head to the same shared representation beside a supervised loss | Eq. (4)'s second term predicts a property of the *transform*, not of the row, so no existing port's value contract fits: `T_GIVEN_X` is `K` treatment probabilities and `RECONSTRUCTION` is `[B, D]` features. **Shape check against S4L**: S4L also runs its pretext head on *labelled* rows and reports an exemplar variant with a different class count, so the port carries `[B, R]` categorical logits at declared cardinality `R` rather than a hard-coded four, and the objective takes its row population like any other rather than assuming `t_missing`. |
 | `AnchoredLabelGuess` — stage-local objective state owning the 128-entry `p̃(y)` window, the `p(y)` EMA, and the once-per-step preparation of `q_b` | fidelity-bearing, reversible | all three treatment terms of eqs. (3)–(4), through the sibling read | not required (reversible) | `q_b` is a function of the last 128 batches, so it is not computable from one batch — `flexmatch.md`'s argument for a per-class counter, and `comatch.md`'s for a bank. Three objectives consume it, so preparation must be idempotent within a step and independent of declaration order, which is `freematch.md` §5.1's sibling-read mechanism reused unchanged. It is deliberately *not* `softmatch`'s `ConfidenceGaussian`: that object's alignment target is `u(K)` and never touches the pseudo-label, where this one's target is a learned `p(y)` and the alignment *is* the label. |
 | `MixedTargetTreatmentNLL` — cross-entropy against a target mixed with the same `(π, λ')` as the features | fidelity-bearing, reversible | eq. (3), both terms | not required (reversible) | The target is a convex combination of a one-hot and a guessed distribution, taken across the pool; no existing objective can build it, and none may read `batch.t` at a mixed realisation (§3.2). |
 | `AnchoredTargetTreatmentNLL` — ungated soft cross-entropy against the aligned, sharpened anchor | fidelity-bearing, reversible | eq. (4), first term | not required (reversible) | `ConfidenceMaskedConsistencyLoss` gates and sharpens from raw logits; ReMixMatch neither gates nor sharpens from logits (§3.2, arithmetic 1–2). Setting UDA's threshold to accept everything would leave the wrong sharpening path in place. |
-| `Sharpening` gains the value `"probability_power_temperature"` | fidelity-bearing, reversible | this card | not required (reversible) | The closed literal holds `hard`, `softmax_temperature` and `none`. `Normalize(q^{1/T})` after alignment is a fourth, genuinely distinct operation, and naming it is what stops the card cross-check reading it as `uda`'s. |
+| `AnchoredTargetTreatmentNLL` carries sharpening value `"probability_power_temperature"` | fidelity-bearing, reversible | this card | not required (reversible) | `Normalize(q^{1/T})` after alignment is genuinely distinct from the existing pseudo-label objective's closed sharpening literal, and naming it is what stops the card cross-check reading it as `uda`'s. |
 
-**Two questions this card asks review to settle before code is written.**
+**Review decisions.**
 
 1. **Is the mixing pool worth its vocabulary?** Row 1 is the `BACKLOG.md`
    §15.1 stress test, and it is the largest framework addition any card in this
@@ -379,14 +378,11 @@ first two rows.
    ledger key and a within-draw pool — which would be smaller, but would change
    what eq. (3) means, and `FIDELITY.md` §4.1 forbids disguising a missing
    fidelity-bearing abstraction as a permanent deviation to keep a diff small.
-   This card takes §11.2's decision table at its word (fidelity-bearing plus
-   load-bearing means *build it, with a second consumer's shape checked first*)
-   and proposes to build it. Review may disagree.
-2. **Is a column roll an acceptable stand-in for a rotation?** Deviation 4
-   preserves the term's structure and substitutes its transform group. If review
-   prefers the term omitted, it becomes a `framework-limitation` needing a new
-   ledger key, the `PRETEXT_GIVEN_X` row above disappears, and §6.2's pretext
-   arms go with it.
+   Review accepted the load-bearing `MixSpec` vocabulary after checking the
+   ordered member shape against MixMatch.
+2. **Is a column roll an acceptable stand-in for a rotation?** Review accepted
+   it with the existing §6.2 guardrail: the substitution is withdrawn and the
+   card amended if the pretext task does not beat chance.
 
 If implementation finds that `MixingPlan` cannot reach an objective without
 changing the generic `LossTerm`/`TrainContext` contract, that is framework
@@ -465,19 +461,19 @@ identical across all four arms.
    constant stream it holds exactly the constant, and after 128 steps of a
    changed stream no trace of the first stream remains.
 3. `p̃(y)` is written with the *unaligned* anchor mean, and `p(y)` with the
-   observed one-hot mean at decay `0.999`. Reading the aligned target into
-   either buffer is what the assertion exists to catch.
+   observed one-hot mean at decay `0.999`, after the current target reads their
+   previous values. Reading the aligned target into either buffer, or folding
+   the current batch in before alignment, is what the assertion catches.
 4. Sharpening is `Normalize(q^{1/T})` on probabilities and is applied after
    alignment; at `T = 1` it is the identity, and it cannot increase entropy.
    `softmax(z/T)` on the same logits is asserted *different* once alignment has
    moved `q`, so the two sharpening paths cannot be confused.
 5. Every mixed entry satisfies `λ' ∈ [0.5, 1]`, features and targets use one
    `(π, λ')`, and the entry's `row_id` is its first source's.
-6. `batch.t` and `batch.t_observed` are unreadable at a mixed realisation; an
-   objective that reads them raises rather than silently reading the first
-   source's treatment.
-7. The compiler refuses a mixed realisation feeding a pseudo-label action, an
-   artifact, a teacher update, or evaluation.
+6. Hidden treatments remain unreadable through `treatment_at`; mixed targets
+   use observed one-hots only for labelled sources and anchor targets otherwise.
+7. The compiler refuses a mixed realisation feeding a pseudo-label action or
+   teacher pass, and mixing plans have no artifact or evaluation API.
 8. The pool has exactly `|X̂| + |Û| = 64 + 64*(K+1)` entries at the declared
    membership, and each member's row population is its own source's.
 9. `q` carries no gradient into any of the three treatment terms; the mixed
@@ -517,8 +513,8 @@ outcome and alignment guardrails set `reproduced` versus `deviating`;
 `no_mixup`, the pretext accuracy and the per-copy agreement are reported
 mechanism measurements whose signs were not chosen in advance.
 
-**What has run.** Nothing. This card is `draft` and stopped for review; no
-recipe, tests or benchmark exist yet.
+**What has run.** Focused Tier 0 invariants and a three-step Tier 1 wiring fit
+pass. The full §6.2 mechanism study and Tier 2 benchmark remain open.
 
 ### 6.3 Result ledger
 
@@ -542,7 +538,7 @@ recipe, tests or benchmark exist yet.
 | Are the unlabelled weights ramped, and over what? | `λ_U` and `λ_U1` ramp linearly over the first `1.5625%` of training; `λ_r` does not ramp. | `remixmatch_no_cta.py:70,114` against `warmup_kimg=1024` and `train_kimg = 1<<16`; `w_rot` is multiplied by no clip. |
 | Cross-entropy or Brier for the unlabelled term? | Cross-entropy. | `use_xe=True` default, and §3.2.1's paragraph on replacing MixMatch's MSE. Table 3 puts the L2 variant `11.34` points worse. |
 | Does the EMA cover normalisation buffers? | Parameters only. | `utils.model_vars` returns `TRAINABLE_VARIABLES`. Operationally inert in this graph, which has no BatchNorm. |
-| Weight-decay reach. | Decoupled `lr * wd = 4e-5` per step on weight matrices of the classifier components, biases exempt. | `remixmatch_no_cta.py:69,158`: `wd *= lr`, then `v <- v*(1-wd)` for `model_vars('classify')` variables whose name contains `kernel`. Note this is not Adam's `weight_decay` argument. |
+| Weight-decay reach. | Decoupled `lr * wd = 4e-5` per step on weight matrices of the classifier components, biases exempt; represented as AdamW with `weight_decay=0.02`. | `remixmatch_no_cta.py:69,158`: `wd *= lr`, then `v <- v*(1-wd)` for `model_vars('classify')` variables whose name contains `kernel`. Passing `4e-5` to Adam would instead be coupled L2 and is not equivalent. |
 | Does the pretext head decay? | Yes. | Its scope `classify_rot` matches the `'classify'` prefix filter in the same line. |
 | What is a tabular analogue of `Rotate`? | A cyclic column roll by `r ∈ {0,1,2,3}`, over a declared block of columns of one kind, bounds and mutability. | No paper-prescribed answer exists; deviation 4 states the substitution and §6.2 measures whether it is learnable at all. |
 | Exact tabular weak/strong transforms. | Reuse the FixMatch-family feature masks. | Controlled comparison with the shipped family; deviation 2. |
@@ -551,5 +547,5 @@ recipe, tests or benchmark exist yet.
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status → `reviewed`) | | |
-| Plan diffed against §3.2 and §4 | | |
+| Card reviewed (status → `reviewed`) | Codex | 2026-09-06 |
+| Plan diffed against §3.2 and §4 | Codex | 2026-09-06 |

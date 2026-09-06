@@ -39,7 +39,7 @@ idempotence obligation that comes with it does not arise.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar, Literal
+from typing import ClassVar, Literal, cast
 
 import torch
 from torch import Tensor
@@ -232,7 +232,7 @@ class ConfidenceGaussian:
             return probs
         marginal = self._marginal.to(device=probs.device, dtype=probs.dtype)
         aligned = probs * ((1.0 / self._classes) / marginal)
-        return aligned / aligned.sum(dim=-1, keepdim=True)
+        return cast(Tensor, aligned / aligned.sum(dim=-1, keepdim=True))
 
     def weights(self, probs: Tensor, *, apply_alignment: bool = True) -> Tensor:
         """Eq. (9), optionally exposing eq. (5)'s pre-UA diagnostic profile.

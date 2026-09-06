@@ -42,6 +42,7 @@ class Port(StrEnum):
     T_GIVEN_XY = "q(t|x,y)"
     JOINT_ENERGY = "energy(x,t,y)"
     RECONSTRUCTION = "reconstruction"
+    PRETEXT_GIVEN_X = "pretext_logits(x)"
 
 
 class Axis(StrEnum):
@@ -242,6 +243,12 @@ PORT_SPECS: dict[Port, PortSpec] = {
         "tensor",
         (Axis.BATCH, Axis.FEATURES),
         "reconstruction of x, matching X_RAW",
+    ),
+    Port.PRETEXT_GIVEN_X: PortSpec(
+        Port.PRETEXT_GIVEN_X,
+        "tensor",
+        (Axis.BATCH, Axis.FREE),
+        "categorical logits for a declared self-supervised transform",
     ),
 }
 
