@@ -1,6 +1,6 @@
 # Recipe spec card: remixmatch
 
-**Status:** `implemented`
+**Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity; §6 is the
@@ -405,6 +405,10 @@ changing the generic `LossTerm`/`TrainContext` contract, that is framework
 vocabulary beyond what this table declares: amend the card and stop again
 (`FIDELITY.md` §1).
 
+### Tier 2 outcome
+
+On 2026-09-06, commit `e33495893af2` produced a `deviating` result: This is the predeclared project-local ReMixMatch mechanism target, not a reproduction of the paper's image benchmarks. It asks whether the unlabelled crowd and distribution alignment improve balanced treatment classification on the card's deliberately skewed fixture. Within noise of the target: alignment_marginal_L1_advantage was 0.0103444 +/- 0.0305 against mean >= 0, by at least one stderr, inside its target by 0.0103 — less than its own standard error, so the run does not distinguish it from a miss.
+
 ## 6. Reproduction target
 
 Two required paired comparisons, on one fixture, with initial parameters,
@@ -545,16 +549,28 @@ outcome and alignment guardrails set `reproduced` versus `deviating`;
 `no_mixup`, the pretext accuracy and the per-copy agreement are reported
 mechanism measurements whose signs were not chosen in advance.
 
-**What has run.** Tier 0 items 1-15 and a three-step Tier 1 wiring fit pass.
-The Tier 1 mechanism arms (§6.2 Tier 1 items 1, 3, 4, 5) and the Tier 2
-benchmark remain open; §6.1's arms are all reachable as `remixmatch()` keyword
-arguments and compile, but no runner drives them yet.
+**What has run.** Tier 0 items 1-15 and the three-step Tier 1 wiring fit pass.
+The one-seed Tier 1 mechanism study runs `K = 1`, `no_pretext`,
+`no_premixup`, and `mean_redux` beside the full arm for 300 optimiser steps,
+with initial parameters and trained row ids asserted identical. Its four
+ReMixMatch losses are finite and fall from the first to the last 25-step
+window; the full arm beats the observed-marginal frequency baseline, the
+column-roll accuracy beats `0.25`, and the measured strong-view Bayes-label
+flip rate exceeds the weak-view rate. Those one-seed arm signs remain
+non-acceptance commentary, as predeclared.
+
+The Tier 2 runner executes all four ten-seed arms and records every required
+and informational measurement. The 2026-09-06 row passes the student and EMA
+full-versus-supervised ratios, both full-versus-no-alignment ratios, outcome,
+pretext, and MixUp bounds. It remains `deviating` because the positive
+true-marginal L1 advantage is smaller than its own standard error; under
+`FIDELITY.md` §3 that does not distinguish the guardrail from a miss.
 
 ### 6.3 Result ledger
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
-| — | — | — | — | — |
+| 2026-09-06 | `e33495893af2` | full_vs_supervised_student_macro_NLL_ratio<br>full_vs_supervised_ema_macro_NLL_ratio<br>full_vs_no_alignment_student_macro_NLL_ratio<br>full_vs_no_alignment_ema_macro_NLL_ratio<br>held_out_outcome_NLL_ratio<br>alignment_marginal_L1_advantage<br>terminal_pretext_accuracy<br>terminal_mixed_lambda_min<br>terminal_mixed_lambda_max | 0.874821 +/- 0.047<br>0.916661 +/- 0.0245<br>0.892287 +/- 0.0676<br>0.948779 +/- 0.0361<br>0.986844 +/- 0.00331<br>0.0103444 +/- 0.0305<br>0.361344 +/- 0.00366<br>0.500079 +/- 2.18e-05<br>0.999998 +/- 1.08e-06 | no |
 
 ## 7. Unknowns
 
@@ -584,9 +600,11 @@ arguments and compile, but no runner drives them yet.
 | Card reviewed (status → `reviewed`) | Codex | 2026-09-06 |
 | Plan diffed against §3.2 and §4 | Codex | 2026-09-06 |
 | §5.1 row 3 (`ViewSpec.source`) reviewed | mattsq | 2026-09-06 |
+| Tier 1 mechanism study run in full | Codex | 2026-09-06 |
+| Tier 2 run, ten replicates (status → `deviating`) | Codex | 2026-09-06 |
 
 Nothing on this card is open to review. §5.1's third load-bearing addition was
 found during implementation, so it went back for the second stop `CLAUDE.md`
-hard rule 1 requires; the row above records its acceptance. What remains is
-evidence, not review: §6.2's Tier 1 mechanism arms and the Tier 2 study are
-still to run (§6.2, "What has run").
+hard rule 1 requires; the row above records its acceptance. The complete
+evidence and the one guardrail that remains statistically unresolved are
+recorded in §6.2–§6.3.
