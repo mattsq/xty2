@@ -36,7 +36,7 @@ zero rather than an average over an empty set; and `batch.weight` reaches
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar, Literal, cast
+from typing import ClassVar, Literal
 
 import torch
 from torch import Tensor
@@ -145,7 +145,7 @@ class CurriculumThreshold:
         """`M` of eq. (12) applied elementwise to `beta`."""
         if self.mapping == "identity":
             return beta
-        return cast(Tensor, beta / (2.0 - beta))
+        return beta / (2.0 - beta)
 
 
 class CurriculumStatus:

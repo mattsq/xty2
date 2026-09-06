@@ -251,7 +251,13 @@ executor computes and caches each required draw once per step.
 A view may name another realisation as its `source`. The executor materialises
 that source first and applies the derived view's transforms to the exact cached
 draw. This is used where a second task transforms an already-augmented input;
-it must not silently resample the upstream augmentation.
+it must not silently resample the upstream augmentation. A source must be an
+ordinary student realisation naming a declared draw: view batches are cached by
+`(view, draw)` because a view is a function of the batch and not of the
+parameters reading it, so a source carrying anything else would be accepted and
+then ignored. Like a port, this is load-bearing vocabulary — adding it required
+a reviewed card that cannot express its source mechanic without it plus a named
+second consumer (`remixmatch` §5.1).
 
 Cross-realisation MixUp is declared by `MixSpec`, not by a `ViewTransform`.
 Its ordered `MixMember(realisation, rows)` pool may span views, draws, and row

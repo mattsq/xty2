@@ -14,7 +14,13 @@ from xty2.core.card_keys import REQUIRED, card_hyperparameters
 from xty2.core.data import TrainingPopulation
 from xty2.core.errors import LossError, PortContractError, require_str
 from xty2.core.graph import Realisation, State
-from xty2.core.loss import LossTerm, TrainContext, reduce_rows, treatment_distribution
+from xty2.core.loss import (
+    LossTerm,
+    TrainContext,
+    reduce_rows,
+    treatment_at,
+    treatment_distribution,
+)
 from xty2.core.mixing import MixingPlan
 from xty2.core.ports import Port
 from xty2.core.rows import RowIndex, Rows, resolve_rows, validate_population
@@ -36,6 +42,7 @@ class AnchoredLabelGuess:
         "_last_rows",
         "_last_step",
         "_target",
+        "_updates",
         "_window",
         "capacity",
         "classes",
@@ -61,23 +68,32 @@ class AnchoredLabelGuess:
         self.epsilon = epsilon
         self.temperature = temperature
         self.use_alignment = use_alignment
-        self._window: list[Tensor] = []
-        self._labelled = torch.full(
-            (num_treatments,), 1.0 / num_treatments, dtype=torch.float64
-        )
+        # `PMovingAverage` is a `[capacity, K]` variable *initialised to* `1/K`
+        # and averaged over every slot, not a list that fills up: for the first
+        # `capacity` steps the reference's `p~(y)` is still mostly uniform, so a
+        # window that grew from empty would align far harder early on than the
+        # source does (`libml/layers.py:150-160`).
+        self._window: list[Tensor] = [
+            torch.full((num_treatments,), 1.0 / num_treatments, dtype=torch.float64)
+            for _ in range(capacity)
+        ]
+        self._labelled = torch.zeros(num_treatments, dtype=torch.float64)
+        self._updates = 0
         self._last_step: int | None = None
         self._last_rows: tuple[int, ...] = ()
         self._target: Tensor | None = None
 
     @property
     def prediction_marginal(self) -> Tensor:
-        if not self._window:
-            return torch.full((self.classes,), 1.0 / self.classes, dtype=torch.float64)
-        return torch.stack(self._window).mean(dim=0)
+        mean = torch.stack(self._window).mean(dim=0)
+        return mean / mean.sum()
 
     @property
     def labelled_marginal(self) -> Tensor:
-        return self._labelled.clone()
+        """`p(y)`, bias-corrected for the EMA's zero start (deviation 10)."""
+        if self._updates == 0:
+            return torch.full((self.classes,), 1.0 / self.classes, dtype=torch.float64)
+        return self._labelled / (1.0 - self.decay**self._updates)
 
     @property
     def last_prepared_step(self) -> int | None:
@@ -110,14 +126,14 @@ class AnchoredLabelGuess:
             raise LossError(
                 "AnchoredLabelGuess needs non-empty labelled and unlabelled quotas"
             )
-        labels = batch.t.index_select(0, support_rows)
+        labels = treatment_at(batch, support_rows).index_select(0, support_rows)
         observed = (
             F.one_hot(labels, num_classes=self.classes).to(torch.float64).mean(dim=0)
         )
         aligned = raw.to(torch.float64)
         if self.use_alignment:
             aligned = aligned * (
-                (self._labelled.to(raw.device) + self.epsilon)
+                (self.labelled_marginal.to(raw.device) + self.epsilon)
                 / (self.prediction_marginal.to(raw.device) + self.epsilon)
             )
             aligned = aligned / aligned.sum(dim=-1, keepdim=True)
@@ -134,6 +150,7 @@ class AnchoredLabelGuess:
         self._labelled = (
             self.decay * self._labelled + (1.0 - self.decay) * observed.cpu()
         )
+        self._updates += 1
         self._last_step = step
         self._last_rows = signature
         self._target = full.detach()
@@ -349,7 +366,8 @@ class MixedTargetTreatmentNLL:
                 )
             if self.first_target == "observed":
                 first = F.one_hot(
-                    batch.t.index_select(0, rows), self.num_treatments
+                    treatment_at(batch, rows).index_select(0, rows),
+                    self.num_treatments,
                 ).to(prediction.dtype)
             else:
                 first = targets.index_select(0, rows)
@@ -360,7 +378,8 @@ class MixedTargetTreatmentNLL:
                 ).flatten()
                 observed_rows = plan.partner_rows.index_select(0, observed_positions)
                 one_hot = F.one_hot(
-                    batch.t.index_select(0, observed_rows), self.num_treatments
+                    treatment_at(batch, observed_rows).index_select(0, observed_rows),
+                    self.num_treatments,
                 ).to(prediction.dtype)
                 partner.index_copy_(0, observed_positions, one_hot)
             lam = plan.coefficient.to(prediction.dtype)[:, None]
@@ -400,7 +419,12 @@ class PretextTransformNLL:
 
     @property
     def batch_coupled(self) -> bool:
-        return False
+        # `random_rotate` labels four *constant quarters* of whatever arrives,
+        # so a row's target is a function of its position among the other
+        # eligible rows of its own batch, exactly as for the adaptive-threshold
+        # terms. The quarters — and the loss — move if the caller changes how
+        # many rows arrive, so `ExternalBatches` must be refused.
+        return True
 
     def compute(
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext

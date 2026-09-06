@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
 
 import torch
-from torch import Tensor
 
 from xty2.core.batch import XTYBatch
 from xty2.core.data import TrainingPopulation
@@ -46,7 +44,7 @@ class ColumnRoll:
     def labels(count: int, *, device: torch.device) -> torch.Tensor:
         if count == 0:
             return torch.empty(0, dtype=torch.long, device=device)
-        return cast(Tensor, torch.arange(count, device=device) * 4 // count)
+        return torch.arange(count, device=device) * 4 // count
 
     def apply(
         self,

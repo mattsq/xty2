@@ -80,7 +80,7 @@ def remixmatch(
     *,
     recompute_rules: tuple[RecomputeRule, ...] = (),
     use_alignment: bool = True,
-    mix_rule: str = "max",
+    mix_rule: Literal["max", "identity"] = "max",
     strong_draws: int = STRONG_DRAWS,
     pretext_weight: float = 0.5,
     premixup_weight: float = 0.5,

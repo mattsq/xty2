@@ -40,7 +40,6 @@ from __future__ import annotations
 import copy
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
-from typing import cast
 
 import pytest
 import torch
@@ -1085,10 +1084,7 @@ def _cluster_posterior(signal: Tensor, visible: Tensor) -> Tensor:
     scale = 0.6
 
     def loglik(mean: float) -> Tensor:
-        return cast(
-            Tensor,
-            (-((signal - mean) ** 2) / (2.0 * scale**2) * visible).sum(dim=1),
-        )
+        return (-((signal - mean) ** 2) / (2.0 * scale**2) * visible).sum(dim=1)
 
     return torch.sigmoid(loglik(CLUSTER_SIGNAL) - loglik(-CLUSTER_SIGNAL))
 

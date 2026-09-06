@@ -256,9 +256,12 @@ class ExecutionPlan:
     stages: tuple[CompiledStage, ...]
     hyperparameters: Mapping[str, Any]
     data: tuple[str, ...] = ()
-    mixes: tuple[tuple[str, ...], ...] = ()
     """The recipe's data policy as the plan prints it, empty where a recipe
     declares none because every stage takes the caller's batches."""
+
+    mixes: tuple[tuple[str, ...], ...] = ()
+    """One rendered block per declared `MixSpec`, empty where a recipe mixes
+    nothing."""
 
     def render(self) -> str:
         """The plan as text. Deterministic — the same recipe prints the same bytes."""
@@ -726,6 +729,18 @@ def _validated_views(recipe: Recipe) -> tuple[ViewSpec, ...]:
         if view.source is not None:
             if view.source.view == view.name:
                 raise CompileError(f"view {view.name!r} cannot derive from itself")
+            if (
+                view.source.params != "student"
+                or view.source.role != "default"
+                or view.source.state != "pre_update"
+            ):
+                # `_view_batch` caches on `(view, draw)` alone, because a view
+                # is a function of the batch and not of the parameters reading
+                # it. Anything else in a source would be silently ignored.
+                raise CompileError(
+                    f"view {view.name!r} must derive from an ordinary student "
+                    f"realisation, got {view.source}"
+                )
             available = sources.get(view.source.view)
             if available is None or view.source.draw >= available.draws:
                 raise CompileError(

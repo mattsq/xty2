@@ -19,7 +19,6 @@ import re
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
 
 import pytest
 import torch
@@ -364,9 +363,7 @@ def _bayes_label_flip_rate(mask_rate: float, rows: int = 40_000) -> float:
 
     def posterior(mask: torch.Tensor) -> torch.Tensor:
         def loglik(mu: float) -> torch.Tensor:
-            return cast(
-                torch.Tensor, (-((x - mu) ** 2) / (2 * sd**2) * mask).sum(dim=1)
-            )
+            return (-((x - mu) ** 2) / (2 * sd**2) * mask).sum(dim=1)
 
         return torch.sigmoid(loglik(signal) - loglik(-signal))
 

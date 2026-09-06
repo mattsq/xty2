@@ -26,8 +26,6 @@ not vacuous because it is genuinely different code.
 
 from __future__ import annotations
 
-from typing import cast
-
 import pytest
 import torch
 from xty2.core import XTYBatch
@@ -307,7 +305,7 @@ def _flip_rate(
 
     def posterior(mask: torch.Tensor) -> torch.Tensor:
         squared = ((x[:, None, :] - centres[None]) ** 2 * mask[:, None, :]).sum(-1)
-        return cast(torch.Tensor, (-squared / (2.0 * deviation**2)).argmax(-1))
+        return (-squared / (2.0 * deviation**2)).argmax(-1)
 
     clean = posterior(torch.ones_like(visible))
     return (

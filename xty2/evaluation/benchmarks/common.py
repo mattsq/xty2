@@ -7,7 +7,6 @@ import os
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
-from typing import cast
 
 import torch
 from torch import Tensor
@@ -363,7 +362,7 @@ def _inverse_cdf(uniform: Tensor, probabilities: Tensor, classes: int) -> Tensor
     """
     cumulative = probabilities.flip(-1).cumsum(-1)
     passed = (uniform[:, None] >= cumulative).sum(-1).clamp(max=classes - 1)
-    return cast(Tensor, (classes - 1 - passed).long())
+    return (classes - 1 - passed).long()
 
 
 def cluster_population(

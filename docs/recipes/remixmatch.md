@@ -4,8 +4,10 @@
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity; §6 is the
-> predeclared evidence contract. The implementation review accepted the two
-> §5.1 vocabulary additions and the column-roll substitution.
+> predeclared evidence contract. The implementation review accepted the first
+> two §5.1 vocabulary additions and the column-roll substitution. §5.1's third
+> load-bearing addition (`ViewSpec.source`) was found during implementation and
+> is **not yet reviewed** — see §8.
 
 ---
 
@@ -170,7 +172,7 @@ membership exactly:
 | eq. (3), first term | mixed labelled cross-entropy | `T_GIVEN_X @ mixed(X̂)` | `MixedTargetTreatmentNLL`, rows `t_observed`, `reduction="mean"`, weight `1.0` |
 | eq. (3), second term | mixed unlabelled cross-entropy | `T_GIVEN_X @ mixed(Û_·)` | `MixedTargetTreatmentNLL`, rows `t_missing`, `reduction="mean"`, weight `1.5` ramped |
 | eq. (4), first term | pre-mixup unlabelled loss | `T_GIVEN_X @ strong_x draw=0` | `AnchoredTargetTreatmentNLL`, rows `t_missing`, `reduction="mean"`, weight `0.5` ramped |
-| `Rotate(u, r)` | the pretext transform | — | `ViewSpec("pretext_x", (ColumnRoll(shifts=(0,1,2,3), blocks="quarters"),), draws=1)` (deviation 4) |
+| `Rotate(u, r)` | the pretext transform | — | `ViewSpec("pretext_x", (ColumnRoll(shifts=(0,1,2,3), blocks="quarters"),), draws=1, source=strong_x@draw=0)` — a *derived* view, because the source rotates `y_in[:, 1]`, the first strong copy, and not the raw row (§5.1 row 3) (deviation 4) |
 | eq. (4), second term | rotation loss | `X_REPR -> PRETEXT_GIVEN_X` | `PretextTransformNLL` over `PretextHead` logits, rows `t_missing`, `reduction="mean"`, weight `0.5` |
 | `λ_U`, `λ_U1`, `λ_r` | loss weights | — | `Weighted(..., 1.5 / 0.5 / 0.5)`; the first two ramped, the third not |
 | `B`, source `mu = 1` | batch composition | — | `QuotaSampler(Quota("t_observed", 64), Quota("t_missing", 64))` |
@@ -353,18 +355,22 @@ the plan digest and the review surface.
 | 6 | `judgement` | — | Train 3,000 optimiser steps rather than the source's 1,048,576, and re-base the `λ_U` / `λ_U1` ramp on the same *fraction* of the budget (`1.5625%`, so 47 steps) rather than on its step count (16,384, which exceeds the budget). | Every card here fixes a project-local step budget so that a difference between arms is attributable to the arm. Keeping the ramp's step count would leave both unlabelled weights below their nominal values for the whole run — the ramp would silently become the experiment. `comatch.md` §5.7 re-bases the cosine schedule for the same reason. | The 47-step ramp is short in absolute terms, so the unlabelled terms engage while the anchor is still near-uniform. §6.2 reports the anchor's entropy and `p̃(y)` trajectory so an unstable early target is visible rather than inferred. |
 | 7 | `judgement` | — | One fixed project-local DGP (§6.1) with a skewed training treatment prior and a balanced held-out prior; no CIFAR-10, SVHN or STL-10 protocol, no label-fraction splits, no error rates. | The paper's evidence is three image benchmarks and none carries a treatment. The skew is deliberate: `softmatch.md` §6.4 records that a balanced `K = 2` target made its alignment mechanic nearly inert and could not validate the published method, and distribution alignment is one of the two mechanics this paper is named after. | §6 is a mechanism target and says so. The skewed-to-balanced shape is what gives `p(y)/p̃(y)` work to do; it also means a gain attributable to alignment does not transfer to a balanced-prior problem. |
 | 8 | `judgement` | — | Keep the project-local missing-treatment marginal term at ramped weight `0.5` in every arm. | ReMixMatch is being tested as an addition to the causal stack, not as a replacement for it. | It can help independently of eqs. (3)–(4); every arm holds it fixed, so it cannot explain a paired difference. |
-| 9 | `judgement` | — | Set the label budget to 64 observed treatments under MCAR, drawn as a quota of 64 from a population of exactly 64, where the source samples 250 CIFAR-10 labels with replacement. | This is the shipped fixture's budget and it keeps the card comparable with `fixmatch`, `uda`, `softmatch` and `comatch`. Because the quota equals the population, the labelled half of every batch is the same 64 rows in a different order; the source's labelled loader instead re-draws from 250. | The labelled term sees no sampling noise, so `p(y)`'s EMA converges to the exact observed marginal within a few hundred steps. §6.2 reports it against the fixture's true prior rather than assuming the estimate is unbiased. |
+| 9 | `judgement` | — | Set the label budget to 64 observed treatments under MCAR, drawn as a quota of 64 from a population of exactly 64, where the source samples 250 CIFAR-10 labels with replacement. | This is the shipped fixture's budget and it keeps the card comparable with `fixmatch`, `uda`, `softmatch` and `comatch`. Because the quota equals the population, the labelled half of every batch is the same 64 rows in a different order; the source's labelled loader instead re-draws from 250. | The labelled term sees no sampling noise: the observed one-hot mean is the *same vector* every step, so `p(y)` is a deterministic approach to the exact observed marginal rather than a noisy one. How fast it gets there is deviation 10's problem, not this one's. §6.2 reports it against the fixture's true prior rather than assuming the estimate is unbiased. |
+| 10 | `judgement` | — | Bias-correct the `p(y)` EMA: divide the running value by `1 - decay^n` after `n` updates, so the estimate is the observed marginal from the first step. The declared decay stays the source's `0.999`. | The reference initialises `p_data` to uniform and decays at `0.999` (`libml/layers.py:162-168`) over a **1,048,576-step** budget, where `0.999^1048576` is zero and the initialisation is invisible. Deviation 6 cuts the budget to 3,000 steps, at which `0.999^n` is `0.954` at the end of the ramp, `0.368` at step 1,000 and `0.050` at the last step — so an uncorrected estimator would spend the whole run reporting a `p(y)` pulled toward uniform, on a fixture whose training prior is deliberately long-tailed. That is the same re-basing argument deviation 6 makes for the ramp, and leaving it out would let the warm-up become the experiment. Correcting rather than re-scaling the decay keeps a non-`n/a` §4 key at the paper's value and agrees with the reference exactly in the budget-to-infinity limit. | Alignment gets the intended `p(y)` throughout, so §6's required reduction in `|p_model_marginal - p_true|_1` measures the mechanic and not the estimator's warm-up. Tier 0 asserts the corrected estimate against a direct calculation. |
 
 ### 5.1 Framework additions made for this card
 
-Six additions. **Two are load-bearing vocabulary and carry named second
+Seven additions. **Three are load-bearing vocabulary and carry named second
 consumers**; four are reversible objects of the kind `DESIGN.md` §11.2 says to
-build for one card. Review accepted both load-bearing additions.
+build for one card. Review accepted the first two load-bearing additions; the
+third (row 3) was found during implementation and **is not yet reviewed**, so
+this card stops again on it (`FIDELITY.md` §1, `CLAUDE.md` hard rule 1).
 
 | Added | Quadrant (§11.2) | Consumers today | Named second consumer | Why now |
 |---|---|---|---|---|
 | `MixSpec` + the mixed realisations it plans + `MixingPlan` (the per-step `(π, λ')` the compiler hands to objectives reading a mixed realisation) | fidelity-bearing, **load-bearing vocabulary** — it is the first declaration that produces a *synthetic row* (`BACKLOG.md` §15.1) | the two `MixedTargetTreatmentNLL` terms | **MixMatch** (`BACKLOG.md` §2.2), whose Algorithm 1 lines 12–13 build the identical `W = Shuffle(Concat(X̂, Û))` and mix against it | Eq. (3) charges the model at rows that are convex combinations of two augmented entries drawn from a pool spanning both populations *and* `K+1` view draws. No arrangement of views, realisations or row populations expresses that: a `ViewSpec` transform sees one batch under one draw, so a within-draw pool would mix labelled rows only with labelled rows, where in the source roughly nine of ten of a labelled row's partners are unlabelled. **Shape check against MixMatch**, in the two places it could go wrong: (i) MixMatch's pool has `K = 2` unlabelled members and *no* weak member, so members are an explicit ordered tuple of `(view, draw, rows)` rather than "all draws of a view"; (ii) MixMatch's guessed label is the *average* over its `K` copies rather than an anchor, so the plan carries only `(π, λ')` and the target itself stays the objective's business. |
 | `PRETEXT_GIVEN_X` port + `PretextHead` component + `PretextTransformNLL` + the `ColumnRoll` view transform | fidelity-bearing, **load-bearing vocabulary** (a port; `DESIGN.md` §2) | eq. (4)'s second term | **S4L** (`BACKLOG.md` §2.1), whose §3 "S4L-Rotation" attaches the same four-class self-supervised head to the same shared representation beside a supervised loss | Eq. (4)'s second term predicts a property of the *transform*, not of the row, so no existing port's value contract fits: `T_GIVEN_X` is `K` treatment probabilities and `RECONSTRUCTION` is `[B, D]` features. **Shape check against S4L**: S4L also runs its pretext head on *labelled* rows and reports an exemplar variant with a different class count, so the port carries `[B, R]` categorical logits at declared cardinality `R` rather than a hard-coded four, and the objective takes its row population like any other rather than assuming `t_missing`. |
+| `ViewSpec.source` — a view that names another realisation as its input, so the executor applies its transforms to that *exact cached draw* rather than resampling the upstream augmentation | fidelity-bearing, **load-bearing vocabulary** — it changes what a realisation's inputs may be (`DESIGN.md` §5) | `pretext_x` | **S4L** (`BACKLOG.md` §2.1), whose S4L-Rotation applies its pretext transform to the same augmented image the supervised term sees, so the second consumer needs the same "derive from a named draw, do not resample" shape | Eq. (4)'s second term transforms `Û₁`, not `u` (`remixmatch_no_cta.py:94`, `random_rotate(y_in[:, 1])`). A plain `ViewSpec` sees the raw batch, so `ColumnRoll` alone would roll an unaugmented row and the pretext head would learn a different task from the paper's. Composing the two transforms inside one `ViewSpec` instead would resample the strong mask independently of `strong_x @ draw=0`, which is the copy the pre-mixup term and the mixing pool both read — the shared draw is the point. **Not reviewed:** if review prefers it withdrawn, the pretext term moves to the raw row and deviation 4 grows a second clause saying so. |
 | `AnchoredLabelGuess` — stage-local objective state owning the 128-entry `p̃(y)` window, the `p(y)` EMA, and the once-per-step preparation of `q_b` | fidelity-bearing, reversible | all three treatment terms of eqs. (3)–(4), through the sibling read | not required (reversible) | `q_b` is a function of the last 128 batches, so it is not computable from one batch — `flexmatch.md`'s argument for a per-class counter, and `comatch.md`'s for a bank. Three objectives consume it, so preparation must be idempotent within a step and independent of declaration order, which is `freematch.md` §5.1's sibling-read mechanism reused unchanged. It is deliberately *not* `softmatch`'s `ConfidenceGaussian`: that object's alignment target is `u(K)` and never touches the pseudo-label, where this one's target is a learned `p(y)` and the alignment *is* the label. |
 | `MixedTargetTreatmentNLL` — cross-entropy against a target mixed with the same `(π, λ')` as the features | fidelity-bearing, reversible | eq. (3), both terms | not required (reversible) | The target is a convex combination of a one-hot and a guessed distribution, taken across the pool; no existing objective can build it, and none may read `batch.t` at a mixed realisation (§3.2). |
 | `AnchoredTargetTreatmentNLL` — ungated soft cross-entropy against the aligned, sharpened anchor | fidelity-bearing, reversible | eq. (4), first term | not required (reversible) | `ConfidenceMaskedConsistencyLoss` gates and sharpens from raw logits; ReMixMatch neither gates nor sharpens from logits (§3.2, arithmetic 1–2). Setting UDA's threshold to accept everything would leave the wrong sharpening path in place. |
@@ -383,6 +389,17 @@ build for one card. Review accepted both load-bearing additions.
 2. **Is a column roll an acceptable stand-in for a rotation?** Review accepted
    it with the existing §6.2 guardrail: the substitution is withdrawn and the
    card amended if the pretext task does not beat chance.
+3. **Open — is `ViewSpec.source` worth its vocabulary?** Row 3 was not in the
+   reviewed table; implementation found that eq. (4)'s second term reads the
+   first strong copy and that no arrangement of the existing view vocabulary
+   expresses "the same draw another realisation already used". The alternatives
+   are a `framework-limitation` naming a new ledger key and a pretext task on
+   the raw row — which is a different task from the paper's — or duplicating
+   the strong transforms inside `pretext_x`, which resamples the mask and so
+   breaks the shared-draw property the pre-mixup term depends on. The addition
+   is small (one optional field, resolved by the compiler, refused for anything
+   but an ordinary student realisation) and its second consumer is named above.
+   **This is what the card stops on.**
 
 If implementation finds that `MixingPlan` cannot reach an objective without
 changing the generic `LossTerm`/`TrainContext` contract, that is framework
@@ -457,13 +474,20 @@ identical across all four arms.
 1. Alignment matches a direct tensor calculation of
    `Normalize(q × (1e-6 + p(y)) / (1e-6 + p̃(y)))`, and is the identity when
    `p̃(y) = p(y)`.
-2. `p̃(y)` is a 128-entry FIFO **window**, not an EMA: after 129 steps of a
-   constant stream it holds exactly the constant, and after 128 steps of a
-   changed stream no trace of the first stream remains.
+2. `p̃(y)` is a 128-entry FIFO **window**, not an EMA, and it is *pre-filled
+   with `1/K`* rather than grown from empty (`PMovingAverage` is a `[128, K]`
+   variable initialised to `1/K` and averaged over every slot). After 129 steps
+   of a constant stream it holds exactly the constant, and after 128 steps of a
+   changed stream no trace of the first stream remains; before that, the
+   assertion is against the pre-filled mean at each step, which is what catches
+   a window that reports the current batch's own mean at step one.
 3. `p̃(y)` is written with the *unaligned* anchor mean, and `p(y)` with the
    observed one-hot mean at decay `0.999`, after the current target reads their
    previous values. Reading the aligned target into either buffer, or folding
    the current batch in before alignment, is what the assertion catches.
+   `p(y)` is additionally asserted **bias-corrected** (deviation 10): it equals
+   the observed marginal from its first update, where the uncorrected EMA would
+   still be `0.5%` of the way there after five steps.
 4. Sharpening is `Normalize(q^{1/T})` on probabilities and is applied after
    alignment; at `T = 1` it is the identity, and it cannot increase entropy.
    `softmax(z/T)` on the same logits is asserted *different* once alignment has
@@ -487,7 +511,16 @@ identical across all four arms.
     prints `K`, `alpha`, the window capacity, the `p(y)` decay, the alignment
     epsilon, `redux` and the mixing rule.
 13. The state is fresh per stage execution, so a paired arm cannot inherit
-    another arm's window.
+    another arm's window, and a fresh state reports uniform for both marginals.
+14. A derived view (§5.1 row 3) must name an ordinary *student* realisation and
+    an existing draw; the compiler refuses a teacher, role, post-update or
+    out-of-range source rather than silently resolving it to the student batch.
+15. `PretextTransformNLL` declares `batch_coupled = True`: its labels are four
+    constant quarters of whatever arrives, so `ExternalBatches` — which would
+    let the caller move the quarter boundaries — is refused. `ColumnRoll` also
+    refuses a schema whose feature columns are not exchangeable in kind and
+    bounds, because rolling values across incompatible columns is not a
+    bijection of the input coordinates.
 
 **Tier 1 (one-seed smoke and mechanism arms).**
 
@@ -513,8 +546,10 @@ outcome and alignment guardrails set `reproduced` versus `deviating`;
 `no_mixup`, the pretext accuracy and the per-copy agreement are reported
 mechanism measurements whose signs were not chosen in advance.
 
-**What has run.** Focused Tier 0 invariants and a three-step Tier 1 wiring fit
-pass. The full §6.2 mechanism study and Tier 2 benchmark remain open.
+**What has run.** Tier 0 items 1-15 and a three-step Tier 1 wiring fit pass.
+The Tier 1 mechanism arms (§6.2 Tier 1 items 1, 3, 4, 5) and the Tier 2
+benchmark remain open; §6.1's arms are all reachable as `remixmatch()` keyword
+arguments and compile, but no runner drives them yet.
 
 ### 6.3 Result ledger
 
@@ -549,3 +584,9 @@ pass. The full §6.2 mechanism study and Tier 2 benchmark remain open.
 |---|---|---|
 | Card reviewed (status → `reviewed`) | Codex | 2026-09-06 |
 | Plan diffed against §3.2 and §4 | Codex | 2026-09-06 |
+| §5.1 row 3 (`ViewSpec.source`) reviewed | **open** | — |
+
+**Open on this card.** §5.1's third load-bearing addition was found during
+implementation and is not covered by the review above. Everything else in §5.1
+is; the code is written and its Tier 0 items pass, but the card is stopped on
+that row until it is accepted or the substitution is withdrawn.
