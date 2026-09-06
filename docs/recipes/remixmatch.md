@@ -4,10 +4,8 @@
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity; §6 is the
-> predeclared evidence contract. The implementation review accepted the first
-> two §5.1 vocabulary additions and the column-roll substitution. §5.1's third
-> load-bearing addition (`ViewSpec.source`) was found during implementation and
-> is **not yet reviewed** — see §8.
+> predeclared evidence contract. The implementation review accepted all three
+> §5.1 load-bearing vocabulary additions and the column-roll substitution.
 
 ---
 
@@ -362,15 +360,16 @@ the plan digest and the review surface.
 
 Seven additions. **Three are load-bearing vocabulary and carry named second
 consumers**; four are reversible objects of the kind `DESIGN.md` §11.2 says to
-build for one card. Review accepted the first two load-bearing additions; the
-third (row 3) was found during implementation and **is not yet reviewed**, so
-this card stops again on it (`FIDELITY.md` §1, `CLAUDE.md` hard rule 1).
+build for one card. Review accepted all three load-bearing additions. Row 3 was
+found during implementation rather than at drafting, so the card stopped again
+on it (`FIDELITY.md` §1, `CLAUDE.md` hard rule 1) and was accepted separately;
+§8 records both dates.
 
 | Added | Quadrant (§11.2) | Consumers today | Named second consumer | Why now |
 |---|---|---|---|---|
 | `MixSpec` + the mixed realisations it plans + `MixingPlan` (the per-step `(π, λ')` the compiler hands to objectives reading a mixed realisation) | fidelity-bearing, **load-bearing vocabulary** — it is the first declaration that produces a *synthetic row* (`BACKLOG.md` §15.1) | the two `MixedTargetTreatmentNLL` terms | **MixMatch** (`BACKLOG.md` §2.2), whose Algorithm 1 lines 12–13 build the identical `W = Shuffle(Concat(X̂, Û))` and mix against it | Eq. (3) charges the model at rows that are convex combinations of two augmented entries drawn from a pool spanning both populations *and* `K+1` view draws. No arrangement of views, realisations or row populations expresses that: a `ViewSpec` transform sees one batch under one draw, so a within-draw pool would mix labelled rows only with labelled rows, where in the source roughly nine of ten of a labelled row's partners are unlabelled. **Shape check against MixMatch**, in the two places it could go wrong: (i) MixMatch's pool has `K = 2` unlabelled members and *no* weak member, so members are an explicit ordered tuple of `(view, draw, rows)` rather than "all draws of a view"; (ii) MixMatch's guessed label is the *average* over its `K` copies rather than an anchor, so the plan carries only `(π, λ')` and the target itself stays the objective's business. |
 | `PRETEXT_GIVEN_X` port + `PretextHead` component + `PretextTransformNLL` + the `ColumnRoll` view transform | fidelity-bearing, **load-bearing vocabulary** (a port; `DESIGN.md` §2) | eq. (4)'s second term | **S4L** (`BACKLOG.md` §2.1), whose §3 "S4L-Rotation" attaches the same four-class self-supervised head to the same shared representation beside a supervised loss | Eq. (4)'s second term predicts a property of the *transform*, not of the row, so no existing port's value contract fits: `T_GIVEN_X` is `K` treatment probabilities and `RECONSTRUCTION` is `[B, D]` features. **Shape check against S4L**: S4L also runs its pretext head on *labelled* rows and reports an exemplar variant with a different class count, so the port carries `[B, R]` categorical logits at declared cardinality `R` rather than a hard-coded four, and the objective takes its row population like any other rather than assuming `t_missing`. |
-| `ViewSpec.source` — a view that names another realisation as its input, so the executor applies its transforms to that *exact cached draw* rather than resampling the upstream augmentation | fidelity-bearing, **load-bearing vocabulary** — it changes what a realisation's inputs may be (`DESIGN.md` §5) | `pretext_x` | **S4L** (`BACKLOG.md` §2.1), whose S4L-Rotation applies its pretext transform to the same augmented image the supervised term sees, so the second consumer needs the same "derive from a named draw, do not resample" shape | Eq. (4)'s second term transforms `Û₁`, not `u` (`remixmatch_no_cta.py:94`, `random_rotate(y_in[:, 1])`). A plain `ViewSpec` sees the raw batch, so `ColumnRoll` alone would roll an unaugmented row and the pretext head would learn a different task from the paper's. Composing the two transforms inside one `ViewSpec` instead would resample the strong mask independently of `strong_x @ draw=0`, which is the copy the pre-mixup term and the mixing pool both read — the shared draw is the point. **Not reviewed:** if review prefers it withdrawn, the pretext term moves to the raw row and deviation 4 grows a second clause saying so. |
+| `ViewSpec.source` — a view that names another realisation as its input, so the executor applies its transforms to that *exact cached draw* rather than resampling the upstream augmentation | fidelity-bearing, **load-bearing vocabulary** — it changes what a realisation's inputs may be (`DESIGN.md` §5) | `pretext_x` | **S4L** (`BACKLOG.md` §2.1), whose S4L-Rotation applies its pretext transform to the same augmented image the supervised term sees, so the second consumer needs the same "derive from a named draw, do not resample" shape | Eq. (4)'s second term transforms `Û₁`, not `u` (`remixmatch_no_cta.py:94`, `random_rotate(y_in[:, 1])`). A plain `ViewSpec` sees the raw batch, so `ColumnRoll` alone would roll an unaugmented row and the pretext head would learn a different task from the paper's. Composing the two transforms inside one `ViewSpec` instead would resample the strong mask independently of `strong_x @ draw=0`, which is the copy the pre-mixup term and the mixing pool both read — the shared draw is the point. Accepted at the second stop (§8); had review preferred it withdrawn, the pretext term would have moved to the raw row and deviation 4 grown a second clause saying so. |
 | `AnchoredLabelGuess` — stage-local objective state owning the 128-entry `p̃(y)` window, the `p(y)` EMA, and the once-per-step preparation of `q_b` | fidelity-bearing, reversible | all three treatment terms of eqs. (3)–(4), through the sibling read | not required (reversible) | `q_b` is a function of the last 128 batches, so it is not computable from one batch — `flexmatch.md`'s argument for a per-class counter, and `comatch.md`'s for a bank. Three objectives consume it, so preparation must be idempotent within a step and independent of declaration order, which is `freematch.md` §5.1's sibling-read mechanism reused unchanged. It is deliberately *not* `softmatch`'s `ConfidenceGaussian`: that object's alignment target is `u(K)` and never touches the pseudo-label, where this one's target is a learned `p(y)` and the alignment *is* the label. |
 | `MixedTargetTreatmentNLL` — cross-entropy against a target mixed with the same `(π, λ')` as the features | fidelity-bearing, reversible | eq. (3), both terms | not required (reversible) | The target is a convex combination of a one-hot and a guessed distribution, taken across the pool; no existing objective can build it, and none may read `batch.t` at a mixed realisation (§3.2). |
 | `AnchoredTargetTreatmentNLL` — ungated soft cross-entropy against the aligned, sharpened anchor | fidelity-bearing, reversible | eq. (4), first term | not required (reversible) | `ConfidenceMaskedConsistencyLoss` gates and sharpens from raw logits; ReMixMatch neither gates nor sharpens from logits (§3.2, arithmetic 1–2). Setting UDA's threshold to accept everything would leave the wrong sharpening path in place. |
@@ -389,17 +388,17 @@ this card stops again on it (`FIDELITY.md` §1, `CLAUDE.md` hard rule 1).
 2. **Is a column roll an acceptable stand-in for a rotation?** Review accepted
    it with the existing §6.2 guardrail: the substitution is withdrawn and the
    card amended if the pretext task does not beat chance.
-3. **Open — is `ViewSpec.source` worth its vocabulary?** Row 3 was not in the
+3. **Is `ViewSpec.source` worth its vocabulary?** Row 3 was not in the
    reviewed table; implementation found that eq. (4)'s second term reads the
    first strong copy and that no arrangement of the existing view vocabulary
    expresses "the same draw another realisation already used". The alternatives
-   are a `framework-limitation` naming a new ledger key and a pretext task on
+   were a `framework-limitation` naming a new ledger key and a pretext task on
    the raw row — which is a different task from the paper's — or duplicating
    the strong transforms inside `pretext_x`, which resamples the mask and so
    breaks the shared-draw property the pre-mixup term depends on. The addition
    is small (one optional field, resolved by the compiler, refused for anything
    but an ordinary student realisation) and its second consumer is named above.
-   **This is what the card stops on.**
+   Review accepted it on 2026-09-06.
 
 If implementation finds that `MixingPlan` cannot reach an objective without
 changing the generic `LossTerm`/`TrainContext` contract, that is framework
@@ -584,9 +583,10 @@ arguments and compile, but no runner drives them yet.
 |---|---|---|
 | Card reviewed (status → `reviewed`) | Codex | 2026-09-06 |
 | Plan diffed against §3.2 and §4 | Codex | 2026-09-06 |
-| §5.1 row 3 (`ViewSpec.source`) reviewed | **open** | — |
+| §5.1 row 3 (`ViewSpec.source`) reviewed | mattsq | 2026-09-06 |
 
-**Open on this card.** §5.1's third load-bearing addition was found during
-implementation and is not covered by the review above. Everything else in §5.1
-is; the code is written and its Tier 0 items pass, but the card is stopped on
-that row until it is accepted or the substitution is withdrawn.
+Nothing on this card is open to review. §5.1's third load-bearing addition was
+found during implementation, so it went back for the second stop `CLAUDE.md`
+hard rule 1 requires; the row above records its acceptance. What remains is
+evidence, not review: §6.2's Tier 1 mechanism arms and the Tier 2 study are
+still to run (§6.2, "What has run").

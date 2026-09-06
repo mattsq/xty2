@@ -92,8 +92,8 @@ crowded-recipe test once its ingredients exist independently.
 authoritative from here. Read its §5.1 before proposing any row-mixing or
 self-supervised-pretext work: it is the first card to propose the `BACKLOG.md`
 §15.1 synthetic-row vocabulary, and it names MixMatch (§2.2) and S4L (§2.1) as
-the second consumers whose shapes constrain the three load-bearing additions it
-asks review to approve — the third, derived views, is still open. It also
+the second consumers whose shapes constrain the three load-bearing additions
+review accepted — mixing pools, the pretext port, and derived views. It also
 declines the balanced-fixture trap
 `softmatch.md` §6.4 records, because distribution alignment is inert where the
 training marginal is already uniform.
