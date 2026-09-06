@@ -1,12 +1,13 @@
 """ReMixMatch's paired mechanism benchmark from card section 6.
 
 Four arms share the card's skewed K=4 fixture, initial parameters, batch
-stream, optimiser, schedules, and views.  The comparisons isolate the full
-method's unlabelled crowd, distribution alignment, and pooled MixUp.
+stream, optimiser settings for active components, and augmentation transforms.
+The comparisons test the ReMixMatch bundle, distribution alignment, and MixUp.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import torch
@@ -18,8 +19,10 @@ from xty2.core import (
     CompiledRun,
     GaussianOutcome,
     Port,
+    Program,
     Realisation,
     Recipe,
+    XTYBatch,
     compile,
 )
 from xty2.evaluation.benchmarks.common import (
@@ -33,7 +36,7 @@ from xty2.evaluation.benchmarks.common import (
     training_dataset,
 )
 from xty2.evaluation.reporting import BenchmarkResult, MetricResult, ReproductionSpec
-from xty2.objectives import AnchoredLabelGuess
+from xty2.objectives import AnchoredLabelGuess, ObservedTreatmentNLL
 from xty2.recipes import remixmatch
 from xty2.recipes.remixmatch import GUESS_OWNER
 from xty2.training import StageResult, run_stage
@@ -48,6 +51,28 @@ _TERMINAL_STEPS = 100
 _MIXED_LABELLED = "mixed_labelled_treatment_nll"
 _MIXED_UNLABELLED = "mixed_unlabelled_treatment_nll"
 _PRETEXT = "pretext_transform_nll"
+_MARGINAL_DIAGNOSTICS = (
+    "labelled_vs_true_training_marginal_L1",
+    "labelled_vs_true_unlabelled_marginal_L1",
+    "true_unlabelled_vs_training_marginal_L1",
+    "aligned_vs_labelled_marginal_L1",
+    "unaligned_vs_labelled_marginal_L1",
+    "alignment_labelled_marginal_L1_advantage",
+    "aligned_vs_true_unlabelled_marginal_L1",
+    "unaligned_vs_true_unlabelled_marginal_L1",
+    "alignment_true_unlabelled_marginal_L1_advantage",
+    *(
+        f"{name}_class_{level}"
+        for name in (
+            "estimated_labelled",
+            "true_training",
+            "true_unlabelled",
+            "aligned_window",
+            "unaligned_window",
+        )
+        for level in range(_CLASSES)
+    ),
+)
 
 
 def run(
@@ -66,8 +91,9 @@ def run(
                 "long-tailed train prior, balanced held-out prior), specified in 6.1"
             ),
             "variant": (
-                "four paired fits - full ReMixMatch; supervised-only "
-                "(lambda_U = lambda_U1 = lambda_r = 0); no distribution "
+                "four paired fits - full ReMixMatch; no ReMixMatch "
+                "(observed-treatment NLL on the first strong view, no mixing "
+                "or pseudo-targets, shared causal terms retained); no distribution "
                 "alignment (use_dm = false); no MixUp (alpha -> the identity "
                 "pool); all other mechanics paired"
             ),
@@ -105,13 +131,13 @@ def run(
         spec_digest=spec.digest,
         metrics=(
             MetricResult.upper_bound(
-                "full_vs_supervised_student_macro_NLL_ratio",
-                column(rows, "full_supervised_student_ratio"),
+                "full_vs_no_remixmatch_student_macro_NLL_ratio",
+                column(rows, "full_no_remixmatch_student_ratio"),
                 1.0,
             ),
             MetricResult.upper_bound(
-                "full_vs_supervised_ema_macro_NLL_ratio",
-                column(rows, "full_supervised_ema_ratio"),
+                "full_vs_no_remixmatch_ema_macro_NLL_ratio",
+                column(rows, "full_no_remixmatch_ema_ratio"),
                 1.0,
             ),
             MetricResult.upper_bound(
@@ -125,7 +151,7 @@ def run(
                 1.0,
             ),
             MetricResult.upper_bound(
-                "held_out_outcome_NLL_ratio",
+                "full_vs_no_remixmatch_outcome_NLL_ratio",
                 column(rows, "outcome_ratio"),
                 1.05,
             ),
@@ -168,12 +194,19 @@ def run(
                 "unaligned_model_marginal_L1",
                 column(rows, "unaligned_marginal_l1"),
             ),
+            *(
+                MetricResult.information(name, column(rows, name))
+                for name in _MARGINAL_DIAGNOSTICS
+            ),
         ),
         interpretation=(
             "This is the predeclared project-local ReMixMatch mechanism target, "
             "not a reproduction of the paper's image benchmarks. It asks whether "
-            "the unlabelled crowd and distribution alignment improve balanced "
-            "treatment classification on the card's deliberately skewed fixture."
+            "the ReMixMatch bundle and distribution alignment improve balanced "
+            "treatment classification on the card's deliberately skewed fixture. "
+            "The no_remixmatch arm retains the shared causal marginal term but "
+            "has no pooled MixUp or pseudo-targets. Marginal diagnostics are "
+            "informational; the original true-training-prior guardrail is unchanged."
         ),
     )
 
@@ -200,15 +233,10 @@ def _replicate(index: int) -> dict[str, float]:
     data = training_dataset(schema, train.batch)
 
     recipes: dict[str, Recipe] = {}
-    for arm in ("full", "supervised", "no_alignment", "no_mixup"):
+    for arm in ("full", "no_remixmatch", "no_alignment", "no_mixup"):
         torch.manual_seed(base + 6)
-        if arm == "supervised":
-            candidate = remixmatch(
-                schema,
-                unsupervised_weight=0.0,
-                premixup_weight=0.0,
-                pretext_weight=0.0,
-            )
+        if arm == "no_remixmatch":
+            candidate = _no_remixmatch(remixmatch(schema))
         elif arm == "no_alignment":
             candidate = remixmatch(schema, use_alignment=False)
         elif arm == "no_mixup":
@@ -232,22 +260,31 @@ def _replicate(index: int) -> dict[str, float]:
         for name, run in runs.items()
     }
     trained_rows = results["full"].checkpoint.trained_on_row_ids
+    full_population = results["full"].population
+    if full_population is None:
+        raise RuntimeError("remixmatch full arm has no training population")
     for arm, result in results.items():
         if not torch.equal(trained_rows, result.checkpoint.trained_on_row_ids):
             raise RuntimeError(f"remixmatch arm {arm!r} saw different training rows")
+        population = result.population
+        if population is None or not (
+            torch.equal(full_population.rows.row_id, population.rows.row_id)
+            and torch.equal(full_population.rows.t_observed, population.rows.t_observed)
+        ):
+            raise RuntimeError(f"remixmatch arm {arm!r} has a different label split")
 
     evaluated = {
         name: _evaluate(runs[name], result, test) for name, result in results.items()
     }
-    for arm in ("supervised", "no_alignment", "no_mixup"):
+    for arm in ("no_remixmatch", "no_alignment", "no_mixup"):
         for metric in ("student_macro_nll", "ema_macro_nll"):
             if evaluated[arm][metric] <= 0.0:
                 raise RuntimeError(f"{arm} produced a non-positive {metric}")
-    if evaluated["supervised"]["outcome_nll"] <= 0.0:
-        raise RuntimeError("supervised arm produced a non-positive outcome NLL")
+    if evaluated["no_remixmatch"]["outcome_nll"] <= 0.0:
+        raise RuntimeError("no_remixmatch arm produced a non-positive outcome NLL")
 
     full = evaluated["full"]
-    supervised = evaluated["supervised"]
+    baseline = evaluated["no_remixmatch"]
     no_alignment = evaluated["no_alignment"]
     no_mixup = evaluated["no_mixup"]
     aligned_l1 = _marginal_l1(results["full"], train.batch.t)
@@ -256,10 +293,10 @@ def _replicate(index: int) -> dict[str, float]:
         runs["full"], results["full"], rng_key=base + 20_000
     )
     return {
-        "full_supervised_student_ratio": full["student_macro_nll"]
-        / supervised["student_macro_nll"],
-        "full_supervised_ema_ratio": full["ema_macro_nll"]
-        / supervised["ema_macro_nll"],
+        "full_no_remixmatch_student_ratio": full["student_macro_nll"]
+        / baseline["student_macro_nll"],
+        "full_no_remixmatch_ema_ratio": full["ema_macro_nll"]
+        / baseline["ema_macro_nll"],
         "full_no_alignment_student_ratio": full["student_macro_nll"]
         / no_alignment["student_macro_nll"],
         "full_no_alignment_ema_ratio": full["ema_macro_nll"]
@@ -267,12 +304,62 @@ def _replicate(index: int) -> dict[str, float]:
         "full_no_mixup_student_ratio": full["student_macro_nll"]
         / no_mixup["student_macro_nll"],
         "full_no_mixup_ema_ratio": full["ema_macro_nll"] / no_mixup["ema_macro_nll"],
-        "outcome_ratio": full["outcome_nll"] / supervised["outcome_nll"],
+        "outcome_ratio": full["outcome_nll"] / baseline["outcome_nll"],
         "alignment_advantage": unaligned_l1 - aligned_l1,
         "aligned_marginal_l1": aligned_l1,
         "unaligned_marginal_l1": unaligned_l1,
+        **_marginal_diagnostics(results["full"], results["no_alignment"], train.batch),
         **mechanism,
     }
+
+
+def _no_remixmatch(recipe: Recipe) -> Recipe:
+    """Remove every ReMixMatch target path, retaining the shared causal stack.
+
+    Zeroing the three auxiliary weights is insufficient: labelled pooled
+    MixUp still reads unlabelled pseudo-targets. Supervise the same strong
+    labelled source directly and remove the mixing pool and anchor owner.
+    """
+    stage = recipe.program[0]
+    objectives = tuple(
+        replace(
+            item,
+            objective=ObservedTreatmentNLL(realisation=Realisation(view="strong_x")),
+        )
+        if item.name == _MIXED_LABELLED
+        else item
+        for item in stage.objectives
+        if item.name
+        in ("observed_outcome_nll", _MIXED_LABELLED, "missing_treatment_marginal_nll")
+    )
+    # Keep the component graph/initialisation paired, but the compiler rightly
+    # rejects an unused head in the trainable or weight-decay declarations.
+    trainable = tuple(name for name in stage.trainable if name != "pretext_head")
+    decay = stage.optimiser.weight_decay
+    if decay.components is None:
+        raise RuntimeError("remixmatch requires an explicit weight-decay scope")
+    optimiser = replace(
+        stage.optimiser,
+        weight_decay=replace(
+            decay,
+            components=tuple(name for name in decay.components if name in trainable),
+        ),
+    )
+    return replace(
+        recipe,
+        program=Program(
+            (
+                replace(
+                    stage,
+                    objectives=objectives,
+                    trainable=trainable,
+                    optimiser=optimiser,
+                ),
+            )
+        ),
+        views=(replace(recipe.view("strong_x"), draws=1),),
+        mixes=(),
+    )
 
 
 def _macro_mean(values: Tensor, labels: Tensor) -> float:
@@ -329,7 +416,7 @@ def _guess(result: StageResult) -> AnchoredLabelGuess:
 
 
 def _marginal_l1(result: StageResult, true_treatment: Tensor) -> float:
-    """Distance to the seed-locked population's realized treatment marginal.
+    """Original gate: unlabelled weak-anchor window versus all-training truth.
 
     ``_TRAIN_PRIOR`` generates clusters.  Treatment is subsequently sampled
     from the 0.98-on-cluster assignment distribution, so that tuple is neither
@@ -345,6 +432,63 @@ def _marginal_l1(result: StageResult, true_treatment: Tensor) -> float:
     return float((marginal - truth).abs().sum())
 
 
+def _marginal_diagnostics(
+    full: StageResult, no_alignment: StageResult, truth: XTYBatch
+) -> dict[str, float]:
+    """Read finite-label target error after fitting; never change training state."""
+    population = full.population
+    if population is None:
+        raise RuntimeError("marginal diagnostics need the training population")
+    missing_ids = population.rows.row_id[population.rows.t_missing]
+    missing = torch.isin(truth.row_id, missing_ids)
+    if not missing.any() or int(missing.sum()) != missing_ids.numel():
+        raise RuntimeError("marginal diagnostics could not match unlabelled row IDs")
+
+    def histogram(labels: Tensor) -> Tensor:
+        counts = torch.bincount(labels, minlength=_CLASSES).to(torch.float64).cpu()
+        return counts / counts.sum()
+
+    labelled = _guess(full).labelled_marginal
+    aligned = _guess(full).prediction_marginal
+    unaligned = _guess(no_alignment).prediction_marginal
+    true_training = histogram(truth.t)
+    true_unlabelled = histogram(truth.t[missing])
+
+    def l1(left: Tensor, right: Tensor) -> float:
+        return float((left - right).abs().sum())
+
+    values = {
+        "labelled_vs_true_training_marginal_L1": l1(labelled, true_training),
+        "labelled_vs_true_unlabelled_marginal_L1": l1(labelled, true_unlabelled),
+        "true_unlabelled_vs_training_marginal_L1": l1(true_unlabelled, true_training),
+        "aligned_vs_labelled_marginal_L1": l1(aligned, labelled),
+        "unaligned_vs_labelled_marginal_L1": l1(unaligned, labelled),
+        "alignment_labelled_marginal_L1_advantage": (
+            l1(unaligned, labelled) - l1(aligned, labelled)
+        ),
+        "aligned_vs_true_unlabelled_marginal_L1": l1(aligned, true_unlabelled),
+        "unaligned_vs_true_unlabelled_marginal_L1": l1(unaligned, true_unlabelled),
+        "alignment_true_unlabelled_marginal_L1_advantage": (
+            l1(unaligned, true_unlabelled) - l1(aligned, true_unlabelled)
+        ),
+    }
+    for name, marginal in (
+        ("estimated_labelled", labelled),
+        ("true_training", true_training),
+        ("true_unlabelled", true_unlabelled),
+        ("aligned_window", aligned),
+        ("unaligned_window", unaligned),
+    ):
+        values.update(
+            {
+                f"{name}_class_{level}": float(marginal[level])
+                for level in range(_CLASSES)
+            }
+        )
+    return values
+
+
+@torch.no_grad()
 def _terminal_mechanism(
     run: CompiledRun, result: StageResult, *, rng_key: int
 ) -> dict[str, float]:

@@ -4,9 +4,19 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
 import torch
 from torch.nn import functional as F
-from xty2.core import CategoricalTreatment, Port, Program, Recipe, compile
+from xty2.core import (
+    CategoricalTreatment,
+    CompiledRun,
+    Dataset,
+    Port,
+    Program,
+    Recipe,
+    compile,
+)
+from xty2.evaluation.benchmarks import remixmatch as benchmark
 from xty2.evaluation.benchmarks.common import (
     cluster_centres,
     cluster_population,
@@ -26,6 +36,92 @@ BASE_SEED = 90_000
 TRAIN_PRIOR = (0.55, 0.25, 0.13, 0.07)
 EFFECTS = (0.0, 1.0, 0.4, 1.6)
 CLASSES = 4
+
+
+@pytest.mark.parametrize("index", [0, 1])
+def test_corrected_benchmark_executes_all_arms_and_readonly_diagnostics(
+    index: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exercise real fits at three steps; this is not Tier 2 evidence."""
+    results: list[StageResult] = []
+
+    def short_fit(
+        run: CompiledRun, stage: str, data: Dataset, *, seed: int
+    ) -> StageResult:
+        recipe = run.recipe
+        short_stage = replace(recipe.program[0], steps=3)
+        short_run = compile(replace(recipe, program=Program((short_stage,))))
+        result = run_stage(short_run, stage, data, seed=seed)
+        results.append(result)
+        return result
+
+    monkeypatch.setattr(benchmark, "run_stage", short_fit)
+    monkeypatch.setattr(benchmark, "_TERMINAL_STEPS", 2)
+    metrics = benchmark._replicate(index)
+    assert all(torch.isfinite(torch.tensor(value)) for value in metrics.values())
+    assert len(results) == 4
+    assert not results[1].objective_states
+    assert {term.name for term in results[1].records[-1].terms} == {
+        "observed_outcome_nll",
+        "observed_treatment_nll",
+        "missing_treatment_marginal_nll",
+    }
+    for name in (
+        "estimated_labelled",
+        "true_training",
+        "true_unlabelled",
+        "aligned_window",
+        "unaligned_window",
+    ):
+        assert sum(
+            metrics[f"{name}_class_{level}"] for level in range(4)
+        ) == pytest.approx(1.0)
+
+    truth = cluster_population(
+        1024,
+        seed=BASE_SEED + 100 * index + 1,
+        row_offset=0,
+        classes=4,
+        prior=TRAIN_PRIOR,
+        effects=EFFECTS,
+    ).batch
+    full, unaligned = results[0], results[2]
+    guess = full.objective_states[GUESS_OWNER]
+    assert isinstance(guess, AnchoredLabelGuess)
+    previous = (
+        guess.last_prepared_step,
+        guess.prediction_marginal.clone(),
+        guess.labelled_marginal.clone(),
+    )
+    expected = benchmark._marginal_diagnostics(full, unaligned, truth)
+    # A shuffled truth table must select the same missing rows by ID.
+    permutation = torch.arange(truth.batch_size - 1, -1, -1)
+    shuffled = truth.replace(
+        x=truth.x[permutation],
+        t=truth.t[permutation],
+        y=truth.y[permutation],
+        row_id=truth.row_id[permutation],
+        t_observed=truth.t_observed[permutation],
+        y_observed=truth.y_observed[permutation],
+    )
+    assert benchmark._marginal_diagnostics(full, unaligned, shuffled) == expected
+    assert guess.last_prepared_step == previous[0]
+    assert torch.equal(guess.prediction_marginal, previous[1])
+    assert torch.equal(guess.labelled_marginal, previous[2])
+    population = full.population
+    assert population is not None
+    missing = torch.isin(
+        truth.row_id, population.rows.row_id[population.rows.t_missing]
+    )
+    true_missing = (
+        torch.bincount(truth.t[missing], minlength=4).double() / missing.sum()
+    )
+    for level in range(4):
+        assert expected[f"true_unlabelled_class_{level}"] == float(true_missing[level])
+    assert metrics["alignment_advantage"] == pytest.approx(
+        benchmark._marginal_l1(unaligned, truth.t)
+        - benchmark._marginal_l1(full, truth.t)
+    )
 
 
 def test_all_terms_are_finite_and_the_state_advances() -> None:

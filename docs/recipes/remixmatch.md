@@ -3,6 +3,10 @@
 **Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
+The status and §6.3 row describe the historical ten-seed run. The corrected
+`no_remixmatch` comparison in §6.4 has not yet had a full Tier 2 run; the old
+baseline ratios are not evidence for the amended protocol.
+
 > **Agent route:** read §2–§5 to implement or audit fidelity; §6 is the
 > predeclared evidence contract. The implementation review accepted all three
 > §5.1 load-bearing vocabulary additions and the column-roll substitution.
@@ -356,6 +360,12 @@ the plan digest and the review surface.
 | 9 | `judgement` | — | Set the label budget to 64 observed treatments under MCAR, drawn as a quota of 64 from a population of exactly 64, where the source samples 250 CIFAR-10 labels with replacement. | This is the shipped fixture's budget and it keeps the card comparable with `fixmatch`, `uda`, `softmatch` and `comatch`. Because the quota equals the population, the labelled half of every batch is the same 64 rows in a different order; the source's labelled loader instead re-draws from 250. | The labelled term sees no sampling noise: the observed one-hot mean is the *same vector* every step, so `p(y)` is a deterministic approach to the exact observed marginal rather than a noisy one. How fast it gets there is deviation 10's problem, not this one's. §6.2 reports it against the fixture's true prior rather than assuming the estimate is unbiased. |
 | 10 | `judgement` | — | Bias-correct the `p(y)` EMA: divide the running value by `1 - decay^n` after `n` updates, so the estimate is the observed marginal from the first step. The declared decay stays the source's `0.999`. | The reference initialises `p_data` to uniform and decays at `0.999` (`libml/layers.py:162-168`) over a **1,048,576-step** budget, where `0.999^1048576` is zero and the initialisation is invisible. Deviation 6 cuts the budget to 3,000 steps, at which `0.999^n` is `0.954` at the end of the ramp, `0.368` at step 1,000 and `0.050` at the last step — so an uncorrected estimator would spend the whole run reporting a `p(y)` pulled toward uniform, on a fixture whose training prior is deliberately long-tailed. That is the same re-basing argument deviation 6 makes for the ramp, and leaving it out would let the warm-up become the experiment. Correcting rather than re-scaling the decay keeps a non-`n/a` §4 key at the paper's value and agrees with the reference exactly in the budget-to-infinity limit. | Alignment gets the intended `p(y)` throughout, so §6's required reduction in `|p_model_marginal - p_true|_1` measures the mechanic and not the estimator's warm-up. Tier 0 asserts the corrected estimate against a direct calculation. |
 
+The fixed observed-label counts in deviation 9 have no within-run sampling
+variation, but their finite-sample error varies across seeds. Deviation 10
+removes EMA initialisation bias after the first update; the first target still
+uses the shared uniform initial state. Neither makes the 64-label histogram
+equal to the realised population marginal. §6.4 measures that remaining error.
+
 ### 5.1 Framework additions made for this card
 
 Seven additions. **Three are load-bearing vocabulary and carry named second
@@ -409,27 +419,35 @@ vocabulary beyond what this table declares: amend the card and stop again
 
 On 2026-09-06, commit `e33495893af2` produced a `deviating` result: This is the predeclared project-local ReMixMatch mechanism target, not a reproduction of the paper's image benchmarks. It asks whether the unlabelled crowd and distribution alignment improve balanced treatment classification on the card's deliberately skewed fixture. Within noise of the target: alignment_marginal_L1_advantage was 0.0103444 +/- 0.0305 against mean >= 0, by at least one stderr, inside its target by 0.0103 — less than its own standard error, so the run does not distinguish it from a miss.
 
+That run's `supervised_only` arm retained pseudo-targets through labelled
+pooled MixUp. Its two classification ratios and outcome ratio therefore use a
+different comparator from the corrected §6 protocol. The historical numbers
+remain in §6.3 unchanged. The full-versus-no-alignment comparison is unaffected
+by this baseline error, but its positive true-marginal advantage is only
+`0.34` standard errors from zero. This supports neither a reliable advantage
+nor a finding of harm. See §6.4 for the correction and the diagnostic plan.
+
 ## 6. Reproduction target
 
 Two required paired comparisons, on one fixture, with initial parameters,
 fixture, label budget, component graph, optimiser, schedules, declared views,
 seeds and batch stream held identical across arms. The first asks whether the
-crowd earns anything at all; the second is the paper's own table 3 ablation of
-the mechanic the paper is named after, run on a fixture built so that mechanic
-is not inert.
+ReMixMatch bundle improves on the shared causal stack; the second is the
+paper's own table 3 ablation of the mechanic the paper is named after, run on a
+fixture built so that mechanic is not inert.
 
 ```yaml
 reproduction:
   dataset: project-local seed-locked cluster XTY DGP (6 features, K=4, long-tailed train prior, balanced held-out prior), specified in 6.1
-  variant: four paired fits - full ReMixMatch; supervised-only (lambda_U = lambda_U1 = lambda_r = 0); no distribution alignment (use_dm = false); no MixUp (alpha -> the identity pool); all other mechanics paired
+  variant: four paired fits - full ReMixMatch; no ReMixMatch (observed-treatment NLL on the first strong view, no mixing or pseudo-targets, shared causal terms retained); no distribution alignment (use_dm = false); no MixUp (alpha -> the identity pool); all other mechanics paired
   split: 1024 train rows with exactly 64 observed treatments; 2048 held-out rows with every treatment observed and a balanced prior
   metric: held-out balanced macro treatment NLL for student and evaluation EMA; held-out outcome NLL guardrail; terminal L1 distance between the model's predicted marginal and the true training prior; pretext accuracy; per-copy target agreement; mixed-entry lambda' distribution
   published: none - no published number applies to this adaptation
   published_source: n/a
   tolerance: >
-    full/supervised-only held-out balanced macro treatment-NLL ratio < 1.0 in mean by at least one standard error, for the student and the evaluation EMA alike;
+    full/no-remixmatch held-out balanced macro treatment-NLL ratio < 1.0 in mean by at least one standard error, for the student and the evaluation EMA alike;
     full/no-alignment ratio < 1.0 in mean by at least one standard error on the same metric;
-    held-out outcome NLL <= 1.05x the supervised-only arm;
+    held-out outcome NLL <= 1.05x the no-remixmatch arm;
     terminal |p_model_marginal - p_true|_1 strictly smaller with alignment than without, in mean by at least one standard error;
     every mixed entry's lambda' in [0.5, 1.0];
     pretext accuracy above 0.25 chance by at least one standard error - a miss voids the deviation-4 substitution and triggers a card amendment rather than counting against the method;
@@ -454,7 +472,7 @@ outcome scaling on the complete training population.
 Two departures from `softmatch.md`'s use of the same fixture, both forced by
 the source and not by convenience: the quota is `B = 64` observed and `mu*B =
 64` missing (the source's `mu = 1`, not the family's 7), and the optimiser is
-Adam at `2e-3` with no schedule rather than SGD with cosine. Both are held
+AdamW at `2e-3` with no schedule rather than SGD with cosine (§4). Both are held
 identical across all four arms.
 
 **Arms.**
@@ -462,7 +480,7 @@ identical across all four arms.
 | Arm | What it is | Tier |
 |---|---|---|
 | `remixmatch` | this card at the §4 declarations | 2, ten seeds |
-| `supervised_only` | `lambda_U = lambda_U1 = lambda_r = 0`; the mixed labelled term, outcome NLL and marginal term remain | 2, ten seeds, paired |
+| `no_remixmatch` | Replace the mixed labelled term with `ObservedTreatmentNLL(realisation=strong_x @ draw=0)`, at weight `1.0`, reduction `mean`; remove the mixed unlabelled, pre-mixup and pretext terms and the mixing pool. Preserve outcome NLL and missing-treatment marginal NLL, including their weights, reductions and schedules. | 2, ten seeds, paired |
 | `no_alignment` | `use_dm = false`: Alg. line 7 skipped, line 8 unchanged — the paper's table 3 "No dist. alignment" row | 2, ten seeds, paired |
 | `no_mixup` | the pool is the identity (`λ' = 1` for every entry), so eq. (3) is charged at the augmented entries themselves | 2, ten seeds, paired, reported not gating |
 | `K = 1` | one strong copy; the paper's table 3 row costing `1.38` points | 1, one seed |
@@ -544,10 +562,13 @@ identical across all four arms.
    beats averaging under strong augmentation. It is Tier 1 because table 3 does
    not ablate it directly.
 
-**Tier 2.** Run the four ten-seed arms. Only the two required ratios plus the
-outcome and alignment guardrails set `reproduced` versus `deviating`;
-`no_mixup`, the pretext accuracy and the per-copy agreement are reported
-mechanism measurements whose signs were not chosen in advance.
+**Tier 2.** Run the four ten-seed arms. The two required ratios plus the
+outcome, alignment, pretext and MixUp-bound guardrails set `reproduced` versus
+`deviating` (nine required scalar metrics). `no_mixup` and per-copy agreement
+are informational. A pretext miss triggers the substitution review specified
+above; it is not evidence against the image method. The additional marginal
+diagnostics in §6.4 are informational and cannot substitute for the original
+true-marginal guardrail.
 
 **What has run.** Tier 0 items 1-15 and the three-step Tier 1 wiring fit pass.
 The one-seed Tier 1 mechanism study runs `K = 1`, `no_pretext`,
@@ -559,18 +580,105 @@ column-roll accuracy beats `0.25`, and the measured strong-view Bayes-label
 flip rate exceeds the weak-view rate. Those one-seed arm signs remain
 non-acceptance commentary, as predeclared.
 
-The Tier 2 runner executes all four ten-seed arms and records every required
-and informational measurement. The 2026-09-06 row passes the student and EMA
-full-versus-supervised ratios, both full-versus-no-alignment ratios, outcome,
-pretext, and MixUp bounds. It remains `deviating` because the positive
-true-marginal L1 advantage is smaller than its own standard error; under
-`FIDELITY.md` §3 that does not distinguish the guardrail from a miss.
+The original Tier 2 runner executed four ten-seed arms. The 2026-09-06 row
+passes eight numerical criteria under that original protocol. The two
+full-versus-`supervised_only` ratios and outcome ratio do not transfer to the
+corrected comparator. Both full-versus-no-alignment ratios, pretext, and MixUp
+bounds passed; the positive true-marginal L1 advantage is smaller than its own
+standard error. The amended protocol requires a fresh complete run, with its
+new spec digest, before any result can be claimed for `no_remixmatch`.
 
 ### 6.3 Result ledger
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
 | 2026-09-06 | `e33495893af2` | full_vs_supervised_student_macro_NLL_ratio<br>full_vs_supervised_ema_macro_NLL_ratio<br>full_vs_no_alignment_student_macro_NLL_ratio<br>full_vs_no_alignment_ema_macro_NLL_ratio<br>held_out_outcome_NLL_ratio<br>alignment_marginal_L1_advantage<br>terminal_pretext_accuracy<br>terminal_mixed_lambda_min<br>terminal_mixed_lambda_max | 0.874821 +/- 0.047<br>0.916661 +/- 0.0245<br>0.892287 +/- 0.0676<br>0.948779 +/- 0.0361<br>0.986844 +/- 0.00331<br>0.0103444 +/- 0.0305<br>0.361344 +/- 0.00366<br>0.500079 +/- 2.18e-05<br>0.999998 +/- 1.08e-06 | no |
+
+### 6.4 Benchmark correction and next experiment
+
+**Correction prepared on 2026-09-06 against PR #46 at `750e890f3e3e`.**
+The old `supervised_only` arm zeroed three loss weights but retained a
+nonzero mixed labelled loss. Nine of the ten equally sized pool members are
+unlabelled, so this arm still learns from aligned, sharpened pseudo-targets.
+Its historical ratios measure the addition of the three explicit losses to
+that partial method, not the whole ReMixMatch addition to the causal stack.
+
+The amended arm uses the existing `ObservedTreatmentNLL` on the same first
+strong draw as the full arm's labelled source. It has no mixing pool, anchor
+state or ReMixMatch auxiliary objectives. The outcome and missing-treatment
+likelihood terms, component graph, initialisation, quota, training steps,
+teacher and preprocessing remain paired. Only `strong_x @ draw=0` is needed
+by the baseline, so its view declaration has one draw with the same transforms
+and seed key; unused weak/pretext views are removed. The unused pretext head
+stays in the component graph to preserve initialisation, but is removed from
+the trainable and decay scopes. The active components' optimiser settings are
+unchanged. It is called
+`no_remixmatch`, not `supervised_only`: the retained causal marginal term still
+uses unlabelled rows. This correction introduces no recipe or framework
+mechanic. The three baseline-dependent metric names now contain
+`full_vs_no_remixmatch`; none of the numerical thresholds or ten seed indices
+changes. The YAML variant change produces a new protocol digest.
+
+**Meaning of the marginal guardrail.** The existing required metric is
+`L1(no_alignment_window, true_training) - L1(full_window, true_training)`.
+Each window averages the last 128 pre-update, unaligned student weak-anchor
+batch means on the missing-treatment quota. It is not a terminal identity-view
+prediction over the entire training population or an evaluation-EMA marginal.
+`true_training` is the realised treatment histogram of all 1,024 training
+rows, not the generating cluster tuple `(0.55, 0.25, 0.13, 0.07)`. That tuple
+first generates clusters; treatment is then sampled with assignment noise.
+The original calculation and one-standard-error threshold are retained.
+
+The runner additionally saves, per seed, the four class probabilities of the
+observed-label estimate, realised training truth, realised unlabelled truth,
+and both prediction windows. It reports the observed estimate's L1 error
+against both truths, the difference between the two true populations, and
+each window's L1 distance to the observed estimate and unlabelled truth, with
+paired advantages. These are all informational. Hidden labels are read only
+after fitting by the evaluator and selected by row ID. Bias correction removes
+EMA initialisation bias; it cannot remove sampling error in the fixed 64
+observed labels, however many optimisation steps are run. The diagnostics
+can suggest a target-estimation problem; they do not establish its cause.
+
+A fixture-only audit on 2026-09-06 regenerated all ten §6.1 training draws and
+applied `build_population(..., DATA_POLICY, seed=s_r+10000)` without fitting a
+model. The observed 64-label histogram's L1 error was `0.177539 +/- 0.0273243`
+against all-training truth and `0.189375 +/- 0.0291459` against unlabelled
+truth (mean and sample stderr). At `s_r=90000`, observed counts are
+`(28, 11, 18, 7)` versus population counts `(544, 252, 144, 84)`, giving an
+all-training L1 error of `0.3359375`. This establishes finite-label target
+error, not that it caused the inconclusive trained-model guardrail.
+
+**Next run.** Run the amended four-arm protocol once at the existing ten
+seed indices and 3,000 steps, save the complete JSON with commit and spec
+digest, and append a new ledger row. Do not relabel the historical row or
+widen its tolerance. From the committed correction, run:
+
+```bash
+python -m xty2.evaluation.runner --recipe remixmatch --workers 4 \
+  --output runs/tier2/remixmatch-corrected --write-ledger --check-card
+```
+
+Inspect paired per-seed marginal differences alongside
+the target-estimation errors, retaining every seed. If ambiguity remains,
+the next diagnostic experiment should compare estimated-prior alignment,
+oracle-prior alignment and no alignment, with all other settings paired. The
+oracle would replace only the alignment numerator after the shared uniform
+first-step initialisation with the realised **unlabelled treatment** prior.
+It must remain an explicitly oracle, evaluator-owned experiment, never a
+production default or replacement acceptance arm. Predeclare its fixed seed
+set, budget and contrasts before running. An oracle rescue would implicate
+prior estimation; no rescue would shift attention to the augmentation,
+sharpening and optimisation interaction, not prove any one cause. No oracle
+arm is implemented by this correction.
+
+**Merge interpretation.** `FIDELITY.md` allows a documented `deviating`
+result and does not make it an automatic merge veto. The unresolved guardrail
+blocks a `reproduced` claim. The invalid baseline blocks the original crowd
+claim and should be corrected before merging this benchmark. After correction,
+merging the implementation as explicitly deviating is a separate decision
+from accepting its efficacy claims. A fresh Tier 2 run is still needed for
+the amended comparator; passing targeted checks does not supply that evidence.
 
 ## 7. Unknowns
 
@@ -603,8 +711,10 @@ true-marginal L1 advantage is smaller than its own standard error; under
 | Tier 1 mechanism study run in full | Codex | 2026-09-06 |
 | Tier 2 run, ten replicates (status → `deviating`) | Codex | 2026-09-06 |
 
-Nothing on this card is open to review. §5.1's third load-bearing addition was
+The original method review is complete. §5.1's third load-bearing addition was
 found during implementation, so it went back for the second stop `CLAUDE.md`
 hard rule 1 requires; the row above records its acceptance. The complete
 evidence and the one guardrail that remains statistically unresolved are
-recorded in §6.2–§6.3.
+recorded in §6.2–§6.3. The benchmark correction in §6.4 is a new review surface;
+its full Tier 2 result is pending. The historical review rows above do not
+claim that the corrected comparison has already reproduced.
