@@ -316,7 +316,7 @@ def test_mixed_targets_never_read_a_hidden_treatment() -> None:
         rows = torch.nonzero(candidate.t_observed, as_tuple=False).flatten()
         ctx = replace(ctx, objective_states={GUESS_OWNER: _guess()})
         term = weighted.objective.compute(state, candidate, rows, ctx)
-        values.append(float(term.value))
+        values.append(float(term.value.detach()))
     assert values[0] == pytest.approx(values[1])
 
 
@@ -449,7 +449,7 @@ def test_the_guess_is_idempotent_and_order_independent_within_a_step() -> None:
             weighted = by_name[name]
             rows = resolve_rows(batch, weighted.objective.rows)
             term = weighted.objective.compute(state, batch, rows, ctx)
-            out[name] = float(term.value)
+            out[name] = float(term.value.detach())
         return [out[name] for name in names]
 
     forward = losses(names)
