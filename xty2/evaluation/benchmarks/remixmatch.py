@@ -57,7 +57,6 @@ _MARGINAL_DIAGNOSTICS = (
     "true_unlabelled_vs_training_marginal_L1",
     "aligned_vs_labelled_marginal_L1",
     "unaligned_vs_labelled_marginal_L1",
-    "alignment_labelled_marginal_L1_advantage",
     "aligned_vs_true_unlabelled_marginal_L1",
     "unaligned_vs_true_unlabelled_marginal_L1",
     "alignment_true_unlabelled_marginal_L1_advantage",
@@ -104,7 +103,9 @@ def run(
             "metric": (
                 "held-out balanced macro treatment NLL for student and evaluation "
                 "EMA; held-out outcome NLL guardrail; terminal L1 distance between "
-                "the model's predicted marginal and the true training prior; "
+                "the model's predicted marginal and p(y), the estimated labelled "
+                "marginal alignment targets, with the distances to the true "
+                "training and true unlabelled marginals reported beside it; "
                 "pretext accuracy; per-copy target agreement; mixed-entry lambda' "
                 "distribution"
             ),
@@ -156,8 +157,8 @@ def run(
                 1.05,
             ),
             MetricResult.lower_bound(
-                "alignment_marginal_L1_advantage",
-                column(rows, "alignment_advantage"),
+                "alignment_labelled_marginal_L1_advantage",
+                column(rows, "alignment_labelled_marginal_L1_advantage"),
                 0.0,
             ),
             MetricResult.lower_bound(
@@ -188,6 +189,10 @@ def run(
                 "terminal_mixed_lambda_mean", column(rows, "lambda_mean")
             ),
             MetricResult.information(
+                "alignment_marginal_L1_advantage",
+                column(rows, "alignment_advantage"),
+            ),
+            MetricResult.information(
                 "aligned_model_marginal_L1", column(rows, "aligned_marginal_l1")
             ),
             MetricResult.information(
@@ -205,8 +210,10 @@ def run(
             "the ReMixMatch bundle and distribution alignment improve balanced "
             "treatment classification on the card's deliberately skewed fixture. "
             "The no_remixmatch arm retains the shared causal marginal term but "
-            "has no pooled MixUp or pseudo-targets. Marginal diagnostics are "
-            "informational; the original true-training-prior guardrail is unchanged."
+            "has no pooled MixUp or pseudo-targets. The alignment guardrail is "
+            "the distance to p(y), the marginal alignment targets; the "
+            "true-training and true-unlabelled distances are reported beside it "
+            "and gate nothing (card deviation 9)."
         ),
     )
 
@@ -449,6 +456,12 @@ def _marginal_diagnostics(
         return counts / counts.sum()
 
     labelled = _guess(full).labelled_marginal
+    # Both arms estimate `p(y)` from the same 64 rows in the same order, so the
+    # promoted guardrail compares two windows against one shared vector rather
+    # than each against its own.  Only the full arm reads it; if they ever
+    # diverged the comparison would be between two different targets.
+    if not torch.equal(labelled, _guess(no_alignment).labelled_marginal):
+        raise RuntimeError("remixmatch paired arms estimated different p(y)")
     aligned = _guess(full).prediction_marginal
     unaligned = _guess(no_alignment).prediction_marginal
     true_training = histogram(truth.t)

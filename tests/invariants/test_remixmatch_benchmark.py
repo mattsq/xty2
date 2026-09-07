@@ -111,10 +111,10 @@ def test_baseline_labelled_loss_cannot_train_from_unlabelled_partners() -> None:
     assert values[0] == values[1]
 
 
-def test_new_protocol_preserves_the_noisy_true_marginal_gate(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Successful target diagnostics must not rescue the original guardrail."""
+def _replicate_rows(
+    *, labelled_advantage: float, truth_advantage: float
+) -> list[dict[str, float]]:
+    """Ten synthetic replicates with both marginal advantages dialled by hand."""
     rows = []
     for index in range(10):
         row = dict.fromkeys(benchmark._MARGINAL_DIAGNOSTICS, 0.0)
@@ -127,7 +127,8 @@ def test_new_protocol_preserves_the_noisy_true_marginal_gate(
                 "full_no_mixup_student_ratio": 0.9,
                 "full_no_mixup_ema_ratio": 0.9,
                 "outcome_ratio": 1.0,
-                "alignment_advantage": 0.0103444 + (-0.0915 if index < 5 else 0.0915),
+                "alignment_advantage": truth_advantage
+                + (-0.0915 if index < 5 else 0.0915),
                 "pretext_accuracy": 0.4,
                 "lambda_min": 0.5,
                 "lambda_max": 1.0,
@@ -136,12 +137,19 @@ def test_new_protocol_preserves_the_noisy_true_marginal_gate(
                 "lambda_mean": 0.8,
                 "aligned_marginal_l1": 0.1,
                 "unaligned_marginal_l1": 0.1,
-                "alignment_labelled_marginal_L1_advantage": 0.5,
+                "alignment_labelled_marginal_L1_advantage": labelled_advantage,
                 "alignment_true_unlabelled_marginal_L1_advantage": 0.5,
             }
         )
         rows.append(row)
+    return rows
 
+
+def _run_with(
+    rows: list[dict[str, float]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> object:
     def replicated(
         function: object, count: int, *, workers: int
     ) -> tuple[dict[str, float], ...]:
@@ -150,17 +158,78 @@ def test_new_protocol_preserves_the_noisy_true_marginal_gate(
 
     monkeypatch.setattr(benchmark, "parallel_replicates", replicated)
     spec = load_reproduction_spec(ROOT / "docs/recipes/remixmatch.md")
-    result = benchmark.run(spec, "test-only", "2026-09-06", 1, tmp_path)
+    return benchmark.run(spec, "test-only", "2026-09-07", 1, tmp_path)
+
+
+def test_the_gate_is_the_labelled_marginal_not_the_noisy_truth(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """§6's alignment guardrail scores `p~(y)` against `p(y)`, not against truth.
+
+    The rows below are the shape of the two `deviating` runs: an advantage
+    against the true training marginal that is smaller than its own spread,
+    beside a clean advantage against the estimated labelled marginal. Deviation
+    9 records why the first cannot be the acceptance reference at a 64-row label
+    budget — the estimator's own error exceeds the bar it would have to beat —
+    so the amended contract passes here where the retired one failed.
+    """
+    result = _run_with(
+        _replicate_rows(labelled_advantage=0.5, truth_advantage=0.0103444),
+        monkeypatch,
+        tmp_path,
+    )
     required = [m for m in result.metrics if m.relation != "info"]
     assert len(required) == 9
-    assert sum(m.passed is True for m in required) == 8
-    gate = result.metric("alignment_marginal_L1_advantage")
-    assert gate.mean == pytest.approx(0.0103444)
-    assert gate.stderr == pytest.approx(0.0305)
-    assert gate.passed is False
+    assert all(m.passed is True for m in required)
+    assert result.status == "reproduced"
+
+    gate = result.metric("alignment_labelled_marginal_L1_advantage")
+    assert gate.mean == pytest.approx(0.5)
+    assert gate.passed is True
+
+    # The retired reference is still measured, and still misses on these rows.
+    # It reports and gates nothing; a card that regated on it would fail here.
+    retired = result.metric("alignment_marginal_L1_advantage")
+    assert retired.mean == pytest.approx(0.0103444)
+    assert retired.stderr == pytest.approx(0.0305)
+    assert retired.passed is None
+
+
+def test_a_noisy_labelled_marginal_advantage_still_deviates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The amendment moved the reference, not the one-standard-error rule.
+
+    A passing truth-referenced advantage must not rescue a guardrail that
+    cannot separate itself from zero, which is the direction the retired gate
+    was protecting and the amendment keeps.
+    """
+    rows = _replicate_rows(labelled_advantage=0.0, truth_advantage=0.5)
+    for index, row in enumerate(rows):
+        row["alignment_labelled_marginal_L1_advantage"] = 0.0103444 + (
+            -0.0915 if index < 5 else 0.0915
+        )
+    result = _run_with(rows, monkeypatch, tmp_path)
+    assert result.metric("alignment_labelled_marginal_L1_advantage").passed is False
+    assert result.metric("alignment_marginal_L1_advantage").passed is None
     assert result.status == "deviating"
+
+
+def test_the_marginal_diagnostics_gate_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Everything §6.4 reports beside the guardrail stays informational."""
+    result = _run_with(
+        _replicate_rows(labelled_advantage=0.5, truth_advantage=0.0103444),
+        monkeypatch,
+        tmp_path,
+    )
     assert all(
         result.metric(name).passed is None for name in benchmark._MARGINAL_DIAGNOSTICS
+    )
+    assert (
+        "alignment_labelled_marginal_L1_advantage"
+        not in benchmark._MARGINAL_DIAGNOSTICS
     )
     assert "supervised" not in " ".join(m.name for m in result.metrics)
     assert result.metric("full_vs_no_remixmatch_outcome_NLL_ratio").passed is True

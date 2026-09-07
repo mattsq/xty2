@@ -122,6 +122,14 @@ def test_corrected_benchmark_executes_all_arms_and_readonly_diagnostics(
         benchmark._marginal_l1(unaligned, truth.t)
         - benchmark._marginal_l1(full, truth.t)
     )
+    # The §6 guardrail: the same paired difference taken against `p(y)`, the
+    # marginal alignment targets, which both arms estimate identically.
+    labelled = guess.labelled_marginal
+    assert torch.equal(labelled, benchmark._guess(unaligned).labelled_marginal)
+    assert expected["alignment_labelled_marginal_L1_advantage"] == pytest.approx(
+        float((benchmark._guess(unaligned).prediction_marginal - labelled).abs().sum())
+        - float((guess.prediction_marginal - labelled).abs().sum())
+    )
 
 
 def test_all_terms_are_finite_and_the_state_advances() -> None:
