@@ -9,7 +9,7 @@ import pytest
 import torch
 from xty2.core import TrainContext, compile
 from xty2.evaluation.benchmarks import remixmatch as benchmark
-from xty2.evaluation.reporting import load_reproduction_spec
+from xty2.evaluation.reporting import BenchmarkResult, load_reproduction_spec
 from xty2.recipes import remixmatch
 
 from tests.invariants.test_remixmatch import _batch, _schema
@@ -149,7 +149,7 @@ def _run_with(
     rows: list[dict[str, float]],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-) -> object:
+) -> BenchmarkResult:
     def replicated(
         function: object, count: int, *, workers: int
     ) -> tuple[dict[str, float], ...]:
