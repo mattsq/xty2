@@ -76,6 +76,10 @@ def benchmark_function(recipe: str) -> BenchmarkFunction:
         from xty2.evaluation.benchmarks.comatch import run
 
         return run
+    if recipe == "remixmatch":
+        from xty2.evaluation.benchmarks.remixmatch import run
+
+        return run
     if recipe == "variational_treatment":
         from xty2.evaluation.benchmarks.variational_treatment import run
 
@@ -102,6 +106,7 @@ RECIPES = (
     "softmatch",
     "simmatch",
     "comatch",
+    "remixmatch",
     "variational_treatment",
 )
 

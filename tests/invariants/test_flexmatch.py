@@ -452,8 +452,9 @@ def test_state_stays_opt_in_across_the_objective_package() -> None:
     The list has grown since, and that is the mechanism working rather than the
     claim weakening: `SelfAdaptiveThresholdTreatmentNLL` is the second consumer
     this card's §5.1 named in advance (`freematch.md` §5.1), and the CoMatch and
-    SimMatch memories are the third and fourth, and SoftMatch's confidence
-    Gaussian is the fifth, each reviewed on its own card. The
+    SimMatch memories are the third and fourth, SoftMatch's confidence
+    Gaussian is the fifth, and ReMixMatch's anchored guess is the sixth, each
+    reviewed on its own card. The
     property being asserted is that the set is *this* set — opting in is
     deliberate, and an objective that acquired state by accident would show up
     here.
@@ -465,12 +466,13 @@ def test_state_stays_opt_in_across_the_objective_package() -> None:
         and isinstance(getattr(objectives, name), StatefulObjective)
     )
     assert stateful == [
+        "AnchoredTargetTreatmentNLL",
         "CurriculumPseudoLabelTreatmentNLL",
         "MemorySmoothedPseudoLabelTreatmentNLL",
         "SelfAdaptiveThresholdTreatmentNLL",
         "SimilarityMatchingTreatmentNLL",
         "SoftWeightedTreatmentNLL",
-    ], "exactly the five declared objectives carry per-stage state"
+    ], "exactly the six declared objectives carry per-stage state"
     instantiated = {
         "ObservedOutcomeNLL": objectives.ObservedOutcomeNLL(),
         "ObservedTreatmentNLL": objectives.ObservedTreatmentNLL(),

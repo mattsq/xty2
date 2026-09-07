@@ -70,6 +70,12 @@ from xty2.objectives.pseudo_label import (
     PseudoLabelTreatmentNLL,
     Sharpening,
 )
+from xty2.objectives.remixmatch import (
+    AnchoredLabelGuess,
+    AnchoredTargetTreatmentNLL,
+    MixedTargetTreatmentNLL,
+    PretextTransformNLL,
+)
 from xty2.objectives.simmatch import (
     LabeledMemoryInstanceConsistency,
     LabeledSimilarityMemory,
@@ -113,6 +119,8 @@ __all__ = [
     "STOP_GRADIENTS",
     "UNUSED",
     "Alignment",
+    "AnchoredLabelGuess",
+    "AnchoredTargetTreatmentNLL",
     "CoMatchConfidenceThresholds",
     "ConfidenceGaussian",
     "ConfidenceMaskedConsistencyLoss",
@@ -136,9 +144,11 @@ __all__ = [
     "MetaFeedbackState",
     "MetaPseudoLabelScore",
     "MissingTreatmentMarginalNLL",
+    "MixedTargetTreatmentNLL",
     "ObservedOutcomeMSE",
     "ObservedOutcomeNLL",
     "ObservedTreatmentNLL",
+    "PretextTransformNLL",
     "PropagatedTargets",
     "PseudoLabelGraphContrastive",
     "PseudoLabelStopGrad",

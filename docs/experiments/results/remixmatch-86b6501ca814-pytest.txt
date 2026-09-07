@@ -1,0 +1,14 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- /workspace/scratch/218bc88301af/xty2/../venv/bin/python
+cachedir: .pytest_cache
+rootdir: /workspace/scratch/218bc88301af/xty2
+configfile: pyproject.toml
+collecting ... collected 1 item
+
+tests/benchmarks/test_remixmatch.py::test_remixmatch_matches_its_recorded_reproduction PASSED [100%]
+
+============================== slowest durations ===============================
+857.72s call     tests/benchmarks/test_remixmatch.py::test_remixmatch_matches_its_recorded_reproduction
+0.00s teardown tests/benchmarks/test_remixmatch.py::test_remixmatch_matches_its_recorded_reproduction
+0.00s setup    tests/benchmarks/test_remixmatch.py::test_remixmatch_matches_its_recorded_reproduction
+======================== 1 passed in 858.83s (0:14:18) =========================

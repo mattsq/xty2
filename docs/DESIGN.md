@@ -92,6 +92,7 @@ pairing empty by construction is a compile error.
 | `Y_GIVEN_XT` | outcome distribution satisfying §3.1 |
 | `JOINT_ENERGY` | one energy per candidate treatment `[B, K]` |
 | `RECONSTRUCTION` | feature reconstruction `[B, D]` |
+| `PRETEXT_GIVEN_X` | categorical self-supervised transform logits `[B, R]` |
 
 Ports are load-bearing vocabulary. Adding one requires a reviewed card that
 cannot express a source mechanic without it, plus a named second consumer used
@@ -246,6 +247,26 @@ requires it, as SCARF corruption does.
 Objectives refer to realisations, not transform implementations. A consistency
 term therefore declares the two views/parameter sets and its detached side. The
 executor computes and caches each required draw once per step.
+
+A view may name another realisation as its `source`. The executor materialises
+that source first and applies the derived view's transforms to the exact cached
+draw. This is used where a second task transforms an already-augmented input;
+it must not silently resample the upstream augmentation. A source must be an
+ordinary student realisation naming a declared draw: view batches are cached by
+`(view, draw)` because a view is a function of the batch and not of the
+parameters reading it, so a source carrying anything else would be accepted and
+then ignored. Like a port, this is load-bearing vocabulary — adding it required
+a reviewed card that cannot express its source mechanic without it plus a named
+second consumer (`remixmatch` §5.1).
+
+Cross-realisation MixUp is declared by `MixSpec`, not by a `ViewTransform`.
+Its ordered `MixMember(realisation, rows)` pool may span views, draws, and row
+populations. Each member has one synthetic output realisation. At a step the
+executor samples one pooled permutation and one dominant Beta coefficient per
+entry, mixes features, and attaches a stage-local `MixingPlan` containing the
+same permutation and coefficients. A mixed-target objective is the only
+consumer of that plan. Mixed realisations cannot feed pseudo-label actions or
+teacher passes and the plan has no artifact or evaluation surface.
 
 ## 6. Loss mixer
 
@@ -540,7 +561,7 @@ judgement explaining why the choice survives the capability.
 | `checkpointed-objective-state` | serialisation and restoration of stage-local objective state | a reviewed method must resume a history-dependent objective bit-identically | `simmatch` §5.7 |
 | `batch-row-repetition` | repeated `row_id` values inside one batch | a faithful protocol requires a quota larger than its source population | `fixmatch` §5.12; `doublematch` §5.7; `flexmatch` §5.8; `freematch` §5.9; `comatch` §5.4; `simmatch` §5.5; `softmatch` §5.8 |
 | `lr-schedules` | schedule families beyond the implemented types | a reviewed card names one | — |
-| `augmentation-vocabulary` | a shared augmentation vocabulary and adaptive controller | multiple useful operations and magnitudes exist | `fixmatch` §5.10; `doublematch` §5.6; `flexmatch` §5.7; `freematch` §5.8; `comatch` §5.3; `simmatch` §5.8; `softmatch` §5.7 |
+| `augmentation-vocabulary` | a shared augmentation vocabulary and adaptive controller | multiple useful operations and magnitudes exist | `fixmatch` §5.10; `doublematch` §5.6; `flexmatch` §5.7; `freematch` §5.8; `comatch` §5.3; `simmatch` §5.8; `softmatch` §5.7; `remixmatch` §5.3 |
 | `staged-gate` | confidence gating on staged pseudo-label writeback | a reviewed staged method names the gate | — |
 | `repeated-cross-fitting` | several fold assignments and aggregation | a reviewed estimator requires repeated splitting and a second consumer checks the artifact shape | `ssdml` §5.6 |
 | `early-stopping` | validation-metric stage termination | a reviewed protocol cannot be stated as a fixed step budget | — |

@@ -26,7 +26,7 @@ from abc import ABCMeta, abstractmethod
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import ClassVar, Final, Literal, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, cast
 
 from torch import Tensor, nn
 
@@ -35,6 +35,9 @@ from xty2.core.card_keys import card_hyperparameters
 from xty2.core.errors import GraphError, require_str
 from xty2.core.ports import Port, PortValue, port_spec
 from xty2.core.schema import Schema
+
+if TYPE_CHECKING:
+    from xty2.core.mixing import MixingPlan
 
 SOURCE_NAME: Final = "source"
 """The virtual source node's name in the plan. Not a component."""
@@ -148,13 +151,19 @@ class State:
     `requires` is incomplete, not that the executor should compute more.
     """
 
-    __slots__ = ("_by_realisation",)
+    __slots__ = ("_by_realisation", "_mixing_plans")
 
-    def __init__(self, values: Mapping[Realisation, Mapping[Port, PortValue]]) -> None:
+    def __init__(
+        self,
+        values: Mapping[Realisation, Mapping[Port, PortValue]],
+        *,
+        mixing_plans: Mapping[Realisation, object] | None = None,
+    ) -> None:
         self._by_realisation: dict[Realisation, Mapping[Port, PortValue]] = {
             realisation: MappingProxyType(dict(ports))
             for realisation, ports in values.items()
         }
+        self._mixing_plans = MappingProxyType(dict(mixing_plans or {}))
 
     def __getitem__(self, realisation: Realisation) -> Mapping[Port, PortValue]:
         try:
@@ -186,6 +195,16 @@ class State:
 
     def __repr__(self) -> str:
         return f"State({[str(r) for r in self.realisations]})"
+
+    def mixing_plan(self, realisation: Realisation) -> MixingPlan:
+        """Return the executor-owned MixUp plan for a synthetic realisation."""
+        try:
+            return cast("MixingPlan", self._mixing_plans[realisation])
+        except KeyError:
+            raise GraphError(
+                f"state holds no mixing plan for {realisation}; only outputs of "
+                "a declared MixSpec carry synthetic-row provenance"
+            ) from None
 
 
 class PortView(Mapping[Port, PortValue]):

@@ -25,7 +25,7 @@ from torch import Tensor
 from xty2.core.batch import XTYBatch
 from xty2.core.data import TrainingPopulation
 from xty2.core.errors import ViewError, require_str
-from xty2.core.graph import IDENTITY_VIEW
+from xty2.core.graph import IDENTITY_VIEW, Realisation
 from xty2.core.schema import Schema
 
 PreservedField = Literal[
@@ -186,6 +186,7 @@ class ViewSpec:
     preserves: frozenset[PreservedField]
     recompute_rules: tuple[RecomputeRule, ...] = ()
     draws: int = 1
+    source: Realisation | None = None
     _validation_cache: dict[int, tuple[Schema, _ViewValidation]] = field(
         default_factory=dict,
         init=False,
@@ -252,6 +253,8 @@ class ViewSpec:
                 f"view {name!r} declares draws={self.draws!r}; it must be an "
                 "int of at least 1 (one sample is the ordinary case)"
             )
+        if self.source is not None and not isinstance(self.source, Realisation):
+            raise ViewError("ViewSpec.source must be a Realisation or None")
         object.__setattr__(self, "transforms", transforms)
         object.__setattr__(self, "preserves", preserves)
         object.__setattr__(self, "recompute_rules", rules)

@@ -101,6 +101,7 @@ from xty2.core.loss import (
     treatment_distribution,
     validate_reduction,
 )
+from xty2.core.mixing import MixingPlan, MixMember, MixSpec
 from xty2.core.optimisation import (
     OPTIMISER_NAMES,
     ClipMode,
@@ -215,6 +216,9 @@ __all__ = [
     "MetaFeedback",
     "MetaGradientSpec",
     "MissingnessSpec",
+    "MixMember",
+    "MixSpec",
+    "MixingPlan",
     "Objective",
     "OptimiserName",
     "OptimiserSpec",

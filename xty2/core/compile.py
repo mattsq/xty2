@@ -51,6 +51,7 @@ from xty2.core.graph import (
     State,
 )
 from xty2.core.loss import Reduction
+from xty2.core.mixing import MixingPlan, MixSpec
 from xty2.core.optimisation import OptimiserSpec
 from xty2.core.ports import Port
 from xty2.core.recipe import (
@@ -65,7 +66,7 @@ from xty2.core.recipe import (
     Weighted,
     validate_rows,
 )
-from xty2.core.rows import Rows, populations_are_disjoint
+from xty2.core.rows import Rows, populations_are_disjoint, resolve_rows
 from xty2.core.schedules import Schedule
 from xty2.core.views import ViewSpec
 
@@ -232,6 +233,7 @@ class PlannedView:
     recomputes: tuple[str, ...]
     affected_columns: tuple[str, ...]
     draws: int = 1
+    source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -257,6 +259,10 @@ class ExecutionPlan:
     """The recipe's data policy as the plan prints it, empty where a recipe
     declares none because every stage takes the caller's batches."""
 
+    mixes: tuple[tuple[str, ...], ...] = ()
+    """One rendered block per declared `MixSpec`, empty where a recipe mixes
+    nothing."""
+
     def render(self) -> str:
         """The plan as text. Deterministic — the same recipe prints the same bytes."""
         lines: list[str] = [
@@ -269,6 +275,10 @@ class ExecutionPlan:
             lines += ["", "data", *(f"  {line}" for line in self.data)]
         if self.views:
             lines += ["", *self._view_lines()]
+        if self.mixes:
+            lines += ["", "mixes"]
+            for mix in self.mixes:
+                lines += [f"  {mix[0]}", *(f"    {line}" for line in mix[1:])]
         lines += ["", *self._component_lines(), "", *self._lineage_lines()]
         for stage in self.stages:
             lines += ["", *self._stage_lines(stage)]
@@ -309,6 +319,8 @@ class ExecutionPlan:
             # existed renders and hashes exactly as it did.
             draws = f" ({view.draws} independent draws)" if view.draws > 1 else ""
             lines.append(f"  {view.name}{draws}")
+            if view.source is not None:
+                lines.append(f"    source     {view.source}")
             lines.append("    preserves  " + (", ".join(view.preserves) or "nothing"))
             lines.append(
                 "    affects    "
@@ -549,11 +561,22 @@ class CompiledRun:
             )
 
         values = {}
+        mixing_plans: dict[Realisation, MixingPlan] = {}
         # Keyed by (view, draw): two draws of one view are two samples of the
         # same distribution and must not share a cache entry, while a student
         # and a teacher pass over the same draw still must.
         batches_by_view: dict[tuple[str, int], XTYBatch] = {(IDENTITY_VIEW, 0): batch}
-        for forward in compiled.passes:
+        ordinary = [
+            forward
+            for forward in compiled.passes
+            if forward.realisation.view not in {mix.name for mix in self.recipe.mixes}
+        ]
+        synthetic = [
+            forward
+            for forward in compiled.passes
+            if forward.realisation.view in {mix.name for mix in self.recipe.mixes}
+        ]
+        for forward in ordinary:
             graph = self.graph
             if forward.realisation.params == "teacher":
                 graph = cast(ComponentGraph, teacher_graph)
@@ -561,14 +584,14 @@ class CompiledRun:
             draw = forward.realisation.draw
             viewed = batches_by_view.get((view_name, draw))
             if viewed is None:
-                viewed = self.recipe.view(view_name).apply(
+                viewed = _view_batch(
+                    self.recipe,
+                    forward.realisation,
                     batch,
-                    self.recipe.schema,
+                    batches_by_view,
                     rng_key=rng_key,
-                    draw=draw,
                     population=population,
                 )
-                batches_by_view[view_name, draw] = viewed
             if forward.realisation.params == "teacher":
                 with torch.no_grad():
                     values[forward.realisation] = graph.evaluate(
@@ -578,7 +601,26 @@ class CompiledRun:
                 values[forward.realisation] = graph.evaluate(
                     viewed, schema=self.recipe.schema, only=forward.components
                 )
-        return State(values)
+        for mix in self.recipe.mixes:
+            relevant = [f for f in synthetic if f.realisation.view == mix.name]
+            if not relevant:
+                continue
+            mixed_batches, plans = _materialise_mix(
+                self.recipe,
+                mix,
+                batch,
+                batches_by_view,
+                rng_key=rng_key,
+                population=population,
+            )
+            mixing_plans.update(plans)
+            for forward in relevant:
+                values[forward.realisation] = self.graph.evaluate(
+                    mixed_batches[forward.realisation],
+                    schema=self.recipe.schema,
+                    only=forward.components,
+                )
+        return State(values, mixing_plans=mixing_plans)
 
 
 # ---------------------------------------------------------------------------
@@ -607,12 +649,14 @@ def compile(recipe: Recipe) -> CompiledRun:
     """
     graph = recipe.system
     views = _validated_views(recipe)
+    mixes = _validated_mixes(recipe, views)
     stages = tuple(
-        _compile_stage(recipe, stage, _realisable(views, stage), views)
+        _compile_stage(recipe, stage, _realisable(views, mixes, stage), views, mixes)
         for stage in recipe.program
     )
     _check_static_leakage(recipe, stages)
-    _check_declared_draws(views, stages)
+    _check_declared_draws(views, mixes, stages)
+    _check_declared_mixes(mixes, stages)
     _check_batch_coupling(recipe)
     plan = ExecutionPlan(
         recipe=recipe.name,
@@ -625,6 +669,7 @@ def compile(recipe: Recipe) -> CompiledRun:
         stages=stages,
         hyperparameters=_hyperparameters(recipe, stages),
         data=() if recipe.data is None else recipe.data.describe_lines(),
+        mixes=tuple(mix.describe() for mix in mixes),
     )
     return CompiledRun(
         recipe=recipe,
@@ -672,6 +717,7 @@ def _snapshot(
 
 def _validated_views(recipe: Recipe) -> tuple[ViewSpec, ...]:
     """Validate every declared view against the recipe's resolved schema."""
+    sources = {candidate.name: candidate for candidate in recipe.views}
     for view in recipe.views:
         try:
             view.validate(recipe.schema)
@@ -680,10 +726,189 @@ def _validated_views(recipe: Recipe) -> tuple[ViewSpec, ...]:
                 f"view {view.name!r} of recipe {recipe.name!r} is invalid for "
                 f"its schema: {error}"
             ) from error
+        if view.source is not None:
+            if view.source.view == view.name:
+                raise CompileError(f"view {view.name!r} cannot derive from itself")
+            if (
+                view.source.params != "student"
+                or view.source.role != "default"
+                or view.source.state != "pre_update"
+            ):
+                # `_view_batch` caches on `(view, draw)` alone, because a view
+                # is a function of the batch and not of the parameters reading
+                # it. Anything else in a source would be silently ignored.
+                raise CompileError(
+                    f"view {view.name!r} must derive from an ordinary student "
+                    f"realisation, got {view.source}"
+                )
+            available = sources.get(view.source.view)
+            if available is None or view.source.draw >= available.draws:
+                raise CompileError(
+                    f"view {view.name!r} derives from unavailable {view.source}"
+                )
+            seen = {view.name}
+            cursor = available
+            while cursor.source is not None:
+                if cursor.name in seen:
+                    raise CompileError(
+                        f"derived view cycle reaches {cursor.name!r} from {view.name!r}"
+                    )
+                seen.add(cursor.name)
+                next_view = sources.get(cursor.source.view)
+                if next_view is None:
+                    break
+                cursor = next_view
     return tuple(recipe.views)
 
 
-def _realisable(views: tuple[ViewSpec, ...], stage: Stage) -> frozenset[Realisation]:
+def _view_batch(
+    recipe: Recipe,
+    realisation: Realisation,
+    batch: XTYBatch,
+    cache: dict[tuple[str, int], XTYBatch],
+    *,
+    rng_key: int,
+    population: TrainingPopulation | None,
+) -> XTYBatch:
+    key = (realisation.view, realisation.draw)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    view = recipe.view(realisation.view)
+    source_batch = batch
+    if view.source is not None:
+        source_batch = _view_batch(
+            recipe,
+            view.source,
+            batch,
+            cache,
+            rng_key=rng_key,
+            population=population,
+        )
+    viewed = view.apply(
+        source_batch,
+        recipe.schema,
+        rng_key=rng_key,
+        draw=realisation.draw,
+        population=population,
+    )
+    cache[key] = viewed
+    return viewed
+
+
+def _validated_mixes(
+    recipe: Recipe, views: tuple[ViewSpec, ...]
+) -> tuple[MixSpec, ...]:
+    """Validate every source of a cross-realisation mixing pool."""
+    available = {IDENTITY_VIEW: 1, **{view.name: view.draws for view in views}}
+    for mix in recipe.mixes:
+        for index, member in enumerate(mix.members):
+            source = member.realisation
+            if (
+                source.params != "student"
+                or source.role != "default"
+                or source.state != "pre_update"
+            ):
+                raise CompileError(
+                    f"MixSpec {mix.name!r} member {index} must read an ordinary "
+                    f"student realisation, got {source}"
+                )
+            draws = available.get(source.view)
+            if draws is None or source.draw >= draws:
+                raise CompileError(
+                    f"MixSpec {mix.name!r} member {index} names unavailable {source}"
+                )
+    return tuple(recipe.mixes)
+
+
+def _materialise_mix(
+    recipe: Recipe,
+    mix: MixSpec,
+    batch: XTYBatch,
+    cache: dict[tuple[str, int], XTYBatch],
+    *,
+    rng_key: int,
+    population: TrainingPopulation | None,
+) -> tuple[dict[Realisation, XTYBatch], dict[Realisation, MixingPlan]]:
+    """Build mixed features and exact provenance for every pool member."""
+    source_batches: list[XTYBatch] = []
+    source_rows: list[torch.Tensor] = []
+    pool_features: list[torch.Tensor] = []
+    pool_rows: list[torch.Tensor] = []
+    pool_observed: list[torch.Tensor] = []
+    for member in mix.members:
+        key = (member.realisation.view, member.realisation.draw)
+        viewed = cache.get(key)
+        if viewed is None:
+            if member.realisation.view == IDENTITY_VIEW:
+                viewed = batch
+            else:
+                viewed = _view_batch(
+                    recipe,
+                    member.realisation,
+                    batch,
+                    cache,
+                    rng_key=rng_key,
+                    population=population,
+                )
+        rows = resolve_rows(batch, member.rows)
+        source_batches.append(viewed)
+        source_rows.append(rows)
+        pool_features.append(viewed.x.index_select(0, rows))
+        pool_rows.append(rows)
+        pool_observed.append(batch.t_observed.index_select(0, rows))
+    features = torch.cat(pool_features, dim=0)
+    row_ids = torch.cat(pool_rows, dim=0)
+    observed = torch.cat(pool_observed, dim=0)
+    size = features.shape[0]
+    if size == 0:
+        raise TrainingError(f"MixSpec {mix.name!r} resolved an empty pool")
+    generator = torch.Generator(device=batch.device)
+    digest = hashlib.sha256(f"{rng_key}:{mix.name}:mix".encode()).digest()
+    generator.manual_seed(int.from_bytes(digest[:8], "big") % (2**63 - 1))
+    permutation = torch.randperm(size, generator=generator, device=batch.device)
+    if mix.rule == "identity":
+        coefficient = torch.ones(size, dtype=batch.x.dtype, device=batch.device)
+        permutation = torch.arange(size, dtype=torch.long, device=batch.device)
+    else:
+        concentration = torch.full(
+            (size,), mix.alpha, dtype=batch.x.dtype, device=batch.device
+        )
+        left = torch._standard_gamma(concentration, generator=generator)
+        right = torch._standard_gamma(concentration, generator=generator)
+        raw = left / (left + right).clamp_min(torch.finfo(batch.x.dtype).tiny)
+        coefficient = torch.maximum(raw, 1.0 - raw)
+    partner_features = features.index_select(0, permutation)
+    partner_rows = row_ids.index_select(0, permutation)
+    partner_observed = observed.index_select(0, permutation)
+    outputs: dict[Realisation, XTYBatch] = {}
+    plans: dict[Realisation, MixingPlan] = {}
+    offset = 0
+    for index, (viewed, rows) in enumerate(
+        zip(source_batches, source_rows, strict=True)
+    ):
+        count = rows.numel()
+        segment = slice(offset, offset + count)
+        lam = coefficient[segment]
+        mixed_x = (
+            lam[:, None] * viewed.x.index_select(0, rows)
+            + (1.0 - lam[:, None]) * partner_features[segment]
+        )
+        output = mix.output(index)
+        outputs[output] = viewed.replace(x=viewed.x.index_copy(0, rows, mixed_x))
+        plans[output] = MixingPlan(
+            first_rows=rows,
+            partner_rows=partner_rows[segment],
+            partner_is_observed=partner_observed[segment],
+            coefficient=lam,
+        )
+        offset += count
+    return outputs, plans
+
+
+def _realisable(
+    views: tuple[ViewSpec, ...], mixes: tuple[MixSpec, ...], stage: Stage
+) -> frozenset[Realisation]:
     """The realisations this recipe can actually produce.
 
     Every declared view is available under student parameters. The same views
@@ -705,6 +930,9 @@ def _realisable(views: tuple[ViewSpec, ...], stage: Stage) -> frozenset[Realisat
         }
         return frozenset(realised)
     realised = {Realisation(view=view) for view in view_names}
+    realised.update(
+        mix.output(index) for mix in mixes for index in range(len(mix.members))
+    )
     if stage.teacher is not None:
         realised.update(Realisation(view=view, params="teacher") for view in view_names)
     return frozenset(realised)
@@ -715,6 +943,7 @@ def _compile_stage(
     stage: Stage,
     realisable: frozenset[Realisation],
     views: tuple[ViewSpec, ...],
+    mixes: tuple[MixSpec, ...],
 ) -> CompiledStage:
     graph = recipe.system
     where = f"stage {stage.name!r} of recipe {recipe.name!r}"
@@ -744,7 +973,9 @@ def _compile_stage(
         for port, realisation in _sorted_requirements(objective):
             _check_port(graph, port, objective, where)
             _check_realisation(realisation, realisable, objective, where)
-            _check_draw(realisation, views, f"objective {objective.name!r}", where)
+            _check_draw(
+                realisation, views, mixes, f"objective {objective.name!r}", where
+            )
             demanded.setdefault(realisation, set()).add(port)
         trained |= {port for port, _ in _check_detaches(objective, where)}
         objectives.append(
@@ -769,7 +1000,12 @@ def _compile_stage(
         )
         _check_action_port(graph, action.port, where)
         _check_action_realisation(action.realisation, realisable, where)
-        _check_draw(action.realisation, views, "pseudo-label action", where)
+        _check_draw(action.realisation, views, mixes, "pseudo-label action", where)
+        if action.realisation.view in {mix.name for mix in mixes}:
+            raise CompileError(
+                f"pseudo-label action in {where} may not read mixed realisation "
+                f"{action.realisation}; synthetic rows have no artifact identity"
+            )
         demanded.setdefault(action.realisation, set()).add(action.port)
         action_uses_y = graph.port_depends_on_raw_outcome(action.port)
     elif stage.action is not None:
@@ -1110,7 +1346,7 @@ def _check_realisation(
     objective: Objective,
     where: str,
 ) -> None:
-    if replace(realisation, draw=0) in realisable:
+    if realisation in realisable or replace(realisation, draw=0) in realisable:
         return
     raise CompileError(
         f"objective {objective.name!r} in {where} requires a port under "
@@ -1121,7 +1357,9 @@ def _check_realisation(
 
 
 def _check_declared_draws(
-    views: tuple[ViewSpec, ...], stages: tuple[CompiledStage, ...]
+    views: tuple[ViewSpec, ...],
+    mixes: tuple[MixSpec, ...],
+    stages: tuple[CompiledStage, ...],
 ) -> None:
     """Reject a view that declares more draws than the program realises.
 
@@ -1145,6 +1383,14 @@ def _check_declared_draws(
         for forward in stage.passes:
             name = forward.realisation.view
             realised[name] = max(realised.get(name, 0), forward.realisation.draw + 1)
+    for mix in mixes:
+        for member in mix.members:
+            source = member.realisation
+            realised[source.view] = max(realised.get(source.view, 0), source.draw + 1)
+    for view in views:
+        if view.source is not None:
+            source = view.source
+            realised[source.view] = max(realised.get(source.view, 0), source.draw + 1)
     for view in views:
         if view.draws == 1:
             continue
@@ -1159,8 +1405,27 @@ def _check_declared_draws(
         )
 
 
+def _check_declared_mixes(
+    mixes: tuple[MixSpec, ...], stages: tuple[CompiledStage, ...]
+) -> None:
+    used = {forward.realisation for stage in stages for forward in stage.passes}
+    for mix in mixes:
+        missing = [
+            index for index in range(len(mix.members)) if mix.output(index) not in used
+        ]
+        if missing:
+            raise CompileError(
+                f"MixSpec {mix.name!r} declares unused output member(s) {missing!r}; "
+                "a pool member advertised by the plan must feed an objective"
+            )
+
+
 def _check_draw(
-    realisation: Realisation, views: tuple[ViewSpec, ...], subject: str, where: str
+    realisation: Realisation,
+    views: tuple[ViewSpec, ...],
+    mixes: tuple[MixSpec, ...],
+    subject: str,
+    where: str,
 ) -> None:
     """Reject a draw the named view does not offer (`DESIGN.md` §2.1).
 
@@ -1169,6 +1434,13 @@ def _check_draw(
     would plan a third forward pass on an RNG stream no card named, which is
     the silent-extra-pass failure the realisation machinery exists to prevent.
     """
+    for mix in mixes:
+        if realisation.view == mix.name:
+            if realisation.params != "student" or realisation.draw >= len(mix.members):
+                raise CompileError(
+                    f"{subject} in {where} requires invalid mixed output {realisation}"
+                )
+            return
     if realisation.draw == 0:
         return
     declared = {view.name: view.draws for view in views}
@@ -1347,6 +1619,7 @@ def _plan_view(view: ViewSpec, recipe: Recipe) -> PlannedView:
         recomputes=view.recompute_descriptions(),
         affected_columns=tuple(sorted(view.affected_columns(recipe.schema))),
         draws=view.draws,
+        source=None if view.source is None else str(view.source),
     )
 
 

@@ -53,6 +53,7 @@ from xty2.core.loss import (
     TrainContext,
     validate_reduction,
 )
+from xty2.core.mixing import MixSpec
 from xty2.core.optimisation import OptimiserSpec
 from xty2.core.ports import Port
 from xty2.core.rows import (
@@ -1189,6 +1190,7 @@ class Recipe:
     card: str
     purpose: Purpose = "causal"
     views: tuple[ViewSpec, ...] = ()
+    mixes: tuple[MixSpec, ...] = ()
     data: DataSpec | None = None
 
     def __init__(
@@ -1200,6 +1202,7 @@ class Recipe:
         card: str,
         purpose: Purpose = "causal",
         views: Sequence[ViewSpec] = (),
+        mixes: Sequence[MixSpec] = (),
         data: DataSpec | None = None,
     ) -> None:
         object.__setattr__(self, "name", name)
@@ -1214,6 +1217,7 @@ class Recipe:
         object.__setattr__(self, "card", card)
         object.__setattr__(self, "purpose", purpose)
         object.__setattr__(self, "views", tuple(views))
+        object.__setattr__(self, "mixes", tuple(mixes))
         object.__setattr__(self, "data", data)
         self.__post_init__()
 
@@ -1245,7 +1249,29 @@ class Recipe:
                 f"recipe {self.name!r} has more than one view called "
                 f"{duplicate_views!r}; realisations resolve views by name"
             )
+        for mix in self.mixes:
+            if not isinstance(mix, MixSpec):
+                raise CompileError(
+                    f"recipe {self.name!r} holds {type(mix)} in `mixes`; "
+                    "expected MixSpec"
+                )
+        duplicate_mixes = _duplicates(tuple(mix.name for mix in self.mixes))
+        if duplicate_mixes:
+            raise CompileError(
+                f"recipe {self.name!r} has duplicate mixes {duplicate_mixes!r}"
+            )
+        collisions = sorted(
+            {view.name for view in self.views} & {mix.name for mix in self.mixes}
+        )
+        if collisions:
+            raise CompileError(f"view and mix names collide: {collisions!r}")
         self._check_data()
+
+    def mix(self, name: str) -> MixSpec:
+        for mix in self.mixes:
+            if mix.name == name:
+                return mix
+        raise CompileError(f"recipe {self.name!r} has no mix {name!r}")
 
     def _check_data(self) -> None:
         """A policy exactly where there is something for it to govern.
