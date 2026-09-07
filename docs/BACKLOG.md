@@ -88,7 +88,8 @@ ReMixMatch combines MixMatch with distribution alignment, augmentation
 anchoring, rotation, and adaptive strong augmentation. It is the preferred
 crowded-recipe test once its ingredients exist independently.
 
-`docs/recipes/remixmatch.md` is now an `implemented` card and is
+`docs/recipes/remixmatch.md` is implemented with a recorded `deviating`
+Tier 2 result (eight of nine criteria after the baseline correction) and is
 authoritative from here. Read its §5.1 before proposing any row-mixing or
 self-supervised-pretext work: it is the first card to propose the `BACKLOG.md`
 §15.1 synthetic-row vocabulary, and it names MixMatch (§2.2) and S4L (§2.1) as

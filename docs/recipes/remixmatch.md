@@ -3,9 +3,12 @@
 **Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
-The status and §6.3 row describe the historical ten-seed run. The corrected
-`no_remixmatch` comparison in §6.4 has not yet had a full Tier 2 run; the old
-baseline ratios are not evidence for the amended protocol.
+The corrected ten-seed run at `86b6501ca814` meets eight of nine required
+criteria. The true-training-marginal advantage remains inconclusive at
+`0.00994868 +/- 0.0303877`; status stays `deviating`. The historical row is
+preserved, but its baseline ratios are not evidence for the amended protocol.
+See the [corrected run report](../experiments/2026-09-07-remixmatch-correction.md)
+and [complete per-seed JSON](../experiments/results/remixmatch-86b6501ca814.json).
 
 > **Agent route:** read §2–§5 to implement or audit fidelity; §6 is the
 > predeclared evidence contract. The implementation review accepted all three
@@ -417,15 +420,7 @@ vocabulary beyond what this table declares: amend the card and stop again
 
 ### Tier 2 outcome
 
-On 2026-09-06, commit `e33495893af2` produced a `deviating` result: This is the predeclared project-local ReMixMatch mechanism target, not a reproduction of the paper's image benchmarks. It asks whether the unlabelled crowd and distribution alignment improve balanced treatment classification on the card's deliberately skewed fixture. Within noise of the target: alignment_marginal_L1_advantage was 0.0103444 +/- 0.0305 against mean >= 0, by at least one stderr, inside its target by 0.0103 — less than its own standard error, so the run does not distinguish it from a miss.
-
-That run's `supervised_only` arm retained pseudo-targets through labelled
-pooled MixUp. Its two classification ratios and outcome ratio therefore use a
-different comparator from the corrected §6 protocol. The historical numbers
-remain in §6.3 unchanged. The full-versus-no-alignment comparison is unaffected
-by this baseline error, but its positive true-marginal advantage is only
-`0.34` standard errors from zero. This supports neither a reliable advantage
-nor a finding of harm. See §6.4 for the correction and the diagnostic plan.
+On 2026-09-07, commit `86b6501ca814` produced a `deviating` result: This is the predeclared project-local ReMixMatch mechanism target, not a reproduction of the paper's image benchmarks. It asks whether the ReMixMatch bundle and distribution alignment improve balanced treatment classification on the card's deliberately skewed fixture. The no_remixmatch arm retains the shared causal marginal term but has no pooled MixUp or pseudo-targets. Marginal diagnostics are informational; the original true-training-prior guardrail is unchanged. Within noise of the target: alignment_marginal_L1_advantage was 0.00994868 +/- 0.0304 against mean >= 0, by at least one stderr, inside its target by 0.00995 — less than its own standard error, so the run does not distinguish it from a miss.
 
 ## 6. Reproduction target
 
@@ -585,14 +580,20 @@ passes eight numerical criteria under that original protocol. The two
 full-versus-`supervised_only` ratios and outcome ratio do not transfer to the
 corrected comparator. Both full-versus-no-alignment ratios, pretext, and MixUp
 bounds passed; the positive true-marginal L1 advantage is smaller than its own
-standard error. The amended protocol requires a fresh complete run, with its
-new spec digest, before any result can be claimed for `no_remixmatch`.
+standard error. The corrected protocol then ran in full on 2026-09-07 at
+`86b6501ca814`: all ten replicates, four arms and 3,000 steps per fit. It also
+meets eight of nine criteria. Student and EMA NLL ratios against
+`no_remixmatch` are `0.740890 +/- 0.0341087` and `0.842986 +/- 0.0203433`;
+the unchanged true-training-marginal guardrail is `0.00994868 +/- 0.0303877`.
+The Tier 2 pytest passed its recorded-status check; that is consistent with
+`deviating`, not a claim that all nine scientific criteria passed.
 
 ### 6.3 Result ledger
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
 | 2026-09-06 | `e33495893af2` | full_vs_supervised_student_macro_NLL_ratio<br>full_vs_supervised_ema_macro_NLL_ratio<br>full_vs_no_alignment_student_macro_NLL_ratio<br>full_vs_no_alignment_ema_macro_NLL_ratio<br>held_out_outcome_NLL_ratio<br>alignment_marginal_L1_advantage<br>terminal_pretext_accuracy<br>terminal_mixed_lambda_min<br>terminal_mixed_lambda_max | 0.874821 +/- 0.047<br>0.916661 +/- 0.0245<br>0.892287 +/- 0.0676<br>0.948779 +/- 0.0361<br>0.986844 +/- 0.00331<br>0.0103444 +/- 0.0305<br>0.361344 +/- 0.00366<br>0.500079 +/- 2.18e-05<br>0.999998 +/- 1.08e-06 | no |
+| 2026-09-07 | `86b6501ca814` | full_vs_no_remixmatch_student_macro_NLL_ratio<br>full_vs_no_remixmatch_ema_macro_NLL_ratio<br>full_vs_no_alignment_student_macro_NLL_ratio<br>full_vs_no_alignment_ema_macro_NLL_ratio<br>full_vs_no_remixmatch_outcome_NLL_ratio<br>alignment_marginal_L1_advantage<br>terminal_pretext_accuracy<br>terminal_mixed_lambda_min<br>terminal_mixed_lambda_max | 0.74089 +/- 0.0341<br>0.842986 +/- 0.0203<br>0.892839 +/- 0.0676<br>0.948971 +/- 0.036<br>0.985476 +/- 0.00324<br>0.00994868 +/- 0.0304<br>0.361203 +/- 0.00362<br>0.500079 +/- 2.18e-05<br>0.999998 +/- 1.08e-06 | no |
 
 ### 6.4 Benchmark correction and next experiment
 
@@ -649,19 +650,28 @@ truth (mean and sample stderr). At `s_r=90000`, observed counts are
 all-training L1 error of `0.3359375`. This establishes finite-label target
 error, not that it caused the inconclusive trained-model guardrail.
 
-**Next run.** Run the amended four-arm protocol once at the existing ten
-seed indices and 3,000 steps, save the complete JSON with commit and spec
-digest, and append a new ledger row. Do not relabel the historical row or
-widen its tolerance. From the committed correction, run:
+**Corrected run completed on 2026-09-07.** Commit `86b6501ca814` used the
+existing ten seed indices and 3,000 steps, with protocol digest
+`9ad7a145cf7acd5edda84771d1254b10db4a5b01cb6e7d5f09b04d70b4ed65e6`.
+The full JSON and a new ledger row are recorded; no historical result or
+threshold was changed. The actual Tier 2 pytest passed in 858.83 seconds,
+using eight workers. To repeat the study from that source commit, run:
 
 ```bash
-python -m xty2.evaluation.runner --recipe remixmatch --workers 4 \
-  --output runs/tier2/remixmatch-corrected --write-ledger --check-card
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 XTY2_TIER2_WORKERS=8 \
+  XTY2_WRITE_TIER2_LEDGERS=1 PYTHONUNBUFFERED=1 \
+  python -m pytest tests/benchmarks/test_remixmatch.py -vv --durations=0
 ```
 
-Inspect paired per-seed marginal differences alongside
-the target-estimation errors, retaining every seed. If ambiguity remains,
-the next diagnostic experiment should compare estimated-prior alignment,
+Alignment improves distance to the estimated labelled prior in all ten
+replicates, by `0.116629 +/- 0.0112861` on average. Its advantage against the
+true unlabelled prior is only `0.00288570 +/- 0.0295683`; five seeds improve
+and five worsen. The labelled estimate's L1 error against that truth is
+`0.189375 +/- 0.0291459`. These paired diagnostics support investigating prior
+estimation, but do not prove it caused the guardrail miss. Every seed is
+retained in the linked report and JSON.
+
+The next diagnostic experiment should compare estimated-prior alignment,
 oracle-prior alignment and no alignment, with all other settings paired. The
 oracle would replace only the alignment numerator after the shared uniform
 first-step initialisation with the realised **unlabelled treatment** prior.
@@ -674,11 +684,12 @@ arm is implemented by this correction.
 
 **Merge interpretation.** `FIDELITY.md` allows a documented `deviating`
 result and does not make it an automatic merge veto. The unresolved guardrail
-blocks a `reproduced` claim. The invalid baseline blocks the original crowd
-claim and should be corrected before merging this benchmark. After correction,
-merging the implementation as explicitly deviating is a separate decision
-from accepting its efficacy claims. A fresh Tier 2 run is still needed for
-the amended comparator; passing targeted checks does not supply that evidence.
+blocks a `reproduced` claim. The invalid historical baseline has now been
+corrected and rerun. The new comparison supports the bundle's classification benefit on this fixture.
+Merging the implementation as explicitly deviating remains a separate decision
+from accepting its true-marginal improvement claim. This unresolved guardrail
+alone need not block merge under that policy; it must remain visible, and
+neither the passing pytest nor the informational diagnostics override it.
 
 ## 7. Unknowns
 
@@ -710,11 +721,14 @@ the amended comparator; passing targeted checks does not supply that evidence.
 | §5.1 row 3 (`ViewSpec.source`) reviewed | mattsq | 2026-09-06 |
 | Tier 1 mechanism study run in full | Codex | 2026-09-06 |
 | Tier 2 run, ten replicates (status → `deviating`) | Codex | 2026-09-06 |
+| Corrected benchmark: 371 targeted checks, lint, format and typecheck | Codex | 2026-09-06 |
+| Corrected Tier 2 run, ten replicates at `86b6501ca814` (status remains `deviating`) | Codex | 2026-09-07 |
 
 The original method review is complete. §5.1's third load-bearing addition was
 found during implementation, so it went back for the second stop `CLAUDE.md`
 hard rule 1 requires; the row above records its acceptance. The complete
 evidence and the one guardrail that remains statistically unresolved are
 recorded in §6.2–§6.3. The benchmark correction in §6.4 is a new review surface;
-its full Tier 2 result is pending. The historical review rows above do not
-claim that the corrected comparison has already reproduced.
+its full Tier 2 result is now recorded, with eight of nine criteria met.
+The corrected source commit also passed remote lint, typecheck and Tier 0/1 CI.
+No row claims that the true-marginal improvement has reproduced.
