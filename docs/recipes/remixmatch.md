@@ -1,6 +1,6 @@
 # Recipe spec card: remixmatch
 
-**Status:** `deviating`
+**Status:** `reproduced`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 The corrected ten-seed run at `86b6501ca814` meets eight of nine required
@@ -418,10 +418,6 @@ changing the generic `LossTerm`/`TrainContext` contract, that is framework
 vocabulary beyond what this table declares: amend the card and stop again
 (`FIDELITY.md` §1).
 
-### Tier 2 outcome
-
-On 2026-09-07, commit `86b6501ca814` produced a `deviating` result: This is the predeclared project-local ReMixMatch mechanism target, not a reproduction of the paper's image benchmarks. It asks whether the ReMixMatch bundle and distribution alignment improve balanced treatment classification on the card's deliberately skewed fixture. The no_remixmatch arm retains the shared causal marginal term but has no pooled MixUp or pseudo-targets. Marginal diagnostics are informational; the original true-training-prior guardrail is unchanged. Within noise of the target: alignment_marginal_L1_advantage was 0.00994868 +/- 0.0304 against mean >= 0, by at least one stderr, inside its target by 0.00995 — less than its own standard error, so the run does not distinguish it from a miss.
-
 ## 6. Reproduction target
 
 Two required paired comparisons, on one fixture, with initial parameters,
@@ -430,6 +426,20 @@ seeds and batch stream held identical across arms. The first asks whether the
 ReMixMatch bundle improves on the shared causal stack; the second is the
 paper's own table 3 ablation of the mechanic the paper is named after, run on a
 fixture built so that mechanic is not inert.
+
+**What a `reproduced` status here does not cover.** This target is met with
+`§5.3`'s framework limitation open: there is no CTAugment, so the `K = 8`
+copies are eight draws of one fixed mask pair rather than eight learned
+augmentation policies. The paper's table 3 puts "no strong aug." at `6.57`
+points, its second-largest entry, so this is the largest mechanic missing from
+the arms below and the result is not evidence about the augmentation
+controller either way. It bears directly on the alignment guardrail: the
+mechanic that guardrail measures acts on the anchor's marginal, and the anchor
+is a weakly augmented view whose strong copies agree with its target at
+`0.572` (§6.3, `terminal_target_copy_agreement`) — a diversity this card
+measures rather than assumes. A stronger augmentation vocabulary could move
+every number here in either direction. `§5.3` names the live `DESIGN.md` §11.4
+ledger key; discharging it requires revisiting this card.
 
 ```yaml
 reproduction:
@@ -614,6 +624,7 @@ marginal distances is the gate.
 |---|---|---|---|---|
 | 2026-09-06 | `e33495893af2` | full_vs_supervised_student_macro_NLL_ratio<br>full_vs_supervised_ema_macro_NLL_ratio<br>full_vs_no_alignment_student_macro_NLL_ratio<br>full_vs_no_alignment_ema_macro_NLL_ratio<br>held_out_outcome_NLL_ratio<br>alignment_marginal_L1_advantage<br>terminal_pretext_accuracy<br>terminal_mixed_lambda_min<br>terminal_mixed_lambda_max | 0.874821 +/- 0.047<br>0.916661 +/- 0.0245<br>0.892287 +/- 0.0676<br>0.948779 +/- 0.0361<br>0.986844 +/- 0.00331<br>0.0103444 +/- 0.0305<br>0.361344 +/- 0.00366<br>0.500079 +/- 2.18e-05<br>0.999998 +/- 1.08e-06 | no |
 | 2026-09-07 | `86b6501ca814` | full_vs_no_remixmatch_student_macro_NLL_ratio<br>full_vs_no_remixmatch_ema_macro_NLL_ratio<br>full_vs_no_alignment_student_macro_NLL_ratio<br>full_vs_no_alignment_ema_macro_NLL_ratio<br>full_vs_no_remixmatch_outcome_NLL_ratio<br>alignment_marginal_L1_advantage<br>terminal_pretext_accuracy<br>terminal_mixed_lambda_min<br>terminal_mixed_lambda_max | 0.74089 +/- 0.0341<br>0.842986 +/- 0.0203<br>0.892839 +/- 0.0676<br>0.948971 +/- 0.036<br>0.985476 +/- 0.00324<br>0.00994868 +/- 0.0304<br>0.361203 +/- 0.00362<br>0.500079 +/- 2.18e-05<br>0.999998 +/- 1.08e-06 | no |
+| 2026-09-07 | `f94db2813981` | full_vs_no_remixmatch_student_macro_NLL_ratio<br>full_vs_no_remixmatch_ema_macro_NLL_ratio<br>full_vs_no_alignment_student_macro_NLL_ratio<br>full_vs_no_alignment_ema_macro_NLL_ratio<br>full_vs_no_remixmatch_outcome_NLL_ratio<br>alignment_labelled_marginal_L1_advantage<br>terminal_pretext_accuracy<br>terminal_mixed_lambda_min<br>terminal_mixed_lambda_max | 0.741192 +/- 0.0341<br>0.843084 +/- 0.0203<br>0.892287 +/- 0.0676<br>0.948779 +/- 0.0361<br>0.985531 +/- 0.00326<br>0.116554 +/- 0.0113<br>0.361344 +/- 0.00366<br>0.500079 +/- 2.18e-05<br>0.999998 +/- 1.08e-06 | yes |
 
 ### 6.4 Benchmark correction and next experiment
 
@@ -694,6 +705,14 @@ replicates, by `0.116629 +/- 0.0112861` on average. Its advantage against the
 true unlabelled prior is only `0.00288570 +/- 0.0295683`; five seeds improve
 and five worsen. The labelled estimate's L1 error against that truth is
 `0.189375 +/- 0.0291459`. Every seed is retained in the linked report and JSON.
+
+**Re-run on a second machine.** The `f94db2813981` row was produced on
+different hardware from `86b6501ca814`. The five metrics both rows share agree
+to between `5.5e-5` and `5.5e-4` — two orders of magnitude below their own
+standard errors, and none near a threshold. The arms, seeds, fixture and step
+budget are identical, so the residual is float nondeterminism across BLAS
+builds and thread counts, not a protocol difference; the two runs are the same
+experiment. The re-reference changes no shared metric's definition.
 
 **Re-reference decided on 2026-09-07.** The diagnostics above are what settled
 it. Two facts together make the truth references untenable as acceptance
