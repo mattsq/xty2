@@ -12,8 +12,8 @@ reference implementation makes load-bearing rather than stylistic
   the mechanism under study rather than a training convenience.
 * **The output layer carries no bias.** `nn.Linear(f[-2], f[-1], bias=False)`
   in the author code. A bias there is a per-dimension constant, which the
-  covariance and variance terms are both invariant to and the invariance term
-  is not, so it would be a parameter only one of the three losses can move.
+  covariance and variance terms are invariant to. The shared bias also cancels
+  in the difference between branches, so none of the three losses identifies it.
 * **The output is not normalised.** There is no unit hypersphere in VICReg —
   `v` and `c` are statistics of an unconstrained embedding, and row-`l2` would
   bound `Var(z^j)` above and hand the variance hinge a ceiling the paper does

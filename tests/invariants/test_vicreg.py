@@ -1075,7 +1075,26 @@ def test_every_card_value_the_plan_also_carries_agrees_with_it() -> None:
     assert checked >= 45
 
 
+def test_small_off_diagonal_energy_survives_large_diagonal_energy() -> None:
+    embedding = torch.tensor(
+        [
+            [10000.0, 10001.0],
+            [-10000.0, 9999.0],
+            [10000.0, -9999.0],
+            [-10000.0, -10001.0],
+        ],
+        requires_grad=True,
+    )
+    actual = _covariance()._off_diagonal(embedding)
+    oracle = _oracle_c(embedding.double(), correction=1)
+    assert float(actual.detach()) > 0.0
+    torch.testing.assert_close(actual.double(), oracle, rtol=1e-6, atol=0.0)
+    actual_gradient = torch.autograd.grad(actual, embedding, retain_graph=True)[0]
+    oracle_gradient = torch.autograd.grad(oracle, embedding)[0]
+    torch.testing.assert_close(actual_gradient, oracle_gradient, rtol=1e-5, atol=0.0)
+
+
 def test_the_card_records_the_implementation_it_now_has() -> None:
     text = CARD.read_text(encoding="utf-8")
-    assert "**Status:** `implemented`" in text
+    assert "**Status:** `smoke-passing`" in text
     assert "| Card reviewed (status → `reviewed`) | Claude |" in text

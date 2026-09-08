@@ -1,6 +1,6 @@
 # Recipe spec card: vicreg
 
-**Status:** `implemented`
+**Status:** `smoke-passing`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
@@ -8,8 +8,11 @@
 
 This card selects BACKLOG.md §5.1. The card was reviewed and the recipe is
 implemented: `xty2.recipes.vicreg`, with Tier 0 in
-`tests/invariants/test_vicreg.py`. Tier 1 and Tier 2 are not run yet, so the
-status stops at `implemented` (`FIDELITY.md` §1.1) and §6.1 stays empty.
+`tests/invariants/test_vicreg.py`. The three-seed, four-arm Tier 1 study in
+`tests/smoke/test_vicreg.py` passes. Tier 2 is not run, so the status stops at
+`smoke-passing` (`FIDELITY.md` §1.1) and §6.1 stays empty. The smoke results and
+review findings are recorded in
+[`../experiments/2026-09-08-vicreg-smoke.md`](../experiments/2026-09-08-vicreg-smoke.md).
 
 ## 1. Provenance
 
@@ -388,7 +391,7 @@ failure. Do not claim an interaction effect from these one-term ablations.
 
 Run Tier 2 from a committed implementation. Benchmark registration, complete
 results and the ledger/status update must land together under `CLAUDE.md`.
-The recipe now exists and Tier 0 passes; no benchmark module, no `RECIPES`
+The recipe now exists and Tier 0 and Tier 1 pass; no benchmark module, no `RECIPES`
 entry and no §6.1 row have been added, because none of the three may land
 without the other two.
 
@@ -409,6 +412,7 @@ without the other two.
 | Card reviewed (status → `reviewed`) | Claude | 2026-09-08 |
 | Plan diffed against §3.2 and §4 | Claude | 2026-09-08 |
 | Recipe implemented, Tier 0 passing (status → `implemented`) | Claude | 2026-09-08 |
+| Author-code audit, covariance stability fix, paired Tier 1 (status → `smoke-passing`) | Codex | 2026-09-08 |
 
 Five amendments were made at review, none of them to the method. §4 was
 rewritten into the two-level form the other cards use, because the draft's
@@ -435,7 +439,6 @@ tracks the realised treatment rate to within sampling error across the range
 (0.0334 vs 0.0333, 0.2471 vs 0.2472, 0.5001 vs 0.5053, 0.7532 vs 0.7495,
 0.9665 vs 0.9665).
 
-Two things this card does **not** yet claim: no Tier 1 fit has been run, so no
-wiring evidence on the three declared seeds exists; and §6's paired study has
-not been executed, so every threshold in §6.4 remains a predeclared target
-with no measurement behind it.
+Tier 1 now provides wiring evidence on all three declared seeds. The full
+Tier 2 study has not been executed, so every threshold in §6.4 remains a
+predeclared target with no full-budget measurement behind it.

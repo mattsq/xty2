@@ -326,8 +326,12 @@ class EmbeddingCovariance:
     def _off_diagonal(self, embedding: Tensor) -> Tensor:
         """`c(Z)`: squared off-diagonal covariance, averaged over `d`."""
         covariance = _covariance(embedding, self.correction)
-        squared = covariance.pow(2)
-        return (squared.sum() - squared.diagonal().sum()) / embedding.shape[-1]
+        # Select before summing, as the author does. Subtracting two large
+        # energies can erase a small but nonzero off-diagonal penalty in fp32.
+        off_diagonal = ~torch.eye(
+            covariance.shape[0], dtype=torch.bool, device=covariance.device
+        )
+        return covariance.masked_select(off_diagonal).pow(2).sum() / embedding.shape[-1]
 
 
 # ---------------------------------------------------------------------------

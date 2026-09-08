@@ -1,0 +1,89 @@
+{
+  "reviewed_head": "ffa0b247278dfbf63b5334ccc87529f227d3edb4",
+  "tier": 1,
+  "pretrain_steps": 200,
+  "joint_fit_steps": 300,
+  "replicates": [
+    {
+      "arms": {
+        "full": {
+          "outcome_nll": 1.1555371284484863,
+          "redundancy": 41.7378386259079,
+          "spread": 0.2690048711374402,
+          "treatment_nll": 0.551175057888031
+        },
+        "no_covariance": {
+          "outcome_nll": 1.1418070793151855,
+          "redundancy": 502.87040519714355,
+          "spread": 0.32047756016254425,
+          "treatment_nll": 0.6155647039413452
+        },
+        "no_pretrain": {
+          "outcome_nll": 1.1972585916519165,
+          "treatment_nll": 0.5506685376167297
+        },
+        "no_variance": {
+          "outcome_nll": 1.1844384670257568,
+          "redundancy": 130.51893591880798,
+          "spread": 0.01002032367978245,
+          "treatment_nll": 0.4512234032154083
+        }
+      },
+      "base": 191
+    },
+    {
+      "arms": {
+        "full": {
+          "outcome_nll": 1.099565863609314,
+          "redundancy": 36.859358072280884,
+          "spread": 0.26444920618087053,
+          "treatment_nll": 1.3185160160064697
+        },
+        "no_covariance": {
+          "outcome_nll": 1.1078908443450928,
+          "redundancy": 508.394003868103,
+          "spread": 0.44887956883758307,
+          "treatment_nll": 1.1604957580566406
+        },
+        "no_pretrain": {
+          "outcome_nll": 1.1210981607437134,
+          "treatment_nll": 1.3006830215454102
+        },
+        "no_variance": {
+          "outcome_nll": 1.1332193613052368,
+          "redundancy": 136.0567729473114,
+          "spread": 0.01000206233584322,
+          "treatment_nll": 1.0194005966186523
+        }
+      },
+      "base": 293
+    },
+    {
+      "arms": {
+        "full": {
+          "outcome_nll": 1.1231069564819336,
+          "redundancy": 40.13459539413452,
+          "spread": 0.273517363704741,
+          "treatment_nll": 1.3739608526229858
+        },
+        "no_covariance": {
+          "outcome_nll": 1.1686489582061768,
+          "redundancy": 509.9545736312866,
+          "spread": 0.48296494502574205,
+          "treatment_nll": 1.1028110980987549
+        },
+        "no_pretrain": {
+          "outcome_nll": 1.2762815952301025,
+          "treatment_nll": 1.104593276977539
+        },
+        "no_variance": {
+          "outcome_nll": 1.3010408878326416,
+          "redundancy": 111.94866490364075,
+          "spread": 0.010016489279223606,
+          "treatment_nll": 0.5856981873512268
+        }
+      },
+      "base": 397
+    }
+  ]
+}

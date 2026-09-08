@@ -293,9 +293,9 @@ sees, and do not imply that likelihood alone identifies an MNAR problem.
 ### 5.1 Contrastive, clustering and redundancy-reduction methods
 
 VICReg is implemented against [`recipes/vicreg.md`](recipes/vicreg.md): the card
-is reviewed and Tier 0 passes, so its status is `implemented`. Its predeclared
-paired variance/covariance ablations and downstream outcome guardrail have not
-been run — Tier 1 and the §6 study are the next packets — and its pinned
+is reviewed and Tier 0 and the three-seed, four-arm Tier 1 pass, so its status
+is `smoke-passing`. The full-budget paired mechanism study and downstream
+outcome guardrail remain unrun — the §6 Tier 2 study is the next packet — and its pinned
 author-code loss reductions are explicit in card §3.1.
 
 Candidates: CoMatch, PAWS, SimMatch, VICReg, Barlow Twins, BYOL, and SimSiam.
