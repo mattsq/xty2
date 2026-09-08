@@ -293,10 +293,15 @@ sees, and do not imply that likelihood alone identifies an MNAR problem.
 ### 5.1 Contrastive, clustering and redundancy-reduction methods
 
 VICReg is implemented against [`recipes/vicreg.md`](recipes/vicreg.md): the card
-is reviewed and Tier 0 and the three-seed, four-arm Tier 1 pass, so its status
-is `smoke-passing`. The full-budget paired mechanism study and downstream
-outcome guardrail remain unrun — the §6 Tier 2 study is the next packet — and its pinned
-author-code loss reductions are explicit in card §3.1.
+is reviewed, Tier 0 and the three-seed Tier 1 pass, and the ten-seed Tier 2
+study has run, so its status is `deviating`. Both attribution targets and the
+downstream outcome guardrail hold; full-arm embedding spread misses §6.4's
+`>= 0.5`. The audit in
+[`experiments/2026-09-08-vicreg-tier2.md`](experiments/2026-09-08-vicreg-tier2.md)
+attributes the shortfall to deviation 3's corruption strength acting through the
+invariance term rather than to the budget, the optimiser or the covariance term,
+so the next packet is a review of that target and that view — not more compute.
+Its pinned author-code loss reductions are explicit in card §3.1.
 
 Candidates: CoMatch, PAWS, SimMatch, VICReg, Barlow Twins, BYOL, and SimSiam.
 Before tuning, measure representation norm, collapse concentration, and whether

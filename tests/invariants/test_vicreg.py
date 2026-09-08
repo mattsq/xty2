@@ -1095,6 +1095,19 @@ def test_small_off_diagonal_energy_survives_large_diagonal_energy() -> None:
 
 
 def test_the_card_records_the_implementation_it_now_has() -> None:
+    """§6.1 carries a recorded ten-seed run, so the status is its outcome.
+
+    `deviating` rather than `reproduced` because one of §6.4's four targets —
+    full-arm embedding spread against `>= 0.5` — is missed on every replicate,
+    and `FIDELITY.md` §3 forbids retuning a tolerance after seeing a result.
+    The written §5 explanation the status requires is asserted here too, since
+    `assert_result_matches_card` only sees it on a nightly.
+    """
     text = CARD.read_text(encoding="utf-8")
-    assert "**Status:** `smoke-passing`" in text
+    assert "**Status:** `deviating`" in text
+    assert "### Tier 2 outcome" in text
+    assert "full_arm_embedding_spread" in text
     assert "| Card reviewed (status → `reviewed`) | Claude |" in text
+    assert "| [`vicreg.md`](recipes/vicreg.md) | `vicreg` |" in (
+        CARD.parents[1] / "RECIPES.md"
+    ).read_text(encoding="utf-8")
