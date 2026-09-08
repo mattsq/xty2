@@ -117,6 +117,17 @@ _VIEW_SEED_BASE = 20_000
 
 _ARMS = ("full", "no_variance", "no_covariance", "no_pretrain")
 _PRETRAINED = ("full", "no_variance", "no_covariance")
+_DECORRELATION_ARMS = ("full", "no_covariance")
+"""The two arms §6.4's redundancy ratio is defined on.
+
+`r = sum_offdiag C_ij^2 / sum_j C_jj^2` is the third target's statistic, and the
+card requires a zero denominator to be rejected "for full/no-covariance arms"
+rather than for all three. That scope is the point: the no-variance arm is the
+collapse control, and at the full budget its embedding really does reach zero
+variance in float32, so demanding a denominator of it would stop the study on
+the very outcome it is there to demonstrate.
+"""
+
 _COLLAPSED_STD = 0.1
 """Card §6.4's "fraction of dimensions with standard deviation below 0.1"."""
 
@@ -149,12 +160,18 @@ _ARM_DIAGNOSTICS = (
 )
 _EMBEDDING_DIAGNOSTICS = (
     "embedding_spread",
-    "embedding_redundancy",
+    "off_diagonal_covariance_energy",
+    "diagonal_covariance_energy",
     "collapsed_dimension_fraction",
-    "covariance_top_eigenvalue_share",
     "encoder_parameter_norm",
     "expander_parameter_norm",
 )
+_DECORRELATION_DIAGNOSTICS = (
+    "embedding_redundancy",
+    "covariance_top_eigenvalue_share",
+)
+"""Reported only for `_DECORRELATION_ARMS`: both are ratios whose denominator a
+collapsed embedding drives to zero."""
 
 
 def run(
@@ -238,6 +255,11 @@ def run(
             (f"{arm}_arm_{name}", f"{arm}_{name}", False)
             for arm in _PRETRAINED
             for name in _EMBEDDING_DIAGNOSTICS
+        ),
+        *(
+            (f"{arm}_arm_{name}", f"{arm}_{name}", False)
+            for arm in _DECORRELATION_ARMS
+            for name in _DECORRELATION_DIAGNOSTICS
         ),
         *(
             (name, name, name.endswith("cost"))
@@ -696,6 +718,8 @@ def _embeddings(
         state["_components." + name].copy_(value)
     run.graph.eval()
     spread: list[float] = []
+    off_diagonal_energy: list[float] = []
+    diagonal_energy: list[float] = []
     redundancy: list[float] = []
     collapsed: list[float] = []
     concentration: list[float] = []
@@ -712,35 +736,54 @@ def _embeddings(
             centred = embedding - embedding.mean(dim=0)
             covariance = centred.T @ centred / (embedding.shape[0] - SAMPLE_CORRECTION)
             diagonal = float(covariance.diagonal().square().sum())
-            if not diagonal > 0.0:
-                # Card §6.4: "reject a zero denominator ... rather than
-                # awarding a collapsed embedding perfect decorrelation". It is
-                # required of the full and no-covariance arms and applied to
-                # all three, because a ratio with no denominator is not a
-                # number the no-variance arm's row should carry either.
-                raise RuntimeError(
-                    f"vicreg arm {arm!r} produced an embedding with zero "
-                    "diagonal covariance energy, so §6.4's redundancy ratio has "
-                    "no denominator"
-                )
             off_diagonal = float(
                 covariance.square()
                 .masked_select(~torch.eye(embedding.shape[1], dtype=torch.bool))
                 .sum()
             )
+            spread.append(float(deviation.mean()))
+            diagonal_energy.append(diagonal)
+            off_diagonal_energy.append(off_diagonal)
+            collapsed.append(float((deviation < _COLLAPSED_STD).double().mean()))
+            if arm not in _DECORRELATION_ARMS:
+                continue
+            if not diagonal > 0.0:
+                # Card §6.4: "reject a zero denominator for full/no-covariance
+                # arms rather than awarding a collapsed embedding perfect
+                # decorrelation". Those two arms are where the ratio carries
+                # §6.4's third target; the no-variance arm is *expected* to
+                # collapse, and at the full budget its diagonal energy reaches
+                # exactly zero in float32, so the card scopes the rejection to
+                # the two arms whose redundancy is being compared.
+                raise RuntimeError(
+                    f"vicreg arm {arm!r} produced an embedding with zero "
+                    "diagonal covariance energy, so §6.4's redundancy ratio has "
+                    "no denominator"
+                )
             eigenvalues = torch.linalg.eigvalsh(covariance.double()).clamp(min=0.0)
             total = float(eigenvalues.sum())
             if not total > 0.0:  # pragma: no cover - implied by the diagonal check
                 raise RuntimeError(f"vicreg arm {arm!r} produced a null covariance")
-            spread.append(float(deviation.mean()))
             redundancy.append(off_diagonal / diagonal)
-            collapsed.append(float((deviation < _COLLAPSED_STD).double().mean()))
             concentration.append(float(eigenvalues.max()) / total)
+    # The two energies are reported for every arm because they are finite for a
+    # collapsed one, where their ratio is not: "the no-variance arm's diagonal
+    # energy went to zero" is the collapse the variance term exists to prevent,
+    # and it is a number rather than a missing row.
+    ratios = (
+        {
+            "embedding_redundancy": _mean(redundancy),
+            "covariance_top_eigenvalue_share": _mean(concentration),
+        }
+        if arm in _DECORRELATION_ARMS
+        else {}
+    )
     return {
+        **ratios,
         "embedding_spread": _mean(spread),
-        "embedding_redundancy": _mean(redundancy),
+        "off_diagonal_covariance_energy": _mean(off_diagonal_energy),
+        "diagonal_covariance_energy": _mean(diagonal_energy),
         "collapsed_dimension_fraction": _mean(collapsed),
-        "covariance_top_eigenvalue_share": _mean(concentration),
         "encoder_parameter_norm": _parameter_norm(checkpoint.parameters, _ENCODER),
         "expander_parameter_norm": _parameter_norm(checkpoint.parameters, _EXPANDER),
     }
