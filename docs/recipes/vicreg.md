@@ -426,6 +426,18 @@ Revisiting the 0.5 target, the corruption rate, or the expander width is a card
 amendment and waits for review; retuning a tolerance after seeing a result is
 what `FIDELITY.md` §3 forbids.
 
+The subsequent [paired view experiment](../experiments/2026-09-08-vicreg-views.md)
+was predeclared at `520fdd4c870e7cdceb8f438a54769b51977b7149` and is complete:
+ten seeds, all three pretraining arms under both view policies, and a shared
+no-pretraining arm. Target-preserving DGP symmetries meet all four unchanged
+bounds (spread `0.766295 +/- 0.003455`); the current marginal-corruption policy
+still fails spread (`0.268756 +/- 0.001818`). Cross-evaluating both models under
+both view distributions retains the large spread increase. This supports the
+augmentation diagnosis without silently replacing this card's current views
+or marking its unchanged recipe reproduced. The
+[proposed valid-view amendment](../proposals/vicreg-valid-views.md) states the
+new claim, explicit oracle advantage and fresh confirmation stream for review.
+
 ## 7. Unknowns
 
 | Unspecified in paper | Our choice | Basis |
@@ -445,6 +457,7 @@ what `FIDELITY.md` §3 forbids.
 | Recipe implemented, Tier 0 passing (status → `implemented`) | Claude | 2026-09-08 |
 | Author-code audit, covariance stability fix, paired Tier 1 (status → `smoke-passing`) | Codex | 2026-09-08 |
 | Tier 2 benchmark, ten-seed study and spread audit (status → `deviating`) | Claude | 2026-09-08 |
+| Predeclared paired view experiment: valid-view variant passes all original bounds; canonical status unchanged | Codex | 2026-09-08 |
 
 Five amendments were made at review, none of them to the method. §4 was
 rewritten into the two-level form the other cards use, because the draft's

@@ -299,8 +299,12 @@ downstream outcome guardrail hold; full-arm embedding spread misses §6.4's
 `>= 0.5`. The audit in
 [`experiments/2026-09-08-vicreg-tier2.md`](experiments/2026-09-08-vicreg-tier2.md)
 attributes the shortfall to deviation 3's corruption strength acting through the
-invariance term rather than to the budget, the optimiser or the covariance term,
-so the next packet is a review of that target and that view — not more compute.
+invariance term. The subsequent ten-seed
+[paired view experiment](experiments/2026-09-08-vicreg-views.md) passes all four
+unchanged bounds with target-preserving DGP symmetries, while the current
+marginal-corruption policy still misses spread. The next packet is the
+[explicit-view contract amendment](proposals/vicreg-valid-views.md) and its
+prospective confirmation; the original failure remains recorded.
 Its pinned author-code loss reductions are explicit in card §3.1.
 
 Candidates: CoMatch, PAWS, SimMatch, VICReg, Barlow Twins, BYOL, and SimSiam.
