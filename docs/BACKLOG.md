@@ -292,10 +292,11 @@ sees, and do not imply that likelihood alone identifies an MNAR problem.
 
 ### 5.1 Contrastive, clustering and redundancy-reduction methods
 
-VICReg now has a draft card at [`recipes/vicreg.md`](recipes/vicreg.md), stopped
-for review before implementation. It predeclares paired variance/covariance
-ablations and a downstream outcome guardrail using the existing SCARF-scale
-two-stage protocol; its pinned author-code loss reductions are explicit.
+VICReg is implemented against [`recipes/vicreg.md`](recipes/vicreg.md): the card
+is reviewed and Tier 0 passes, so its status is `implemented`. Its predeclared
+paired variance/covariance ablations and downstream outcome guardrail have not
+been run — Tier 1 and the §6 study are the next packets — and its pinned
+author-code loss reductions are explicit in card §3.1.
 
 Candidates: CoMatch, PAWS, SimMatch, VICReg, Barlow Twins, BYOL, and SimSiam.
 Before tuning, measure representation norm, collapse concentration, and whether
