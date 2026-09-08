@@ -1,6 +1,6 @@
 # Recipe spec card: vicreg
 
-**Status:** `smoke-passing`
+**Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
@@ -8,11 +8,20 @@
 
 This card selects BACKLOG.md §5.1. The card was reviewed and the recipe is
 implemented: `xty2.recipes.vicreg`, with Tier 0 in
-`tests/invariants/test_vicreg.py`. The three-seed, four-arm Tier 1 study in
-`tests/smoke/test_vicreg.py` passes. Tier 2 is not run, so the status stops at
-`smoke-passing` (`FIDELITY.md` §1.1) and §6.1 stays empty. The smoke results and
-review findings are recorded in
-[`../experiments/2026-09-08-vicreg-smoke.md`](../experiments/2026-09-08-vicreg-smoke.md).
+`tests/invariants/test_vicreg.py` and the three-seed, four-arm Tier 1 study in
+`tests/smoke/test_vicreg.py`. The ten-seed Tier 2 study in
+`xty2/evaluation/benchmarks/vicreg.py` has now run and meets three of §6.4's
+four targets, so the status is `deviating` (`FIDELITY.md` §1.1): both
+attribution targets and the outcome guardrail pass, and full-arm embedding
+spread is `0.268395 +/- 0.00169` against a predeclared `>= 0.5`.
+
+The miss was audited before it was recorded, and the audit is the reason no
+threshold moved: the binding constraint is deviation 3's view strength acting
+through the invariance term, not the step budget, the learning rate or the
+covariance term. Smoke results and review findings are in
+[`../experiments/2026-09-08-vicreg-smoke.md`](../experiments/2026-09-08-vicreg-smoke.md);
+the Tier 2 result and the spread audit are in
+[`../experiments/2026-09-08-vicreg-tier2.md`](../experiments/2026-09-08-vicreg-tier2.md).
 
 ## 1. Provenance
 
@@ -258,6 +267,10 @@ Both were accepted at review and are implemented as described.
 No new port, executor, row population, artifact or framework debt was added.
 Existing `X_PROJ` is an embedding tensor, not a promise of unit norm.
 
+### Tier 2 outcome
+
+On 2026-09-08, commit `a9fec5cc9623` produced a `deviating` result: This is a project-local mechanism study, not a reproduction of Bardes et al. The three pretraining arms differ by exactly one of equation (6)'s coefficients and the fourth removes pretraining, so the spread and redundancy gaps attribute an effect to the variance and covariance terms on this fixture at this budget. The outcome target is a guardrail on transfer, not evidence of causal identification: card §2 excludes ImageNet reproduction, superiority to SCARF and treatment-effect recovery from the claim, and the treatment NLL, ATE error and view-damage diagnostics are reported for the audit card §6.4 requires before a downstream number is read as a statement about the objective. Failed target(s): full_arm_embedding_spread was 0.268395 +/- 0.00169 against mean >= 0.5, by at least one stderr.
+
 ## 6. Reproduction target
 
 This is a predeclared project-local mechanism study. All required bounds are
@@ -282,7 +295,7 @@ reproduction:
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
-| | | | | |
+| 2026-09-08 | `a9fec5cc9623` | full_arm_embedding_spread<br>variance_ablation_spread_gap<br>covariance_ablation_redundancy_gap<br>pretraining_outcome_NLL_cost | 0.268395 +/- 0.00169<br>0.258219 +/- 0.00171<br>473.643 +/- 0.485<br>-0.0211956 +/- 0.00644 nat/row | no |
 
 ### 6.2 Fixed DGP and paired execution
 
@@ -391,9 +404,27 @@ failure. Do not claim an interaction effect from these one-term ablations.
 
 Run Tier 2 from a committed implementation. Benchmark registration, complete
 results and the ledger/status update must land together under `CLAUDE.md`.
-The recipe now exists and Tier 0 and Tier 1 pass; no benchmark module, no `RECIPES`
-entry and no §6.1 row have been added, because none of the three may land
-without the other two.
+All three now exist: `xty2/evaluation/benchmarks/vicreg.py`, its `RECIPES`
+entry and `tests/benchmarks/test_vicreg.py`, with the §6.1 row above measured
+from commit `a9fec5cc9623`.
+
+Three of the four targets pass. The fourth — full-arm spread against `>= 0.5`
+— misses on every one of the ten replicates, the largest of which is 0.2768, so
+it is not a seed effect. §5's Tier 2 outcome records the result and
+[`../experiments/2026-09-08-vicreg-tier2.md`](../experiments/2026-09-08-vicreg-tier2.md)
+records the audit behind it: ten times the declared budget moves the spread by
+0.009, a higher learning rate lowers it, zeroing `nu` reaches only 0.391, and
+zeroing `lambda` — or equivalently setting the corruption rate to 0, which
+makes the two branches identical — reaches 0.825. The constraint is therefore
+deviation 3's view strength acting through the invariance term: at rate 0.6 the
+branches share too little for the encoder to make them agree, so the remaining
+way to lower the elementwise MSE is to shrink the embedding, and the variance
+hinge balances that at spread 0.26. The §6.4 view-damage diagnostic measures
+the same thing directly at `0.2353 +/- 0.0017`.
+
+Revisiting the 0.5 target, the corruption rate, or the expander width is a card
+amendment and waits for review; retuning a tolerance after seeing a result is
+what `FIDELITY.md` §3 forbids.
 
 ## 7. Unknowns
 
@@ -413,6 +444,7 @@ without the other two.
 | Plan diffed against §3.2 and §4 | Claude | 2026-09-08 |
 | Recipe implemented, Tier 0 passing (status → `implemented`) | Claude | 2026-09-08 |
 | Author-code audit, covariance stability fix, paired Tier 1 (status → `smoke-passing`) | Codex | 2026-09-08 |
+| Tier 2 benchmark, ten-seed study and spread audit (status → `deviating`) | Claude | 2026-09-08 |
 
 Five amendments were made at review, none of them to the method. §4 was
 rewritten into the two-level form the other cards use, because the draft's
@@ -439,6 +471,25 @@ tracks the realised treatment rate to within sampling error across the range
 (0.0334 vs 0.0333, 0.2471 vs 0.2472, 0.5001 vs 0.5053, 0.7532 vs 0.7495,
 0.9665 vs 0.9665).
 
-Tier 1 now provides wiring evidence on all three declared seeds. The full
-Tier 2 study has not been executed, so every threshold in §6.4 remains a
-predeclared target with no full-budget measurement behind it.
+Tier 1 provides wiring evidence on all three declared seeds. The full Tier 2
+study has now been executed at the declared budget and every §6.4 threshold has
+a ten-seed measurement behind it. Three hold and one does not, and the status is
+the outcome rather than a revised target.
+
+One implementation error was found and fixed while running it, and it was the
+benchmark's rather than the recipe's. The first attempt applied §6.4's
+zero-denominator rejection to all three pretraining arms. The card scopes that
+rejection to the full and no-covariance arms, and the scope is load-bearing:
+the no-variance arm is the collapse control, and at the full budget — unlike at
+Tier 1's 200 steps — its embedding really does reach zero variance in float32,
+so demanding a denominator of it stopped the study on the very outcome it exists
+to show. The redundancy ratio and the eigenvalue concentration are now computed
+for the two arms §6.4 compares, and the two covariance energies are reported for
+all three, because they stay finite under collapse where their ratio does not.
+
+The one open question this study raises is §6.4's own first target. It was
+written with no measured spread available, as §7's last row says, and the
+audit finds the shortfall in a declared deviation rather than in the
+implementation. Whether 0.5 is the right number for a fixture whose two views
+retain this little mutual information is a review question, and this card does
+not answer it by moving the number.
