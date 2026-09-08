@@ -1,12 +1,15 @@
 # Recipe spec card: vicreg
 
-**Status:** `draft`
+**Status:** `implemented`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
 > §6 for benchmark and reporting work.
 
-This card selects BACKLOG.md §5.1. It stops before implementation for review.
+This card selects BACKLOG.md §5.1. The card was reviewed and the recipe is
+implemented: `xty2.recipes.vicreg`, with Tier 0 in
+`tests/invariants/test_vicreg.py`. Tier 1 and Tier 2 are not run yet, so the
+status stops at `implemented` (`FIDELITY.md` §1.1) and §6.1 stays empty.
 
 ## 1. Provenance
 
@@ -72,7 +75,9 @@ This contract is single-process: the local full batch is the statistics batch.
 
 ### 3.2 Mapping to xty2
 
-All names marked **new** are proposed, not current exports.
+The names marked **new** were new when this card was drafted. All four are
+exports now: `xty2.components.VICRegExpander` and the three objectives in
+`xty2.objectives.vicreg`.
 
 | Paper symbol | Meaning | xty2 Port | xty2 Objective / Component |
 |---|---|---|---|
@@ -117,40 +122,44 @@ Comments identify source decisions or the explicit project-local choices in §5.
 ```yaml
 gradients:
   stop_gradients:
-    pretrain.embedding_invariance: none
+    pretrain.embedding_invariance: none          # author VICReg.forward detaches nothing
     pretrain.embedding_variance: none
     pretrain.embedding_covariance: none
     joint_fit.observed_outcome_nll: none
     joint_fit.observed_treatment_nll: none
     joint_fit.missing_treatment_marginal_nll: none
-  detached_targets: n/a  # author VICReg.forward
-  gradient_clipping: {pretrain: none, joint_fit: none}  # deviation 4
+  detached_targets: n/a                          # no target side: no predictor, queue or teacher
+  gradient_clipping:
+    pretrain: none                               # deviation 4
+    joint_fit: none
   marginal_nll_grad_path:
     joint_fit.missing_treatment_marginal_nll: both
+
 teacher:
-  ema_decay: n/a
+  ema_decay: n/a                                 # VICReg maintains no EMA
   ema_applies_to_buffers: n/a
   teacher_in_train_mode: n/a
-  teacher_requires_grad: false
+  teacher_requires_grad: n/a                     # no TeacherSpec is constructed; nothing to hold constant
+
 losses:
   reduction:
-    pretrain.embedding_invariance: mean
+    pretrain.embedding_invariance: mean          # each term is already its own batch mean (section 3.2)
     pretrain.embedding_variance: mean
     pretrain.embedding_covariance: mean
     joint_fit.observed_outcome_nll: population
     joint_fit.observed_treatment_nll: population
     joint_fit.missing_treatment_marginal_nll: population
   eligible_rows:
-    pretrain.embedding_invariance: all
+    pretrain.embedding_invariance: all           # self-supervised: no label of any kind is read
     pretrain.embedding_variance: all
     pretrain.embedding_covariance: all
     joint_fit.observed_outcome_nll: t_observed
     joint_fit.observed_treatment_nll: t_observed
     joint_fit.missing_treatment_marginal_nll: t_missing
-  weights:  # pinned author forward; downstream deviation 5
-    pretrain.embedding_invariance: 25.0
-    pretrain.embedding_variance: 25.0
-    pretrain.embedding_covariance: 1.0
+  weights:                                       # pinned author forward; downstream deviation 5
+    pretrain.embedding_invariance: 25.0          # lambda, on the elementwise MSE
+    pretrain.embedding_variance: 25.0            # mu, on the mean of the two branch penalties
+    pretrain.embedding_covariance: 1.0           # nu, on their sum
     joint_fit.observed_outcome_nll: 1.0
     joint_fit.observed_treatment_nll: 1.0
     joint_fit.missing_treatment_marginal_nll: 0.5
@@ -161,20 +170,32 @@ losses:
     joint_fit.observed_outcome_nll: constant 1.0
     joint_fit.observed_treatment_nll: constant 1.0
     joint_fit.missing_treatment_marginal_nll: ramp 0.0 -> 0.5 over 1000 steps
-  temperature: n/a
-  sharpening: n/a
+  temperature: n/a                               # no similarity is scaled anywhere in this recipe
+  sharpening: n/a                                # no pseudo-label is formed
   confidence_threshold: n/a
-optimisation:  # deliberate matched tabular protocol, deviation 4
+
+optimisation:                                    # deliberate matched tabular protocol, deviation 4
   optimiser:
     pretrain: adam(betas=(0.9, 0.999), eps=1e-08)
     joint_fit: adam(betas=(0.9, 0.999), eps=1e-08)
-  lr: {pretrain: 0.001, joint_fit: 0.001}
-  lr_schedule: {pretrain: constant 1.0, joint_fit: constant 1.0}
-  weight_decay: {pretrain: none, joint_fit: none}
-  batch_size: 128
-  labelled_unlabelled_ratio: n/a
-  total_steps_or_epochs: {pretrain: 1000, joint_fit: 3000}  # optimiser steps
-architecture:  # deviations 2 and 5; expander topology follows author Projector
+  lr:
+    pretrain: 0.001
+    joint_fit: 0.001
+  lr_schedule:
+    pretrain: constant 1.0                       # no cosine schedule and no warmup; deviation 4
+    joint_fit: constant 1.0
+  weight_decay:
+    pretrain: none
+    joint_fit: none
+  batch_size:
+    pretrain: 128                                # n: the variance and covariance denominators
+    joint_fit: 128
+  labelled_unlabelled_ratio: n/a                 # UniformSampler enforces no quota
+  total_steps_or_epochs:
+    pretrain: 1000                               # optimiser steps, never epochs; deviation 4
+    joint_fit: 3000
+
+architecture:                                    # deviations 2 and 5; expander topology follows author Projector
   widths_depths:
     mlp_encoder: [256, 256, 256, 256]
     vicreg_expander: [512, 512, 512]
@@ -203,12 +224,13 @@ architecture:  # deviations 2 and 5; expander topology follows author Projector
   output_parameterisation:
     tarnet_head: K means; fixed Gaussian scale=1.0
     categorical_propensity: K softmax logits
-data:  # deviations 3 and 5; §6.2
-  standardisation: "x: zscore fitted on train only"
-  outcome_scaling: "y: zscore fitted on train only; evaluation on that scale"
-  treatment_encoding: n/a
-  split_protocol: fixed two-cluster DGP; disjoint train and held-out populations; no test-based selection
-  missingness_mechanism: MCAR exactly 40 observed training treatments keyed by row_id
+
+data:                                            # deviations 3 and 5; section 6.2
+  standardisation: x: zscore fitted on 'train'
+  outcome_scaling: y: zscore fitted on 'train'   # held-out rows take the same fitted transform
+  treatment_encoding: n/a                        # XTYBatch supplies integer classes 0..K-1
+  split_protocol: fixed two-cluster DGP; disjoint train and held-out populations; no test-based selection; training rows are assignment 'train'
+  missingness_mechanism: treatment MCAR to a budget of 40 labelled rows, keyed by row_id  # section 6
 ```
 
 ## 5. Deviations from the paper
@@ -223,14 +245,14 @@ data:  # deviations 3 and 5; §6.2
 
 ### 5.1 Framework additions made for this card
 
-Proposed for implementation after review; none are implemented by this PR.
+Both were accepted at review and are implemented as described.
 
 | Added | Quadrant (§11.2) | Consumers today | Named second consumer | Why now |
 |---|---|---|---|---|
-| Three independent embedding objectives in §3.2 | Fidelity-bearing, reversible | proposed VICReg | n/a; no new vocabulary | Preserve separately ablatable terms and their exact reductions using existing ports. |
-| `VICRegExpander` component | Fidelity-bearing, reversible | proposed VICReg | n/a; no new vocabulary | Current `ProjectionHead` lacks hidden BN and a bias-free final layer. A separate component preserves existing recipes and carries the author's topology. |
+| Three independent embedding objectives in §3.2 | Fidelity-bearing, reversible | `vicreg` | n/a; no new vocabulary | Preserve separately ablatable terms and their exact reductions using existing ports. |
+| `VICRegExpander` component | Fidelity-bearing, reversible | `vicreg` | n/a; no new vocabulary | Current `ProjectionHead` lacks hidden BN and a bias-free final layer. A separate component preserves existing recipes and carries the author's topology. |
 
-No new port, executor, row population, artifact or framework debt is proposed.
+No new port, executor, row population, artifact or framework debt was added.
 Existing `X_PROJ` is an embedding tensor, not a promise of unit norm.
 
 ## 6. Reproduction target
@@ -345,14 +367,30 @@ values, both arms' absolute values and their paired differences.
 
 Treatment NLL differences, true mean treatment-effect error, and view-induced
 changes in the DGP's Bayes treatment probabilities are informational. Compute
-the latter using the original-scale corrupted features and the analytic
-propensity specified by `fixmatch.md` §6.1, never the fitted classifier. Report
-them before interpreting a downstream failure as objective failure. Do not
-claim an interaction effect from these one-term ablations.
+the last on the original-scale features, never the fitted classifier, and never
+from a hard cluster assignment: a feature-wise corrupted row draws each cell
+from an independent training-population donor, so it has no single latent `c`
+and the diagnostic must integrate the mixture posterior instead. At `K = 2`,
+uniform prior, `fixmatch.md` §6.1's centres `±0.45` in each of the four signal
+columns and its noise `sigma = 0.6`, that posterior is closed-form:
+
+```text
+p(c=1 | x) = sigmoid( (2 * 0.45 / 0.6^2) * sum_{i<4} x_i )   = sigmoid(2.5 * sum_{i<4} x_i)
+p(t=1 | x) = 0.02 + 0.96 * p(c=1 | x)
+```
+
+The second line is `sum_c p(t=1 | c) p(c | x)` under §6.1's `p(t=1|c) = 0.02 +
+0.96c`. Columns 4-5 carry no cluster signal and drop out of the log-odds, so a
+corruption confined to them moves this diagnostic by exactly zero — which is
+the control that says the number is measuring cluster damage and not noise.
+Report all of this before interpreting a downstream failure as objective
+failure. Do not claim an interaction effect from these one-term ablations.
 
 Run Tier 2 from a committed implementation. Benchmark registration, complete
-results and ledger/status update must land together under `CLAUDE.md`; this
-draft adds no callable, benchmark registration or fabricated execution plan.
+results and the ledger/status update must land together under `CLAUDE.md`.
+The recipe now exists and Tier 0 passes; no benchmark module, no `RECIPES`
+entry and no §6.1 row have been added, because none of the three may land
+without the other two.
 
 ## 7. Unknowns
 
@@ -368,5 +406,36 @@ draft adds no callable, benchmark registration or fabricated execution plan.
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status → `reviewed`) | | |
-| Plan diffed against §3.2 and §4 | | |
+| Card reviewed (status → `reviewed`) | Claude | 2026-09-08 |
+| Plan diffed against §3.2 and §4 | Claude | 2026-09-08 |
+| Recipe implemented, Tier 0 passing (status → `implemented`) | Claude | 2026-09-08 |
+
+Five amendments were made at review, none of them to the method. §4 was
+rewritten into the two-level form the other cards use, because the draft's
+inline `{pretrain: none, joint_fit: none}` mappings parse as one string and
+the card/plan cross-check (`FIDELITY.md` §1.2) can only compare *presence*
+for such a value, never the two numbers inside it. Three §4 values were then
+corrected to the ones the framework actually renders: the teacher's
+`teacher_requires_grad` became `n/a`, since the key is bound by `TeacherSpec`
+and this recipe constructs none, so `false` was a claim about an object that
+does not exist; and the four `data.*` values became the strings `DataSpec` composes,
+which name the split each statistic is fitted on rather than merely asserting
+that it is the training one. Every non-`n/a` §4 leaf is now compared by value
+against `plan.hyperparameters`, which the draft's §4 would not have allowed.
+
+The fifth amendment answers the one open review thread on the drafting PR:
+§6.4 referred to "the analytic propensity specified by `fixmatch.md` §6.1",
+which defines `p(t=1|c)` for a latent cluster and not `p(t|x)`. A feature-wise
+corrupted row draws each cell from an independent donor and so has no single
+`c`, leaving the diagnostic to choose between a hard assignment and the mixture
+posterior — two different numbers. §6.4 now writes the posterior out in closed
+form. It was checked against the generator rather than derived and trusted: on
+400,000 rows of `two_cluster_population(seed=1234)` the analytic `p(t=1|x)`
+tracks the realised treatment rate to within sampling error across the range
+(0.0334 vs 0.0333, 0.2471 vs 0.2472, 0.5001 vs 0.5053, 0.7532 vs 0.7495,
+0.9665 vs 0.9665).
+
+Two things this card does **not** yet claim: no Tier 1 fit has been run, so no
+wiring evidence on the three declared seeds exists; and §6's paired study has
+not been executed, so every threshold in §6.4 remains a predeclared target
+with no measurement behind it.

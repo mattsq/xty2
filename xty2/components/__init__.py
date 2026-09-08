@@ -8,6 +8,7 @@ from xty2.components.posterior import CategoricalPosterior
 from xty2.components.pretext import PretextHead
 from xty2.components.projection import ProjectionHead
 from xty2.components.treatment import CategoricalPropensity
+from xty2.components.vicreg import VICRegExpander
 
 __all__ = [
     "CategoricalPosterior",
@@ -18,4 +19,5 @@ __all__ = [
     "PretextHead",
     "ProjectionHead",
     "TARNetHead",
+    "VICRegExpander",
 ]
