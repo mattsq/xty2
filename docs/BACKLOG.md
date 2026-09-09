@@ -292,20 +292,14 @@ sees, and do not imply that likelihood alone identifies an MNAR problem.
 
 ### 5.1 Contrastive, clustering and redundancy-reduction methods
 
-VICReg is implemented against [`recipes/vicreg.md`](recipes/vicreg.md): the card
-is reviewed, Tier 0 and the three-seed Tier 1 pass, and the ten-seed Tier 2
-study has run, so its status is `deviating`. Both attribution targets and the
-downstream outcome guardrail hold; full-arm embedding spread misses §6.4's
-`>= 0.5`. The audit in
-[`experiments/2026-09-08-vicreg-tier2.md`](experiments/2026-09-08-vicreg-tier2.md)
-attributes the shortfall to deviation 3's corruption strength acting through the
-invariance term. The subsequent ten-seed
-[paired view experiment](experiments/2026-09-08-vicreg-views.md) passes all four
-unchanged bounds with target-preserving DGP symmetries, while the current
-marginal-corruption policy still misses spread. The next packet is the
-[explicit-view contract amendment](proposals/vicreg-valid-views.md) and its
-prospective confirmation; the original failure remains recorded.
-Its pinned author-code loss reductions are explicit in card §3.1.
+VICReg is `reproduced` under its approved explicit valid-view contract in
+[`recipes/vicreg.md`](recipes/vicreg.md). The
+[fresh ten-seed confirmation](experiments/2026-09-09-vicreg-confirmation.md)
+passes all four unchanged Tier 2 bounds. The claim is fixture-specific:
+its target-preserving transformations use privileged DGP knowledge and do not
+supply a general tabular augmentation policy. The original marginal-corruption
+adaptation still failed spread; its failure ledger, original audit and
+[paired view diagnostic](experiments/2026-09-08-vicreg-views.md) remain recorded.
 
 Candidates: CoMatch, PAWS, SimMatch, VICReg, Barlow Twins, BYOL, and SimSiam.
 Before tuning, measure representation norm, collapse concentration, and whether

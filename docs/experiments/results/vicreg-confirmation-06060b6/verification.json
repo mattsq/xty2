@@ -1,0 +1,67 @@
+{
+  "independently_recomputed_metrics": 44,
+  "required_decisions": [
+    {
+      "bound": 0.7638071970617186,
+      "mean": 0.7689100798219443,
+      "name": "full_arm_embedding_spread",
+      "passed": true,
+      "stderr": 0.005102882760225596,
+      "target": 0.5
+    },
+    {
+      "bound": 0.7538032410873778,
+      "mean": 0.7589066981716315,
+      "name": "variance_ablation_spread_gap",
+      "passed": true,
+      "stderr": 0.00510345708425361,
+      "target": 0.1
+    },
+    {
+      "bound": 120.52564339673683,
+      "mean": 124.70907438612346,
+      "name": "covariance_ablation_redundancy_gap",
+      "passed": true,
+      "stderr": 4.1834309893866335,
+      "target": 0.01
+    },
+    {
+      "bound": -0.009757612026313232,
+      "mean": -0.027344679832458495,
+      "name": "pretraining_outcome_NLL_cost",
+      "passed": true,
+      "stderr": 0.017587067806145263,
+      "target": 0.05
+    }
+  ],
+  "seed_bases": [
+    290000,
+    290100,
+    290200,
+    290300,
+    290400,
+    290500,
+    290600,
+    290700,
+    290800,
+    290900
+  ],
+  "sha256": {
+    "environment.json": "0cdb0dd1b3765e09159b47dd1f75ee54bdcaa369373c18616356ced80d136e91",
+    "plan.txt": "295fed8349cb0564647abc5c57ff8774e22f9eb914f64b91400b1d32bca571b8",
+    "seed-290000.json": "3b2271ac4814affe14a06a7988e26b4238472835201481116064aa21a0153ee5",
+    "seed-290100.json": "1707f74b060a4c614a926bf86084ce02f530d17fff11683968c53e41ccc2d32f",
+    "seed-290200.json": "47f9607f97df14b7966f5de14694a3cbf5ce5ad99bf8b230ec7e0a5e3797b8ed",
+    "seed-290300.json": "0173a88f8a3ab63c4dcfdebb2034004259f690aa7077a5896f6ebe683318d219",
+    "seed-290400.json": "c51e6eba8b84b89ec45bd5805764583f9e33415d9149467852aacbc698fdf8d7",
+    "seed-290500.json": "f1ab51c3a33091d64b150841e3df42172c16ad123dd903b76c2625c3c6be6687",
+    "seed-290600.json": "b251e038d0bf63557fa6ea7bea7469729398a80cb093e2b9b04f206e5e95d3f1",
+    "seed-290700.json": "7611f6b2c2a06d8a3ee8bacdd43e1e06a4c150ada19b1e07d6696b439459b0ee",
+    "seed-290800.json": "11ab19f0f0a7cdb988c6a73b0ebc9620ba112c999c2d0b9d656028d14770587a",
+    "seed-290900.json": "462f188c40984ebcbe4af960f13e90f078b5d290c23d813effaf1013590d73f2",
+    "validation.json": "42f80e865c7da3de9eb7ec02e1b0e532efe17c5d005a525098da13cb0b5bcc1e",
+    "vicreg.json": "0ce3e414a9b26569c69767de5192950efea0023505a031dce3ae6dd373e58486"
+  },
+  "source_commit": "06060b63d37ccf4ba9554dac0e21f7935ff0535f",
+  "source_tree": "e0906bdfa72ce052a3eef2541522d24ae76222d0"
+}

@@ -1,6 +1,6 @@
 # Recipe spec card: vicreg
 
-**Status:** `deviating`
+**Status:** `reproduced`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
@@ -14,8 +14,9 @@ historical audit below.
 The owner approved the [valid-view amendment](../proposals/vicreg-valid-views.md)
 on 2026-09-09 after the [paired diagnostic](../experiments/2026-09-08-vicreg-views.md).
 The current contract requires explicit views and tests target-preserving fixture
-symmetries on ten fresh confirmation seeds. The status remains `deviating`
-until that confirmation passes all four unchanged bounds. This is a
+symmetries on ten fresh confirmation seeds. The fresh confirmation passed all
+four unchanged bounds, so this approved contract is `reproduced`. See the
+[complete result](../experiments/2026-09-09-vicreg-confirmation.md). This is a
 fixture-specific mechanism claim, with privileged DGP knowledge disclosed.
 
 ## 1. Provenance
@@ -266,10 +267,6 @@ Both were accepted at review and are implemented as described.
 No new port, executor, row population, artifact or framework debt was added.
 Existing `X_PROJ` is an embedding tensor, not a promise of unit norm.
 
-### Tier 2 outcome
-
-On 2026-09-08, commit `a9fec5cc9623` produced a `deviating` result: This is a project-local mechanism study, not a reproduction of Bardes et al. The three pretraining arms differ by exactly one of equation (6)'s coefficients and the fourth removes pretraining, so the spread and redundancy gaps attribute an effect to the variance and covariance terms on this fixture at this budget. The outcome target is a guardrail on transfer, not evidence of causal identification: card §2 excludes ImageNet reproduction, superiority to SCARF and treatment-effect recovery from the claim, and the treatment NLL, ATE error and view-damage diagnostics are reported for the audit card §6.4 requires before a downstream number is read as a statement about the objective. Failed target(s): full_arm_embedding_spread was 0.268395 +/- 0.00169 against mean >= 0.5, by at least one stderr.
-
 ## 6. Reproduction target
 
 This is a predeclared project-local mechanism study. All required bounds are
@@ -295,6 +292,7 @@ reproduction:
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
 | 2026-09-08 | `a9fec5cc9623` | full_arm_embedding_spread<br>variance_ablation_spread_gap<br>covariance_ablation_redundancy_gap<br>pretraining_outcome_NLL_cost | 0.268395 +/- 0.00169<br>0.258219 +/- 0.00171<br>473.643 +/- 0.485<br>-0.0211956 +/- 0.00644 nat/row | no |
+| 2026-09-09 | `06060b63d37ccf4ba9554dac0e21f7935ff0535f` | full_arm_embedding_spread<br>variance_ablation_spread_gap<br>covariance_ablation_redundancy_gap<br>pretraining_outcome_NLL_cost | 0.76891 +/- 0.0051<br>0.758907 +/- 0.0051<br>124.709 +/- 4.18<br>-0.0273447 +/- 0.0176 nat/row | yes |
 
 ### 6.2 Fixed DGP and paired execution
 
@@ -481,6 +479,7 @@ corruption result does not become a success under that amendment.
 |---|---|---|
 | Card reviewed (status → `reviewed`) | Claude | 2026-09-08 |
 | Valid-view contract, oracle scope and fresh ten-seed confirmation approved | Repository owner | 2026-09-09 |
+| Forty-fit fresh confirmation, all four unchanged bounds pass (status → `reproduced`) | Codex | 2026-09-09 |
 | Plan diffed against §3.2 and §4 | Claude | 2026-09-08 |
 | Recipe implemented, Tier 0 passing (status → `implemented`) | Claude | 2026-09-08 |
 | Author-code audit, covariance stability fix, paired Tier 1 (status → `smoke-passing`) | Codex | 2026-09-08 |

@@ -7,7 +7,8 @@ passes all four unchanged targets under a predeclared, nontrivial,
 target-preserving view policy. Marginal corruption still fails spread.
 `CLAUDE.md` rule 1 and `FIDELITY.md` section 4 require an amended card to be
 reviewed before changing the recipe's normative mechanics. The current card
-remains `deviating` until the authorised fresh confirmation is complete.
+is now `reproduced` under the approved view contract after the
+[completed fresh confirmation](../experiments/2026-09-09-vicreg-confirmation.md).
 The owner approved this exact scope; no further mechanics review is pending.
 
 ## Recommended claim
