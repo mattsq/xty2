@@ -1,11 +1,13 @@
 # Recipe spec card: barlow_twins
 
-**Status:** `implemented`
+**Status:** `smoke-passing`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 **Agent route:** read §2–§5 before implementation; §6 defines acceptance.
-`xty2.recipes.barlow_twins` compiles and Tier 0 passes. No Tier 1 fit has been
-run and no §6 result exists, so no claim in §6.4 has a measurement behind it.
+`xty2.recipes.barlow_twins` compiles, Tier 0 passes, and §6.3's three-seed
+Tier 1 study runs in `tests/smoke/test_barlow_twins.py`; its numbers are in
+[the Tier 1 note](../experiments/2026-09-09-barlow-twins-smoke.md). No §6
+result exists, so no bound in §6.4 has a measurement behind it.
 
 ## 1. Provenance
 
@@ -397,6 +399,7 @@ update land together. A successful status refers only to this local mechanism.
 | Plan diffed against §3.2 and §4 | Claude | 2026-09-09 |
 | Recipe implemented, Tier 0 passing (status → `implemented`) | Claude | 2026-09-09 |
 | Source, plan and implementation reviewed; input validation corrected | Codex | 2026-09-09 |
+| Tier 1 study run on bases 419/523/631 (status → `smoke-passing`) | Claude | 2026-09-09 |
 
 Drafted from pinned author source on 2026-09-09. Review accepted the
 prospective §6.4 bounds, the explicit oracle-view scope and §5.1's two
@@ -407,8 +410,17 @@ the surrounding quotes were a mismatch against the identical value `DataSpec`
 composes. They are now written the way `vicreg.md` §4 writes them, and all
 sixty-six non-`n/a` §4 leaves are compared by value rather than by presence.
 
-Status is `implemented`, not `smoke-passing`: no Tier 1 fit has been run. No
-benchmark module, `RECIPES` entry or §6.1 ledger row is added either, since
+Status is now `smoke-passing`. §6.3's Tier 1 packet ran on bases 419, 523 and
+631 at the declared 200/300-step overrides with all four §6.2 arms, and it
+asserts wiring only: finite losses and gradients, a normalised propensity, the
+encoder transfer and stage transition, the arms' shared initial tensors, row
+streams and cached view draws, and no projector in fine-tuning. §6.4's metrics
+are reported beside it and none of its four bounds is assessed, because each is
+a ten-seed statement at §4's full budget. Six mutants were injected one at a
+time and each was seen to fail a named assertion; the experiment note lists
+them with the measured arms.
+
+No benchmark module, `RECIPES` entry or §6.1 ledger row is added, since
 `CLAUDE.md` requires those three to land with a result rather than ahead of
 one. §6.1's placeholder row is therefore still the template's empty row.
 
