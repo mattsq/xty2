@@ -50,6 +50,11 @@ from xty2.evaluation.benchmarks.common import (
     training_dataset,
     two_cluster_population,
 )
+from xty2.evaluation.causal import (
+    candidate_treatment_means,
+    sqrt_pehe,
+    treatment_contrast,
+)
 from xty2.evaluation.vicreg_views import OracleSymmetry
 from xty2.objectives.barlow_twins import cross_correlation
 from xty2.recipes import barlow_twins, vicreg
@@ -235,6 +240,7 @@ def test_paired_mechanism_study(base: int, monkeypatch: pytest.MonkeyPatch) -> N
     )
     data = training_dataset(schema, train.batch)
     paired_rows: dict[str, list[Tensor]] = {}
+    paired_populations: dict[str, TrainingPopulation] = {}
     paired_views: list[Tensor] = []
     initial: dict[str, Tensor] = {}
     report: dict[str, dict[str, float]] = {}
@@ -368,12 +374,28 @@ def test_paired_mechanism_study(base: int, monkeypatch: pytest.MonkeyPatch) -> N
             torch.testing.assert_close(
                 stage.population.statistics["x_location"], train.batch.x.mean(0)
             )
+            for key, expected in {
+                "x_scale": train.batch.x.std(0, correction=0),
+                "y_location": train.batch.y.mean(0),
+                "y_scale": train.batch.y.std(0, correction=0),
+            }.items():
+                torch.testing.assert_close(stage.population.statistics[key], expected)
             assert set(stage.checkpoint.trained_on_row_ids.tolist()) <= set(
                 range(TRAIN_ROWS)
             )
             if arm == "full":
                 paired_rows[stage.stage] = rows[stage.stage]
+                paired_populations[stage.stage] = stage.population
             else:
+                # Equal label counts do not establish a paired comparison.
+                # Match the actual labels and fitted scale for each stage;
+                # pretraining itself never consumes the treatment mask.
+                paired = paired_populations[stage.stage]
+                assert torch.equal(
+                    stage.population.rows.t_observed, paired.rows.t_observed
+                )
+                for key, value in paired.statistics.items():
+                    assert torch.equal(stage.population.statistics[key], value)
                 assert len(rows[stage.stage]) == len(paired_rows[stage.stage])
                 assert all(
                     torch.equal(a, b)
@@ -423,6 +445,18 @@ def test_paired_mechanism_study(base: int, monkeypatch: pytest.MonkeyPatch) -> N
                 "treatment_nll": float(-propensity.log_prob(heldout.t).mean()),
                 "outcome_nll": float(-outcome.log_prob(heldout.y, heldout.t).mean()),
             }
+            means = candidate_treatment_means(
+                outcome,
+                batch_size=TEST_ROWS,
+                num_treatments=schema.treatment_cardinality,
+                device=heldout.t.device,
+            )
+            # Report conditional-mean effect error in original DGP units,
+            # not against realised noisy outcome differences (§6.4).
+            effect = treatment_contrast(means) * population.statistics["y_scale"]
+            metrics["treatment_effect_rmse"] = float(
+                sqrt_pehe(effect, test.true_effect)
+            )
             if arm != "no_pretrain":
                 checkpoint = result.stage("pretrain").checkpoint
                 pretrained[arm] = {
@@ -430,7 +464,10 @@ def test_paired_mechanism_study(base: int, monkeypatch: pytest.MonkeyPatch) -> N
                     for name, value in checkpoint.parameters.items()
                     if name.startswith("mlp_encoder.")
                 }
-                for name, value in checkpoint.parameters.items():
+                for name, value in {
+                    **checkpoint.parameters,
+                    **checkpoint.buffers,
+                }.items():
                     assert torch.equal(value, fit_start["_components." + name])
                 assert any(
                     not torch.equal(value, start["_components." + name])

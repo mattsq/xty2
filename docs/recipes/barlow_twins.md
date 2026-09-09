@@ -7,7 +7,7 @@
 `xty2.recipes.barlow_twins` compiles, Tier 0 passes, and §6.3's three-seed
 Tier 1 study runs in `tests/smoke/test_barlow_twins.py`; its numbers are in
 [the Tier 1 note](../experiments/2026-09-09-barlow-twins-smoke.md). No §6
-result exists, so no bound in §6.4 has a measurement behind it.
+Tier 2 result exists, so no bound in §6.4 has been assessed at its full budget.
 
 ## 1. Provenance
 
@@ -400,6 +400,7 @@ update land together. A successful status refers only to this local mechanism.
 | Recipe implemented, Tier 0 passing (status → `implemented`) | Claude | 2026-09-09 |
 | Source, plan and implementation reviewed; input validation corrected | Codex | 2026-09-09 |
 | Tier 1 study run on bases 419/523/631 (status → `smoke-passing`) | Claude | 2026-09-09 |
+| Tier 1 pairing/scaler/buffer checks strengthened and effect diagnostic added | Codex | 2026-09-09 |
 
 Drafted from pinned author source on 2026-09-09. Review accepted the
 prospective §6.4 bounds, the explicit oracle-view scope and §5.1's two
@@ -416,7 +417,7 @@ asserts wiring only: finite losses and gradients, a normalised propensity, the
 encoder transfer and stage transition, the arms' shared initial tensors, row
 streams and cached view draws, and no projector in fine-tuning. §6.4's metrics
 are reported beside it and none of its four bounds is assessed, because each is
-a ten-seed statement at §4's full budget. Six mutants were injected one at a
+a ten-seed statement at §4's full budget. Eight mutants were injected one at a
 time and each was seen to fail a named assertion; the experiment note lists
 them with the measured arms.
 
@@ -434,3 +435,9 @@ correct-value/half-gradient mutant. Source-comment corrections also distinguish
 collapse's `D=d` from a maximum, epsilon-attenuated self-correlations from exact
 ones, and mean raw variance diagnostics from §6.4's active-coordinate fraction.
 These corrections preserve §3–§6's reviewed method and acceptance bounds.
+
+The [Tier 1 review](../experiments/2026-09-09-barlow-twins-smoke-review.md)
+checks actual treatment-mask identities across arms, all four fitted scaling
+statistics, and checkpoint buffers as well as parameters. It adds the §6.4
+conditional-mean treatment-effect RMSE diagnostic in original outcome units.
+All three declared seeds pass; the recipe and acceptance bounds are unchanged.
