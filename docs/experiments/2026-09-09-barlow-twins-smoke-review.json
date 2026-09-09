@@ -1,0 +1,188 @@
+{
+  "recipe": "barlow_twins",
+  "tier": 1,
+  "source_parent": "c9d5eed4d12a3938c1b16dda23159c46540ba55c",
+  "working_tree_note": "Parent plus the test-only correction in this commit; training implementation unchanged.",
+  "smoke_module_sha256": "2dde32112a92221219cc93ee94828e165a306c594a6d1052985aa96429176211",
+  "environment": {
+    "python": "3.12.14 (main, Aug 25 2026, 14:00:49) [Clang 22.1.3 ]",
+    "torch": "2.14.0+cpu",
+    "numpy": "2.4.6",
+    "platform": "Linux-6.18.35-x86_64-with-glibc2.39",
+    "threads": 1,
+    "device": "cpu"
+  },
+  "pretrain_steps": 200,
+  "joint_fit_steps": 300,
+  "marginal_ramp_steps": 1000,
+  "replicates": [
+    {
+      "arms": {
+        "diagonal_only": {
+          "active_fraction": 1.0,
+          "covariance_top_eigenvalue_share": 0.8388519253832585,
+          "diagonal_alignment": 0.9991090595722198,
+          "diagonal_error": 1.0464518709341064e-06,
+          "encoder_parameter_norm": 4.193684175898229,
+          "outcome_nll": 1.1104795932769775,
+          "projector_parameter_norm": 39.45069784043201,
+          "raw_variance_first": 0.9559000246226788,
+          "raw_variance_second": 0.9545725397765636,
+          "redundancy": 0.6500681113823519,
+          "treatment_effect_rmse": 0.7127970457077026,
+          "treatment_nll": 1.993091106414795
+        },
+        "full": {
+          "active_fraction": 1.0,
+          "covariance_top_eigenvalue_share": 0.06212282557447531,
+          "diagonal_alignment": 0.9746379591524601,
+          "diagonal_error": 0.0007018924989097286,
+          "encoder_parameter_norm": 4.306365041204162,
+          "outcome_nll": 1.131843090057373,
+          "projector_parameter_norm": 39.92255432842561,
+          "raw_variance_first": 0.045790752628818154,
+          "raw_variance_second": 0.045834967168048024,
+          "redundancy": 0.020826062577577954,
+          "treatment_effect_rmse": 1.049489140510559,
+          "treatment_nll": 2.0313215255737305
+        },
+        "no_pretrain": {
+          "outcome_nll": 1.1777468919754028,
+          "treatment_effect_rmse": 1.2908450365066528,
+          "treatment_nll": 2.085397958755493
+        },
+        "vicreg": {
+          "active_fraction": 1.0,
+          "covariance_top_eigenvalue_share": 0.07383139841023943,
+          "diagonal_alignment": 0.9974362999200821,
+          "diagonal_error": 7.183027179280543e-06,
+          "encoder_parameter_norm": 4.690185063561788,
+          "outcome_nll": 1.1128323078155518,
+          "projector_parameter_norm": 42.10146775887719,
+          "raw_variance_first": 0.3863132558763027,
+          "raw_variance_second": 0.3862122166901827,
+          "redundancy": 0.028561423902642238,
+          "treatment_effect_rmse": 0.8766157031059265,
+          "treatment_nll": 2.714132785797119
+        }
+      },
+      "base": 419,
+      "paired_differences": {
+        "redundancy_diagonal_only_minus_full": 0.629242048804774,
+        "outcome_nll_full_minus_no_pretrain": -0.045903801918029785
+      }
+    },
+    {
+      "arms": {
+        "diagonal_only": {
+          "active_fraction": 1.0,
+          "covariance_top_eigenvalue_share": 0.6320612184018229,
+          "diagonal_alignment": 0.9992399699985981,
+          "diagonal_error": 6.926664575246377e-07,
+          "encoder_parameter_norm": 4.171054320874038,
+          "outcome_nll": 1.1183100938796997,
+          "projector_parameter_norm": 39.46368879509258,
+          "raw_variance_first": 0.7337469533085823,
+          "raw_variance_second": 0.733096644282341,
+          "redundancy": 0.4261485751127777,
+          "treatment_effect_rmse": 0.6711804866790771,
+          "treatment_nll": 0.6084848046302795
+        },
+        "full": {
+          "active_fraction": 1.0,
+          "covariance_top_eigenvalue_share": 0.06203770652523342,
+          "diagonal_alignment": 0.9753103032708168,
+          "diagonal_error": 0.0006631964879488805,
+          "encoder_parameter_norm": 4.254260498178092,
+          "outcome_nll": 1.113981008529663,
+          "projector_parameter_norm": 39.924166562364015,
+          "raw_variance_first": 0.04365070257335901,
+          "raw_variance_second": 0.04360767989419401,
+          "redundancy": 0.02196632381054753,
+          "treatment_effect_rmse": 0.6777282953262329,
+          "treatment_nll": 0.5383822321891785
+        },
+        "no_pretrain": {
+          "outcome_nll": 1.1274502277374268,
+          "treatment_effect_rmse": 0.591344952583313,
+          "treatment_nll": 0.5711378455162048
+        },
+        "vicreg": {
+          "active_fraction": 1.0,
+          "covariance_top_eigenvalue_share": 0.08738583231094005,
+          "diagonal_alignment": 0.9985189326107502,
+          "diagonal_error": 2.3888523799087125e-06,
+          "encoder_parameter_norm": 4.675891623826036,
+          "outcome_nll": 1.135492205619812,
+          "projector_parameter_norm": 42.11637622696015,
+          "raw_variance_first": 0.37267340160906315,
+          "raw_variance_second": 0.37278631143271923,
+          "redundancy": 0.031869549107411604,
+          "treatment_effect_rmse": 0.82368403673172,
+          "treatment_nll": 0.6602636575698853
+        }
+      },
+      "base": 523,
+      "paired_differences": {
+        "redundancy_diagonal_only_minus_full": 0.4041822513022302,
+        "outcome_nll_full_minus_no_pretrain": -0.013469219207763672
+      }
+    },
+    {
+      "arms": {
+        "diagonal_only": {
+          "active_fraction": 1.0,
+          "covariance_top_eigenvalue_share": 0.6549339037405059,
+          "diagonal_alignment": 0.9993761889636517,
+          "diagonal_error": 4.679690785991397e-07,
+          "encoder_parameter_norm": 4.186259059728836,
+          "outcome_nll": 1.2522999048233032,
+          "projector_parameter_norm": 39.449095046068685,
+          "raw_variance_first": 0.9270103722810745,
+          "raw_variance_second": 0.9276167191565037,
+          "redundancy": 0.5077540123299377,
+          "treatment_effect_rmse": 1.9571176767349243,
+          "treatment_nll": 0.8835753798484802
+        },
+        "full": {
+          "active_fraction": 1.0,
+          "covariance_top_eigenvalue_share": 0.05759591437096694,
+          "diagonal_alignment": 0.9790059067308903,
+          "diagonal_error": 0.00047463790360779967,
+          "encoder_parameter_norm": 4.261667756713195,
+          "outcome_nll": 1.163854956626892,
+          "projector_parameter_norm": 39.9055447648778,
+          "raw_variance_first": 0.04069010051898658,
+          "raw_variance_second": 0.04073011362925172,
+          "redundancy": 0.020831020377620094,
+          "treatment_effect_rmse": 1.315793514251709,
+          "treatment_nll": 0.8374807834625244
+        },
+        "no_pretrain": {
+          "outcome_nll": 1.170020341873169,
+          "treatment_effect_rmse": 1.3703395128250122,
+          "treatment_nll": 0.7604981660842896
+        },
+        "vicreg": {
+          "active_fraction": 1.0,
+          "covariance_top_eigenvalue_share": 0.08254078628980825,
+          "diagonal_alignment": 0.9978610649704933,
+          "diagonal_error": 5.074674888305708e-06,
+          "encoder_parameter_norm": 4.741355260219776,
+          "outcome_nll": 1.192685842514038,
+          "projector_parameter_norm": 41.96298345249677,
+          "raw_variance_first": 0.3781911041587591,
+          "raw_variance_second": 0.378339821472764,
+          "redundancy": 0.03010763487470593,
+          "treatment_effect_rmse": 1.6589964628219604,
+          "treatment_nll": 0.9024925231933594
+        }
+      },
+      "base": 631,
+      "paired_differences": {
+        "redundancy_diagonal_only_minus_full": 0.4869229919523176,
+        "outcome_nll_full_minus_no_pretrain": -0.0061653852462768555
+      }
+    }
+  ]
+}
