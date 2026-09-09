@@ -1336,11 +1336,16 @@ def test_every_card_value_the_plan_also_carries_agrees_with_it() -> None:
 
 
 def test_the_card_records_the_implementation_it_now_has() -> None:
-    """The status ladder is card content, and `implemented` is a claim about
-    this file (`FIDELITY.md` §1.1)."""
+    """The status ladder is card content, and `smoke-passing` is a claim about
+    this file and about `tests/smoke/test_barlow_twins.py` (`FIDELITY.md`
+    §1.1: Tier 1 passes)."""
     text = CARD.read_text(encoding="utf-8")
-    assert "**Status:** `implemented`" in text
+    assert "**Status:** `smoke-passing`" in text
     assert "| Recipe implemented, Tier 0 passing (status → `implemented`) |" in text
+    assert (
+        "| Tier 1 study run on bases 419/523/631 (status → `smoke-passing`) |" in text
+    )
+    assert (CARD.parents[2] / "tests/smoke/test_barlow_twins.py").is_file()
     assert "0.0051" in text
     assert "390000+100*i" in text
     assert "| [`barlow_twins.md`](recipes/barlow_twins.md) | `barlow_twins` |" in (
