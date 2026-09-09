@@ -1,13 +1,17 @@
 # Recipe spec card: barlow_twins
 
-**Status:** `smoke-passing`
+**Status:** `reproduced`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 **Agent route:** read §2–§5 before implementation; §6 defines acceptance.
-`xty2.recipes.barlow_twins` compiles, Tier 0 passes, and §6.3's three-seed
-Tier 1 study runs in `tests/smoke/test_barlow_twins.py`; its numbers are in
-[the Tier 1 note](../experiments/2026-09-09-barlow-twins-smoke.md). No §6
-Tier 2 result exists, so no bound in §6.4 has been assessed at its full budget.
+`xty2.recipes.barlow_twins` compiles, Tier 0 passes, §6.3's three-seed Tier 1
+study runs in `tests/smoke/test_barlow_twins.py` — its numbers are in
+[the Tier 1 note](../experiments/2026-09-09-barlow-twins-smoke.md) — and §6.2's
+ten-seed Tier 2 study runs in `xty2/evaluation/benchmarks/barlow_twins.py`
+through `tests/benchmarks/test_barlow_twins.py`. All four §6.4 bounds were
+assessed at §4's full budget and all four pass; §6.1 records the run and
+[the Tier 2 note](../experiments/2026-09-09-barlow-twins-tier2.md) reads it.
+The claim is §2's project-local mechanism claim, not an ImageNet reproduction.
 
 ## 1. Provenance
 
@@ -272,7 +276,7 @@ reproduction:
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
-| | | | | |
+| 2026-09-09 | `eb47d8bcf810` | full_arm_diagonal_alignment<br>full_arm_active_fraction<br>off_diagonal_ablation_redundancy_gap<br>pretraining_outcome_NLL_cost | 0.989238 +/- 0.000688<br>1 +/- 0<br>0.539975 +/- 0.0139<br>-0.0098348 +/- 0.00607 nat/row | yes |
 
 ### 6.2 Fixed DGP and paired execution
 
@@ -401,6 +405,7 @@ update land together. A successful status refers only to this local mechanism.
 | Source, plan and implementation reviewed; input validation corrected | Codex | 2026-09-09 |
 | Tier 1 study run on bases 419/523/631 (status → `smoke-passing`) | Claude | 2026-09-09 |
 | Tier 1 pairing/scaler/buffer checks strengthened and effect diagnostic added | Codex | 2026-09-09 |
+| Tier 2 benchmark registered and ten-seed study run (status → `reproduced`) | Claude | 2026-09-09 |
 
 Drafted from pinned author source on 2026-09-09. Review accepted the
 prospective §6.4 bounds, the explicit oracle-view scope and §5.1's two
@@ -411,19 +416,14 @@ the surrounding quotes were a mismatch against the identical value `DataSpec`
 composes. They are now written the way `vicreg.md` §4 writes them, and all
 sixty-six non-`n/a` §4 leaves are compared by value rather than by presence.
 
-Status is now `smoke-passing`. §6.3's Tier 1 packet ran on bases 419, 523 and
-631 at the declared 200/300-step overrides with all four §6.2 arms, and it
-asserts wiring only: finite losses and gradients, a normalised propensity, the
-encoder transfer and stage transition, the arms' shared initial tensors, row
-streams and cached view draws, and no projector in fine-tuning. §6.4's metrics
-are reported beside it and none of its four bounds is assessed, because each is
-a ten-seed statement at §4's full budget. Eight mutants were injected one at a
-time and each was seen to fail a named assertion; the experiment note lists
-them with the measured arms.
-
-No benchmark module, `RECIPES` entry or §6.1 ledger row is added, since
-`CLAUDE.md` requires those three to land with a result rather than ahead of
-one. §6.1's placeholder row is therefore still the template's empty row.
+§6.3's Tier 1 packet ran on bases 419, 523 and 631 at the declared 200/300-step
+overrides with all four §6.2 arms, and it asserts wiring only: finite losses and
+gradients, a normalised propensity, the encoder transfer and stage transition,
+the arms' shared initial tensors, row streams and cached view draws, and no
+projector in fine-tuning. §6.4's metrics are reported beside it and none of its
+four bounds is assessed there, because each is a ten-seed statement at §4's full
+budget. Eight mutants were injected one at a time and each was seen to fail a
+named assertion; the experiment note lists them with the measured arms.
 
 The implementation review added rejection of scalar, zero-width and mismatched
 embedding shapes: mismatched widths previously let the diagonal term silently
@@ -441,3 +441,16 @@ checks actual treatment-mask identities across arms, all four fitted scaling
 statistics, and checkpoint buffers as well as parameters. It adds the §6.4
 conditional-mean treatment-effect RMSE diagnostic in original outcome units.
 All three declared seeds pass; the recipe and acceptance bounds are unchanged.
+
+Status is now `reproduced`. §6.2's ten-seed study ran at bases 390000+100*i on
+committed `eb47d8bcf810`, at §4's 1,000/3,000-step budget with all four arms,
+and §6.1 records it. All four §6.4 bounds pass by more than one standard error:
+diagonal alignment 0.989238 ± 0.000688 against ≥ 0.5, active fraction exactly
+1.0 on every seed against ≥ 0.9, the paired redundancy gap 0.539975 ± 0.013896
+against ≥ 0.01, and the outcome transfer cost −0.009835 ± 0.006073 nat/row
+against ≤ 0.05. Neither the recipe, the §6 protocol nor a bound was changed to
+obtain them, and the [Tier 2 note](../experiments/2026-09-09-barlow-twins-tier2.md)
+carries the per-seed values, the audit diagnostics and the mutation evidence.
+The result is this fixture's mechanism claim at this budget: §2's exclusions —
+ImageNet, superiority to VICReg, general tabular augmentation validity and
+causal identification — are unchanged by it.
