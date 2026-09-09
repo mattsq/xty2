@@ -28,9 +28,9 @@ from xty2.evaluation.benchmarks.common import (
     training_dataset,
     two_cluster_population,
 )
+from xty2.evaluation.vicreg_views import OracleSymmetry
 from xty2.recipes import vicreg
 from xty2.training import STREAM_STRIDE, executors, run_program
-from xty2.views import FeatureCorruption
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -66,7 +66,11 @@ def test_paired_mechanism_study(base: int, monkeypatch: pytest.MonkeyPatch) -> N
 
     for arm in ("full", "no_variance", "no_covariance", "no_pretrain"):
         torch.manual_seed(base + 6)
-        recipe = vicreg(schema)
+        recipe = vicreg(
+            schema,
+            first_transforms=(OracleSymmetry(),),
+            second_transforms=(OracleSymmetry(),),
+        )
         pretrain, fit = recipe.program
         pretrain = replace(pretrain, steps=200)
         fit = replace(fit, steps=300)
@@ -222,7 +226,7 @@ def test_paired_mechanism_study(base: int, monkeypatch: pytest.MonkeyPatch) -> N
                 for b in range(16):
                     batch = take(heldout, torch.arange(b * 128, (b + 1) * 128))
                     for branch in range(2):
-                        view = FeatureCorruption(rate=0.6, columns=None).apply(
+                        view = OracleSymmetry().apply(
                             batch,
                             schema,
                             population=population,
@@ -237,7 +241,6 @@ def test_paired_mechanism_study(base: int, monkeypatch: pytest.MonkeyPatch) -> N
                         centred = z - z.mean(0)
                         covariance = centred.T @ centred / 127
                         diagonal = covariance.diagonal().square().sum()
-                        assert float(diagonal) > 0
                         off = (
                             covariance.square()
                             .masked_select(~torch.eye(z.shape[1], dtype=torch.bool))
@@ -246,8 +249,14 @@ def test_paired_mechanism_study(base: int, monkeypatch: pytest.MonkeyPatch) -> N
                         spread.append(
                             float((z.var(0, correction=1) + 1e-4).sqrt().mean())
                         )
-                        redundancy.append(float(off / diagonal))
-                metrics.update(spread=sum(spread) / 32, redundancy=sum(redundancy) / 32)
+                        # A collapsed no-variance control has no defined ratio.
+                        # Match Tier 2: only full/no-covariance report redundancy.
+                        if arm in ("full", "no_covariance"):
+                            assert float(diagonal) > 0, arm
+                            redundancy.append(float(off / diagonal))
+                metrics["spread"] = sum(spread) / 32
+                if arm in ("full", "no_covariance"):
+                    metrics["redundancy"] = sum(redundancy) / 32
                 assert all(
                     torch.equal(value, run.graph.state_dict()[name])
                     for name, value in before.items()

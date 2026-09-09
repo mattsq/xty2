@@ -33,6 +33,7 @@ from xty2.core import (
     Stage,
     UniformSampler,
     ViewSpec,
+    ViewTransform,
     WeightDecay,
     Weighted,
 )
@@ -45,7 +46,6 @@ from xty2.objectives import (
     ObservedTreatmentNLL,
 )
 from xty2.recipes.tarnet import OUTCOME_WIDTHS
-from xty2.views import FeatureCorruption
 
 CORRUPTED_A = Realisation(view="corrupted_a")
 """`t(x)`: one of the two transformations of eq. (7)'s inner sum."""
@@ -56,7 +56,7 @@ where the anchor is the clean row — so `DEFAULT` appears in no pretraining
 pass."""
 
 VICREG_CORRUPTION_RATE = 0.6
-"""`c`, card §4 and deviation 3.
+"""Historical marginal-corruption rate, withdrawn in card deviation 3.
 
 Not inherited from `scarf`: the paper's transformations are image crops, blurs
 and solarisation, so there is no VICReg rate to reproduce. 0.6 is this card's
@@ -166,7 +166,11 @@ transition.
 
 
 def vicreg(
-    schema: Schema, *, recompute_rules: tuple[RecomputeRule, ...] = ()
+    schema: Schema,
+    *,
+    first_transforms: tuple[ViewTransform, ...],
+    second_transforms: tuple[ViewTransform, ...],
+    recompute_rules: tuple[RecomputeRule, ...] = (),
 ) -> Recipe:
     """Build the two-stage recipe from `docs/recipes/vicreg.md`."""
     return Recipe(
@@ -303,17 +307,13 @@ def vicreg(
             # independent, and the three objectives then read one cached pair.
             ViewSpec(
                 name="corrupted_a",
-                transforms=(
-                    FeatureCorruption(rate=VICREG_CORRUPTION_RATE, columns=None),
-                ),
+                transforms=first_transforms,
                 preserves=PRESERVED_FIELDS,
                 recompute_rules=recompute_rules,
             ),
             ViewSpec(
                 name="corrupted_b",
-                transforms=(
-                    FeatureCorruption(rate=VICREG_CORRUPTION_RATE, columns=None),
-                ),
+                transforms=second_transforms,
                 preserves=PRESERVED_FIELDS,
                 recompute_rules=recompute_rules,
             ),

@@ -20,6 +20,7 @@ import ast
 import re
 from collections.abc import Mapping
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -63,7 +64,7 @@ from xty2.objectives import (
     EmbeddingVariance,
 )
 from xty2.objectives.vicreg import MINIMUM_ROWS
-from xty2.recipes import vicreg
+from xty2.recipes import vicreg as build_vicreg
 from xty2.recipes.vicreg import (
     CORRUPTED_A,
     CORRUPTED_B,
@@ -74,8 +75,15 @@ from xty2.recipes.vicreg import (
     VICREG_ENCODER_WIDTHS,
 )
 from xty2.training.loading import build_population
+from xty2.views import FeatureCorruption
 
 from tests.invariants.conftest import backward
+
+vicreg = partial(
+    build_vicreg,
+    first_transforms=(FeatureCorruption(rate=0.6, columns=None),),
+    second_transforms=(FeatureCorruption(rate=0.6, columns=None),),
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 CARD = ROOT / "docs" / "recipes" / "vicreg.md"
@@ -1095,19 +1103,25 @@ def test_small_off_diagonal_energy_survives_large_diagonal_energy() -> None:
 
 
 def test_the_card_records_the_implementation_it_now_has() -> None:
-    """§6.1 carries a recorded ten-seed run, so the status is its outcome.
-
-    `deviating` rather than `reproduced` because one of §6.4's four targets —
-    full-arm embedding spread against `>= 0.5` — is missed on every replicate,
-    and `FIDELITY.md` §3 forbids retuning a tolerance after seeing a result.
-    The written §5 explanation the status requires is asserted here too, since
-    `assert_result_matches_card` only sees it on a nightly.
-    """
+    """Keep historical failure and approved scope legible through promotion."""
     text = CARD.read_text(encoding="utf-8")
-    assert "**Status:** `deviating`" in text
-    assert "### Tier 2 outcome" in text
+    assert "`a9fec5cc9623`" in text
+    assert "target-preserving" in text
+    assert "290000+100*i" in text
     assert "full_arm_embedding_spread" in text
     assert "| Card reviewed (status → `reviewed`) | Claude |" in text
     assert "| [`vicreg.md`](recipes/vicreg.md) | `vicreg` |" in (
         CARD.parents[1] / "RECIPES.md"
     ).read_text(encoding="utf-8")
+
+
+def test_caller_supplies_both_view_policies_without_recipe_substitution() -> None:
+    recipe = build_vicreg(
+        _schema(),
+        first_transforms=(FeatureCorruption(rate=0.2, columns=None),),
+        second_transforms=(FeatureCorruption(rate=0.8, columns=None),),
+    )
+    assert [view.transforms for view in compile(recipe).plan.views] == [
+        ("FeatureCorruption(rate=0.2, columns=all)",),
+        ("FeatureCorruption(rate=0.8, columns=all)",),
+    ]

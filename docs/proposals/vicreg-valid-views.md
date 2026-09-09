@@ -1,13 +1,14 @@
 # Proposed VICReg valid-view contract amendment
 
-**State: proposed for review; not the current recipe contract.**
+**State: approved by the repository owner on 2026-09-09; implementation and prospective confirmation authorised.**
 
 The [completed paired experiment](../experiments/2026-09-08-vicreg-views.md)
 passes all four unchanged targets under a predeclared, nontrivial,
 target-preserving view policy. Marginal corruption still fails spread.
 `CLAUDE.md` rule 1 and `FIDELITY.md` section 4 require an amended card to be
 reviewed before changing the recipe's normative mechanics. The current card
-therefore remains `deviating`; this proposal makes the next review concrete.
+remains `deviating` until the authorised fresh confirmation is complete.
+The owner approved this exact scope; no further mechanics review is pending.
 
 ## Recommended claim
 

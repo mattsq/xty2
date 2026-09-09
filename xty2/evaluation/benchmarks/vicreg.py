@@ -13,7 +13,7 @@ what transferring the encoder costs the factual outcome fit.
 **What this module measures and what it does not.** Nothing here is a claim
 about Bardes et al.'s ImageNet numbers. Card section 5 records five judgement
 departures — the author-code reductions, a tabular encoder and a 512-wide
-expander, feature corruption in place of image transformations, Adam on a fixed
+expander, oracle DGP symmetries in place of image transformations, Adam on a fixed
 1,000/3,000-step budget in place of LARS on an epoch schedule, and a local XTY
 fitting stack — and the section 6 protocol exists to test the *mechanism* under
 those departures on this fixture.
@@ -91,21 +91,27 @@ from xty2.evaluation.causal import (
 )
 from xty2.evaluation.predictive import treatment_nll
 from xty2.evaluation.reporting import BenchmarkResult, MetricResult, ReproductionSpec
+from xty2.evaluation.vicreg_views import (
+    PRESERVATION_TOLERANCE,
+    OracleSymmetry,
+    fit_with_trace,
+    targets,
+)
 from xty2.recipes import vicreg
 from xty2.recipes.vicreg import (
     SAMPLE_CORRECTION,
     VARIANCE_EPSILON,
     VICREG_BATCH_SIZE,
-    VICREG_CORRUPTION_RATE,
+    VICREG_PRETRAIN_STEPS,
 )
-from xty2.training import STREAM_STRIDE, ProgramResult, run_program
+from xty2.training import STREAM_STRIDE, ProgramResult
 from xty2.training.loading import build_population, iterate
 from xty2.views import FeatureCorruption
 
 _TRAIN_ROWS = 1_024
 _TEST_ROWS = 2_048
-_BASE_SEED = 190_000
-"""Card §6.2: replicate `i` runs at `base = 190000 + 100 * i`."""
+_BASE_SEED = 290_000
+"""Card §6.2: replicate `i` runs at `base = 290000 + 100 * i`."""
 
 _EVAL_BATCHES = 16
 """Card §6.2: 16 disjoint held-out batches of `VICREG_BATCH_SIZE` rows."""
@@ -190,7 +196,8 @@ def run(
             ),
             "variant": (
                 "full VICReg versus paired zero-variance, zero-covariance and "
-                "no-pretraining arms"
+                "no-pretraining arms; target-preserving fixture views; "
+                "fresh bases 290000+100*i"
             ),
             "split": (
                 "1024 train with 40 observed treatments; 2048 fully observed "
@@ -267,6 +274,10 @@ def run(
                 "pretraining_treatment_NLL_cost",
                 "view_induced_bayes_propensity_shift",
                 "signal_free_corruption_bayes_propensity_shift",
+                "view_induced_outcome_mean_shift",
+                "view_max_target_error",
+                "view_distinct_row_fraction",
+                "view_changed_coordinates",
             )
         ),
     )
@@ -286,7 +297,9 @@ def run(
             ),
         ),
         interpretation=(
-            "This is a project-local mechanism study, not a reproduction of "
+            "This is the approved valid-view fixture mechanism study, using "
+            "privileged DGP symmetries and fresh bases 290000+100*i. It is "
+            "not a reproduction of "
             "Bardes et al. The three pretraining arms differ by exactly one of "
             "equation (6)'s coefficients and the fourth removes pretraining, so "
             "the spread and redundancy gaps attribute an effect to the variance "
@@ -315,10 +328,18 @@ def _replicate(index: int) -> dict[str, float]:
 
     runs: dict[str, CompiledRun] = {}
     results: dict[str, ProgramResult] = {}
+    traces: dict[str, dict[str, str]] = {}
     initial: dict[str, Tensor] | None = None
     for arm in _ARMS:
         torch.manual_seed(base + 6)
-        recipe = _arm(vicreg(schema), arm)
+        recipe = _arm(
+            vicreg(
+                schema,
+                first_transforms=(OracleSymmetry(),),
+                second_transforms=(OracleSymmetry(),),
+            ),
+            arm,
+        )
         state = {
             name: value.clone() for name, value in recipe.system.state_dict().items()
         }
@@ -329,7 +350,7 @@ def _replicate(index: int) -> dict[str, float]:
         ):
             raise RuntimeError(f"vicreg arm {arm!r} does not start where 'full' does")
         runs[arm] = compile(recipe)
-        results[arm] = run_program(
+        results[arm], traces[arm] = fit_with_trace(
             runs[arm],
             {stage.name: data for stage in recipe.program},
             # Card §6.2: the ablation's fit is stage 0, so its execution seed
@@ -337,6 +358,10 @@ def _replicate(index: int) -> dict[str, float]:
             # 1 walks. The assertions below check that it landed there.
             seed=base + 10_000 + (STREAM_STRIDE if arm == "no_pretrain" else 0),
         )
+    if any(traces[arm] != traces["full"] for arm in _PRETRAINED):
+        raise RuntimeError("actual pretraining row/view draws differ across arms")
+    if int(traces["full"]["calls"]) != 2 * VICREG_PRETRAIN_STEPS:
+        raise RuntimeError("pretraining did not execute exactly two views per step")
     assert initial is not None
     _require_one_stream(runs, results, data, base=base)
     _require_pretraining_touched_only_what_it_declares(runs, results, initial)
@@ -679,7 +704,7 @@ def _held_out_views(
     generators are the card's, seeded per batch and per branch so that the two
     branches of one batch are independent draws rather than one draw twice.
     """
-    corruption = FeatureCorruption(rate=VICREG_CORRUPTION_RATE, columns=None)
+    corruption = OracleSymmetry()
     views: list[XTYBatch] = []
     for index, batch in enumerate(_held_out_batches(test, population)):
         for branch in range(_BRANCHES):
@@ -861,10 +886,25 @@ def _view_damage(
     control = FeatureCorruption(rate=1.0, columns=signal_free)
     shift: list[float] = []
     control_shift: list[float] = []
+    outcome_shift: list[float] = []
+    target_errors: list[float] = []
+    changed: list[float] = []
+    distinct: list[float] = []
     for index, batch in enumerate(_held_out_batches(test, population)):
         clean = _bayes_propensity(_original_scale(batch.x, population))
         for branch in range(_BRANCHES):
             view = views[_BRANCHES * index + branch]
+            errors = (
+                targets(_original_scale(view.x, population))
+                - targets(_original_scale(batch.x, population))
+            ).abs()
+            outcome_shift.append(float(errors[:, 1:].mean()))
+            target_errors.append(float(errors.max()))
+            changed.append(float((view.x != batch.x).float().sum(-1).mean()))
+            if branch == 1:
+                distinct.append(
+                    float((view.x != views[2 * index].x).any(-1).float().mean())
+                )
             corrupted = _bayes_propensity(_original_scale(view.x, population))
             shift.append(float((corrupted - clean).abs().mean()))
             generator = torch.Generator().manual_seed(
@@ -879,6 +919,12 @@ def _view_damage(
                 )
             )
             control_shift.append(float((unaffected - clean).abs().max()))
+    if (
+        max(target_errors) > PRESERVATION_TOLERANCE
+        or (math.fsum(distinct) / len(distinct)) < 0.99
+        or _mean(changed) < 2.8
+    ):
+        raise RuntimeError("valid-view preservation or nontriviality contract failed")
     if max(control_shift) != 0.0:
         raise RuntimeError(
             "corrupting only the signal-free columns moved card §6.4's Bayes "
@@ -888,4 +934,8 @@ def _view_damage(
     return {
         "view_induced_bayes_propensity_shift": _mean(shift),
         "signal_free_corruption_bayes_propensity_shift": _mean(control_shift),
+        "view_induced_outcome_mean_shift": _mean(outcome_shift),
+        "view_max_target_error": max(target_errors),
+        "view_distinct_row_fraction": math.fsum(distinct) / len(distinct),
+        "view_changed_coordinates": _mean(changed),
     }

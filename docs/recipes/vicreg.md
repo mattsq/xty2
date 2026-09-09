@@ -6,22 +6,17 @@
 > **Agent route:** read §2–§5 to implement or audit fidelity;
 > §6 for benchmark and reporting work.
 
-This card selects BACKLOG.md §5.1. The card was reviewed and the recipe is
-implemented: `xty2.recipes.vicreg`, with Tier 0 in
-`tests/invariants/test_vicreg.py` and the three-seed, four-arm Tier 1 study in
-`tests/smoke/test_vicreg.py`. The ten-seed Tier 2 study in
-`xty2/evaluation/benchmarks/vicreg.py` has now run and meets three of §6.4's
-four targets, so the status is `deviating` (`FIDELITY.md` §1.1): both
-attribution targets and the outcome guardrail pass, and full-arm embedding
-spread is `0.268395 +/- 0.00169` against a predeclared `>= 0.5`.
+The original marginal-corruption recipe failed the ten-seed spread target
+(`0.268395 +/- 0.00169` against `>=0.5`), while passing both attribution
+targets and the outcome guardrail. Its full record remains in §6.1 and the
+historical audit below.
 
-The miss was audited before it was recorded, and the audit is the reason no
-threshold moved: the binding constraint is deviation 3's view strength acting
-through the invariance term, not the step budget, the learning rate or the
-covariance term. Smoke results and review findings are in
-[`../experiments/2026-09-08-vicreg-smoke.md`](../experiments/2026-09-08-vicreg-smoke.md);
-the Tier 2 result and the spread audit are in
-[`../experiments/2026-09-08-vicreg-tier2.md`](../experiments/2026-09-08-vicreg-tier2.md).
+The owner approved the [valid-view amendment](../proposals/vicreg-valid-views.md)
+on 2026-09-09 after the [paired diagnostic](../experiments/2026-09-08-vicreg-views.md).
+The current contract requires explicit views and tests target-preserving fixture
+symmetries on ten fresh confirmation seeds. The status remains `deviating`
+until that confirmation passes all four unchanged bounds. This is a
+fixture-specific mechanism claim, with privileged DGP knowledge disclosed.
 
 ## 1. Provenance
 
@@ -38,9 +33,11 @@ the Tier 2 result and the spread audit are in
 
 - **Estimand:** paired changes in embedding collapse/redundancy and held-out
   treatment and factual outcome NLL after representation pretraining.
-- **Claim to test:** on the fixed XTY fixture, explicit variance preservation
-  maintains embedding spread, covariance regularisation reduces redundant
-  dimensions, and transferring the encoder does not materially harm outcome fit.
+- **Claim to test:** on the fixed XTY fixture, with the target-preserving
+  transformations in §6.2, variance regularisation prevents collapse, covariance
+  regularisation reduces redundant dimensions, and encoder transfer does not
+  materially harm factual outcome fit. This is a fixture-specific mechanism
+  reproduction, not a generally applicable augmentation selector.
 - **Nearest shipped baseline:** `scarf.md`, the same two-stage pattern. The
   controlled attribution arms below differ by exactly one VICReg coefficient.
   A comparison with shipped SCARF would change several ingredients and is not
@@ -93,7 +90,7 @@ exports now: `xty2.components.VICRegExpander` and the three objectives in
 
 | Paper symbol | Meaning | xty2 Port | xty2 Objective / Component |
 |---|---|---|---|
-| x, x' | independent transformations of the same rows | `X_RAW` at `corrupted_a`, `corrupted_b` | two `ViewSpec`s, each `FeatureCorruption(rate=0.6, columns=None)` |
+| x, x' | independent transformations of the same rows | `X_RAW` at `corrupted_a`, `corrupted_b` | two `ViewSpec`s with explicitly supplied `first_transforms` and `second_transforms` |
 | f_theta | shared encoder | `X_RAW -> X_REPR` | `MLPEncoder`, four 256-wide ReLU layers |
 | h_phi | shared expander | `X_REPR -> X_PROJ` | **new** `VICRegExpander`, widths (512,512,512), hidden BN/ReLU, linear output |
 | s/d | unnormalised elementwise MSE | both `X_PROJ` realisations | **new** `EmbeddingInvariance`, rows all |
@@ -251,9 +248,11 @@ data:                                            # deviations 3 and 5; section 6
 |---|---|---|---|---|---|
 | 1 | `judgement` | — | Use author-code MSE and variance reductions instead of literal equations (5)–(6). | Reproduce an executable, pinned numerical variant; discrepancy is explicit in §3.1. | Changes relative gradient scales substantially, especially as dimension changes. |
 | 2 | `judgement` | — | Four-layer tabular MLP and 512-wide expander replace ResNet-50 and 8192-wide expander; retain the author's hidden BN/ReLU and bias-free output topology. Encoder uses the SCARF initialisation, expander uses author defaults. | Study an expanding embedding (512 > 256) on the existing tabular problem. This choice survives unlimited framework capacity. | Different capacity and conditioning; no ImageNet number applies. |
-| 3 | `judgement` | — | Two independent empirical feature corruptions at rate 0.6 replace image transformations. | A tabular representation experiment using existing training-population transforms. The SCARF rate is a declared starting choice, not a VICReg default or guaranteed label-preserving operation. | Can erase treatment signal; report view damage and transfer outcomes. |
+| 3 | `withdrawn` | — | Two independent empirical feature corruptions at rate 0.6 replace image transformations. | A tabular representation experiment using existing training-population transforms. The SCARF rate is a declared starting choice, not a VICReg default or guaranteed label-preserving operation. | Can erase treatment signal; report view damage and transfer outcomes. |
 | 4 | `judgement` | — | Adam 0.001, no decay/clipping/schedule, batch 128, 1000 pretrain and 3000 fit steps; single-process float32. | Match the local SCARF-scale protocol rather than §4.2's ImageNet LARS, batch 2048 and epoch schedule. No claim that LARS is unavailable. | Batch statistics, optimisation and compute differ; validate mechanism directly. |
 | 5 | `judgement` | — | Fine-tune the XTY heads, with outcome/treatment weights 1 and missing-treatment weight ramping to 0.5 over 1000 steps; train-only scaling, 40 labels, synthetic evaluation. | Hold the local downstream stack fixed across arms. These are project policies, not paper constants. | Tests transfer under missing treatments; likelihood is not causal identification evidence. |
+
+| 6 | `judgement` | — | Explicit caller-supplied views; the benchmark uses analytic DGP symmetries defined in §6.2. | Approved valid-view amendment, following the paired diagnostic. Preserve treatment and conditional-outcome information rather than marginally replacing informative cells. | Uses privileged fixture knowledge; neither the paper's image augmentation nor a general tabular augmentation. Original deviation 3's failure remains recorded. |
 
 ### 5.1 Framework additions made for this card
 
@@ -281,7 +280,7 @@ not automatic threshold relaxation.
 ```yaml
 reproduction:
   dataset: shared two_cluster_population DGP, 6 features and K=2; section 6.2
-  variant: full VICReg versus paired zero-variance, zero-covariance and no-pretraining arms
+  variant: full VICReg versus paired zero-variance, zero-covariance and no-pretraining arms; target-preserving fixture views; fresh bases 290000+100*i
   split: 1024 train with 40 observed treatments; 2048 fully observed held-out rows
   metric: terminal embedding spread, paired variance and redundancy effects, factual outcome NLL difference; treatment NLL informational
   published: none - project-local tabular adaptation
@@ -305,7 +304,9 @@ Import `two_cluster_population`, `continuous_schema`, `training_dataset` and
 do not transcribe the generator. Use its default `low=SEPARATED` explicitly.
 Only the observed-treatment count and the batch size follow this card.
 
-Tier 2 replicate `i=0..9` uses `base=190000+100*i`: train seed `base+1`, test
+The approved prospective confirmation uses ten fresh seeds, separate from the
+original `190000+100*i` diagnostic. Tier 2 replicate `i=0..9` uses
+`base=290000+100*i`: train seed `base+1`, test
 seed `base+2`, model seed `base+6`, execution seed `base+10000`. Row offsets are
 0 and 10000. All outcomes are observed. Apply one shared MCAR mask through
 `DataSpec`; hidden training treatments are available to evaluation only.
@@ -321,10 +322,36 @@ Heads are identical before fine-tuning, and optimiser moments are reset.
 
 Evaluate pretraining embeddings at its final checkpoint, before fine-tuning,
 on 16 disjoint held-out batches of 128 rows, in eval mode with frozen training
-BN buffers. Make two corruption draws per batch from the training population
+BN buffers. Make two symmetry draws per batch using training-only statistics
 with independent generators `base+20000+2*b` and `base+20001+2*b` for batch
 `b=0..15`; reuse these realised views across arms. Fine-tuned predictions use
 the clean held-out rows. No checkpoint selection or test-time fitting occurs.
+
+#### Approved valid-view contract
+
+The owner approved [the exact amendment](../proposals/vicreg-valid-views.md)
+on 2026-09-09. `vicreg` requires two explicit tuples of `ViewTransform` inputs,
+`first_transforms` and `second_transforms`; it has no implicit augmentation.
+The two existing view names and independent RNG streams remain unchanged.
+The plan renders both supplied transformations. The historical rate constant
+0.6 is retained only for explicitly requesting the old corruption variant.
+
+The canonical benchmark supplies `OracleSymmetry` from
+`xty2.evaluation.vicreg_views`, outside recipe assembly. On original
+feature scales, reflect coordinates 0..3 along v=(3,5,0,-8) with probability
+0.5 using x <- x - 2(x dot v)v/(v dot v), independently flip x4's sign with
+probability 0.5, and always redraw x5 from its empirical training marginal.
+Unscale/rescale using only training statistics; preserve x2 bit-for-bit.
+This preserves sum(x0..x3), 0.5*x0-0.3*x1, x2, and x4 squared, hence Bayes
+propensity and both conditional outcome means. No observed label is read.
+Check maximum target error <=2e-5, non-identity, independent branches, and
+training-only donor/scaler provenance. Report outcome-mean shift alongside
+propensity shift. The x4/x5 control below preserves propensity only.
+
+All four numerical bounds, loss coefficients, architectures, batch sizes,
+training budgets, split sizes and seed offsets stay unchanged. No tuning or
+checkpoint selection is permitted. Promote only after all four bounds pass
+on the committed implementation's fresh ten-seed confirmation.
 
 ### 6.3 Tier 0 and Tier 1 contracts
 
@@ -408,7 +435,7 @@ All three now exist: `xty2/evaluation/benchmarks/vicreg.py`, its `RECIPES`
 entry and `tests/benchmarks/test_vicreg.py`, with the §6.1 row above measured
 from commit `a9fec5cc9623`.
 
-Three of the four targets pass. The fourth — full-arm spread against `>= 0.5`
+For the historical marginal-corruption contract, three of four targets passed. The fourth — full-arm spread against `>= 0.5`
 — misses on every one of the ten replicates, the largest of which is 0.2768, so
 it is not a seed effect. §5's Tier 2 outcome records the result and
 [`../experiments/2026-09-08-vicreg-tier2.md`](../experiments/2026-09-08-vicreg-tier2.md)
@@ -430,13 +457,13 @@ The subsequent [paired view experiment](../experiments/2026-09-08-vicreg-views.m
 was predeclared at `520fdd4c870e7cdceb8f438a54769b51977b7149` and is complete:
 ten seeds, all three pretraining arms under both view policies, and a shared
 no-pretraining arm. Target-preserving DGP symmetries meet all four unchanged
-bounds (spread `0.766295 +/- 0.003455`); the current marginal-corruption policy
+bounds (spread `0.766295 +/- 0.003455`); the historical marginal-corruption policy
 still fails spread (`0.268756 +/- 0.001818`). Cross-evaluating both models under
 both view distributions retains the large spread increase. This supports the
-augmentation diagnosis without silently replacing this card's current views
-or marking its unchanged recipe reproduced. The
-[proposed valid-view amendment](../proposals/vicreg-valid-views.md) states the
-new claim, explicit oracle advantage and fresh confirmation stream for review.
+augmentation diagnosis. The owner then approved the
+[valid-view amendment](../proposals/vicreg-valid-views.md), including its
+explicit oracle advantage and fresh confirmation stream. The original
+corruption result does not become a success under that amendment.
 
 ## 7. Unknowns
 
@@ -445,14 +472,15 @@ new claim, explicit oracle advantage and fresh confirmation stream for review.
 | Printed reductions differ from author code | Pin the code convention and retain both formulas in §3.1 | Executable reference; deviation 1 records the departure. |
 | Variance estimator correction | Sample variance, correction=1 | Author `Tensor.var` convention and covariance denominator. |
 | Hidden linear biases, final bias, BN defaults and expander initialisation | Hidden bias on, final bias off, default PyTorch Linear/BN initialisation and explicit BN settings in §4 | Author `Projector`; make library defaults explicit. |
-| Appropriate tabular views, width and optimiser | Two empirical corruptions, 512-wide expander, Adam fixed budget | Deliberate experiment choices in §5, not purported source defaults. |
-| No published XTY acceptance thresholds | Fixed effect-size targets in §6.4, review before execution | Distinguish attribution from transfer; no measured spread available yet. |
+| Appropriate tabular views, width and optimiser | Explicit supplied views; oracle fixture symmetries for confirmation, 512-wide expander, Adam fixed budget | Deliberate experiment choices in §5, not purported source defaults. |
+| No published XTY acceptance thresholds | Fixed effect-size targets in §6.4, review before execution | Distinguish attribution from transfer; set before the original run and retained after its failure. |
 
 ## 8. Review
 
 | | Who | Date |
 |---|---|---|
 | Card reviewed (status → `reviewed`) | Claude | 2026-09-08 |
+| Valid-view contract, oracle scope and fresh ten-seed confirmation approved | Repository owner | 2026-09-09 |
 | Plan diffed against §3.2 and §4 | Claude | 2026-09-08 |
 | Recipe implemented, Tier 0 passing (status → `implemented`) | Claude | 2026-09-08 |
 | Author-code audit, covariance stability fix, paired Tier 1 (status → `smoke-passing`) | Codex | 2026-09-08 |

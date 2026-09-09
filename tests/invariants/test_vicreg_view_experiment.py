@@ -4,14 +4,16 @@ from dataclasses import replace
 
 import pytest
 import torch
-from experiments.vicreg_views import OracleSymmetry, fit_with_trace, policy_recipe
+from experiments.vicreg_views import policy_recipe
 from xty2.core import DataSpec, Program, compile
+from xty2.evaluation.benchmarks import vicreg as benchmark
 from xty2.evaluation.benchmarks.common import (
     continuous_schema,
     on_the_training_scale,
     training_dataset,
     two_cluster_population,
 )
+from xty2.evaluation.vicreg_views import OracleSymmetry, fit_with_trace
 from xty2.training.loading import build_population
 
 
@@ -103,3 +105,25 @@ def test_actual_draw_trace_is_paired_and_counts_two_draws_per_step() -> None:
     assert traces[2] == traces[3]
     assert traces[0]["rows"] == traces[2]["rows"]
     assert traces[0]["views"] != traces[2]["views"]
+
+
+def test_benchmark_checks_view_pairs_and_refuses_identity() -> None:
+    schema = continuous_schema(6)
+    train = two_cluster_population(1024, seed=291, row_offset=0)
+    test = two_cluster_population(2048, seed=292, row_offset=10000)
+    recipe = policy_recipe(schema, "oracle")
+    assert isinstance(recipe.data, DataSpec)
+    population = build_population(
+        training_dataset(schema, train.batch), recipe.data, seed=293
+    )
+    views = benchmark._held_out_views(schema, test, population, base=290000)
+    values = benchmark._view_damage(schema, test, population, views, base=290000)
+    assert values["view_max_target_error"] < 2e-5
+    assert values["view_distinct_row_fraction"] > 0.99
+    identities = tuple(
+        batch
+        for batch in benchmark._held_out_batches(test, population)
+        for _ in range(2)
+    )
+    with pytest.raises(RuntimeError, match="nontriviality"):
+        benchmark._view_damage(schema, test, population, identities, base=290000)
