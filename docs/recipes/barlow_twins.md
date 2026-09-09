@@ -1,9 +1,11 @@
 # Recipe spec card: barlow_twins
 
-**Status:** `draft`
+**Status:** `implemented`
+<!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 **Agent route:** read §2–§5 before implementation; §6 defines acceptance.
-This card stops for review. No callable, compiled plan or result exists yet.
+`xty2.recipes.barlow_twins` compiles and Tier 0 passes. No Tier 1 fit has been
+run and no §6 result exists, so no claim in §6.4 has a measurement behind it.
 
 ## 1. Provenance
 
@@ -74,7 +76,8 @@ gradient; do not promise escape from exact collapse.
 
 ### 3.2 Mapping to xty2
 
-Names marked **new** are proposed, not existing exports.
+The three objects marked **new** below were added by the implementing PR and
+are now exports; the remaining rows were already shipped.
 
 | Paper symbol | Meaning | xty2 Port | xty2 Objective / Component |
 |---|---|---|---|
@@ -213,8 +216,8 @@ architecture:
     tarnet_head: K means; fixed Gaussian scale=1.0
     categorical_propensity: K softmax logits
 data:
-  standardisation: "x: zscore fitted on 'train'"
-  outcome_scaling: "y: zscore fitted on 'train'"
+  standardisation: x: zscore fitted on 'train'
+  outcome_scaling: y: zscore fitted on 'train'
   treatment_encoding: n/a
   split_protocol: fixed two-cluster DGP; disjoint train and held-out populations; no test-based selection; training rows are assignment 'train'
   missingness_mechanism: treatment MCAR to a budget of 40 labelled rows, keyed by row_id
@@ -238,12 +241,12 @@ the projector's hidden BN described in the architecture block.
 
 ### 5.1 Framework additions made for this card
 
-Proposed for implementation after review; none are implemented by this PR.
+Both rows were approved at review and are implemented.
 
 | Added | Quadrant (§11.2) | Consumers today | Named second consumer | Why now |
 |---|---|---|---|---|
-| `BarlowTwinsProjector` | Fidelity-bearing, reversible | proposed `barlow_twins` | n/a; existing ports | `VICRegExpander` hard-codes hidden biases; preserve source bias placement without changing VICReg's validated initialisation. |
-| Two cross-correlation objectives and a pure arithmetic helper | Fidelity-bearing, reversible | proposed `barlow_twins` | n/a; existing objective contract | Preserve source reductions and expose the off-diagonal ablation independently. |
+| `BarlowTwinsProjector` | Fidelity-bearing, reversible | `barlow_twins` | n/a; existing ports | `VICRegExpander` hard-codes hidden biases; preserve source bias placement without changing VICReg's validated initialisation. |
+| Two cross-correlation objectives and a pure arithmetic helper | Fidelity-bearing, reversible | `barlow_twins` | n/a; existing objective contract | Preserve source reductions and expose the off-diagonal ablation independently. |
 
 No new port, executor, row population, artifact kind or framework debt. Nothing
 is omitted because the framework cannot express it.
@@ -326,7 +329,8 @@ population variance; B-1 denominator; feature-mean rather than sum reduction;
 within-view covariance instead of cross-correlation; diagonal included in O;
 upper triangle only; one branch detached; epsilon outside sqrt; hidden bias
 enabled; fresh draw per objective; projector leaking into fine-tuning.
-No new tests are introduced by this documentation-only draft.
+Every mutant above was applied to the shipped source and seen to fail at
+least one Tier 0 assertion.
 
 Tier 1 bases `[419, 523, 631]` use the same offsets, split sizes and four arms,
 with 200 pretrain/300 downstream steps and the unchanged 1000-step marginal
@@ -388,8 +392,20 @@ update land together. A successful status refers only to this local mechanism.
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status → `reviewed`) | | |
-| Plan diffed against §3.2 and §4 | | |
+| Card reviewed (status → `reviewed`) | Repository owner | 2026-09-09 |
+| Plan diffed against §3.2 and §4 | Claude | 2026-09-09 |
+| Recipe implemented, Tier 0 passing (status → `implemented`) | Claude | 2026-09-09 |
 
-Drafted from pinned author source on 2026-09-09. Review must approve the
-prospective bounds and the explicit oracle-view scope before implementation.
+Drafted from pinned author source on 2026-09-09. Review accepted the
+prospective §6.4 bounds, the explicit oracle-view scope and §5.1's two
+additions, and made one amendment, which is presentation rather than method:
+§4's `data.standardisation` and `data.outcome_scaling` were written as quoted
+YAML strings, and the card/plan cross-check compares the cell as written, so
+the surrounding quotes were a mismatch against the identical value `DataSpec`
+composes. They are now written the way `vicreg.md` §4 writes them, and all
+sixty-six non-`n/a` §4 leaves are compared by value rather than by presence.
+
+Status is `implemented`, not `smoke-passing`: no Tier 1 fit has been run. No
+benchmark module, `RECIPES` entry or §6.1 ledger row is added either, since
+`CLAUDE.md` requires those three to land with a result rather than ahead of
+one. §6.1's placeholder row is therefore still the template's empty row.

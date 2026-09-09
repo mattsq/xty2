@@ -1,5 +1,18 @@
 """Declarative assemblies of registered pieces; no logic (`DESIGN.md` §9)."""
 
+from xty2.recipes.barlow_twins import (
+    BARLOW_TWINS_BATCH_SIZE,
+    BARLOW_TWINS_ENCODER_WIDTHS,
+    BARLOW_TWINS_JOINT_FIT_STEPS,
+    BARLOW_TWINS_OBSERVED_TREATMENTS,
+    BARLOW_TWINS_PRETRAIN_STEPS,
+    DIAGONAL_WEIGHT,
+    NORMALISATION_EPSILON,
+    OFF_DIAGONAL_WEIGHT,
+    POPULATION_CORRECTION,
+    PROJECTOR_WIDTHS,
+    barlow_twins,
+)
 from xty2.recipes.cnflow import CNFLOW_ENCODER_WIDTHS, cnflow
 from xty2.recipes.comatch import COMATCH_STEPS, comatch
 from xty2.recipes.cycle_dual import (
@@ -98,6 +111,11 @@ from xty2.recipes.vicreg import (
 )
 
 __all__ = [
+    "BARLOW_TWINS_BATCH_SIZE",
+    "BARLOW_TWINS_ENCODER_WIDTHS",
+    "BARLOW_TWINS_JOINT_FIT_STEPS",
+    "BARLOW_TWINS_OBSERVED_TREATMENTS",
+    "BARLOW_TWINS_PRETRAIN_STEPS",
     "CNFLOW_ENCODER_WIDTHS",
     "COMATCH_STEPS",
     "CORRUPTION_RATE",
@@ -107,6 +125,7 @@ __all__ = [
     "CYCLE_DUAL_ENCODER_WIDTHS",
     "CYCLE_DUAL_OUTCOME_WIDTHS",
     "CYCLE_DUAL_POSTERIOR_WIDTHS",
+    "DIAGONAL_WEIGHT",
     "DOUBLEMATCH_STEPS",
     "EMA_DECAY",
     "ENCODER_WIDTHS",
@@ -121,12 +140,16 @@ __all__ = [
     "LARGE_CORRUPTION_RATE",
     "META_FEEDBACK",
     "MISSING_ANCHORS",
+    "NORMALISATION_EPSILON",
+    "OFF_DIAGONAL_WEIGHT",
     "OUTCOME_WIDTHS",
     "OUTER_ROLE",
     "PAWS_SAMPLER",
+    "POPULATION_CORRECTION",
     "POSTERIOR_WIDTHS",
     "PRETRAIN_STEPS",
     "PROJECTION_WIDTHS",
+    "PROJECTOR_WIDTHS",
     "SAMPLE_CORRECTION",
     "SAT",
     "SCARF_ENCODER_WIDTHS",
@@ -157,6 +180,7 @@ __all__ = [
     "VICREG_OBSERVED_TREATMENTS",
     "VICREG_PRETRAIN_STEPS",
     "WEAK_MASK_RATE",
+    "barlow_twins",
     "cnflow",
     "comatch",
     "cycle_dual",
