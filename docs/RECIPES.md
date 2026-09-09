@@ -14,6 +14,7 @@ its evidence. The status line inside each card is authoritative.
 | [`fixmatch.md`](recipes/fixmatch.md) | `fixmatch` | quota sampling and confidence-gated pseudo-labels |
 | [`uda.md`](recipes/uda.md) | `uda` | temperature-sharpened consistency, confidence masking, and training signal annealing |
 | [`scarf.md`](recipes/scarf.md) | `scarf` | corruption-based contrastive pretraining |
+| [`simsiam.md`](recipes/simsiam.md) | none yet (draft) | stop-gradient and predictor ablations for non-contrastive representation pretraining |
 | [`vicreg.md`](recipes/vicreg.md) | `vicreg` | variance-preserving and covariance-regularised representation pretraining |
 | [`doublematch.md`](recipes/doublematch.md) | `doublematch` | FixMatch plus representation consistency |
 | [`flexmatch.md`](recipes/flexmatch.md) | `flexmatch` | stateful class-adaptive confidence thresholds |
