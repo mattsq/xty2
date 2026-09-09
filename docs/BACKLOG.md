@@ -292,6 +292,15 @@ sees, and do not imply that likelihood alone identifies an MNAR problem.
 
 ### 5.1 Contrastive, clustering and redundancy-reduction methods
 
+VICReg is `reproduced` under its approved explicit valid-view contract in
+[`recipes/vicreg.md`](recipes/vicreg.md). The
+[fresh ten-seed confirmation](experiments/2026-09-09-vicreg-confirmation.md)
+passes all four unchanged Tier 2 bounds. The claim is fixture-specific:
+its target-preserving transformations use privileged DGP knowledge and do not
+supply a general tabular augmentation policy. The original marginal-corruption
+adaptation still failed spread; its failure ledger, original audit and
+[paired view diagnostic](experiments/2026-09-08-vicreg-views.md) remain recorded.
+
 Candidates: CoMatch, PAWS, SimMatch, VICReg, Barlow Twins, BYOL, and SimSiam.
 Before tuning, measure representation norm, collapse concentration, and whether
 same-treatment rows are treated as negatives. Batch-coupled objectives must

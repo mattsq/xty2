@@ -111,6 +111,11 @@ from xty2.objectives.uda import (
     UDAStopGrad,
 )
 from xty2.objectives.variational import VariationalTreatmentELBO
+from xty2.objectives.vicreg import (
+    EmbeddingCovariance,
+    EmbeddingInvariance,
+    EmbeddingVariance,
+)
 
 __all__ = [
     "CONSISTENCY_DIVERGENCES",
@@ -131,6 +136,9 @@ __all__ = [
     "CurriculumPseudoLabelTreatmentNLL",
     "CurriculumStatus",
     "CurriculumThreshold",
+    "EmbeddingCovariance",
+    "EmbeddingInvariance",
+    "EmbeddingVariance",
     "FeatureStopGrad",
     "GradPath",
     "InfoNCEContrastive",

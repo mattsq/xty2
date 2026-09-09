@@ -1,0 +1,22 @@
+{
+  "source_commit": "56c77bcea8be468e3fc551aa9717203b6d6753fa",
+  "source_tree": "684f940a84aad548aa842a5f8084d424de003f84",
+  "protocol_sha256": "833039a456f6fa0f42e6c1fe1f556ee4c96d0ada956c68c21334105a64497e1e",
+  "python": "3.12.13",
+  "torch": "2.14.0+cpu",
+  "numpy": "2.4.6",
+  "platform": "Linux-6.18.35-x86_64-with-glibc2.39",
+  "workers": 6,
+  "bases": [
+    190000,
+    190100,
+    190200,
+    190300,
+    190400,
+    190500,
+    190600,
+    190700,
+    190800,
+    190900
+  ]
+}

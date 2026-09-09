@@ -1,0 +1,195 @@
+recipe: vicreg
+purpose: causal
+card: docs/recipes/vicreg.md
+schema: D = 6, K = 2
+
+data
+  split            fixed two-cluster DGP; disjoint train and held-out populations; no test-based selection; training rows are assignment 'train'
+  standardisation  x: zscore fitted on 'train'
+  outcome scaling  y: zscore fitted on 'train'
+  missingness      treatment MCAR to a budget of 40 labelled rows, keyed by row_id
+
+views
+  corrupted_a
+    preserves  fold_id, row_id, t, t_observed, weight, y, y_observed
+    affects    x0, x1, x3, x4, x5
+    transform  OracleSymmetry(reflect=(3,5,0,-8),p=0.5; sign_x4,p=0.5; donor_x5)
+  corrupted_b
+    preserves  fold_id, row_id, t, t_observed, weight, y, y_observed
+    affects    x0, x1, x3, x4, x5
+    transform  OracleSymmetry(reflect=(3,5,0,-8),p=0.5; sign_x4,p=0.5; donor_x5)
+
+components (topological order)
+  mlp_encoder             [x] -> [x_repr]
+  vicreg_expander         [x_repr] -> [x_proj]
+  tarnet_head             [x_repr] -> [p(y|x,t)]
+  categorical_propensity  [x_repr] -> [p(t|x)]
+
+data lineage
+  mlp_encoder             x <- source
+  vicreg_expander         x_repr <- mlp_encoder
+  tarnet_head             x_repr <- mlp_encoder
+  categorical_propensity  x_repr <- mlp_encoder
+  reads raw y directly:  none
+  depends on raw y:      none
+
+stage pretrain
+  rows: all
+  executor: gradient
+  sampler: uniform, batch_size=128, without replacement
+  steps: 1000
+  optimisation
+    optimiser     adam(betas=(0.9, 0.999), eps=1e-08)
+    lr            0.001
+    lr schedule   constant 1.0
+    weight decay  none
+    clipping      none
+  forward passes (2)
+    view=corrupted_a params=student: mlp_encoder -> vicreg_expander
+    view=corrupted_b params=student: mlp_encoder -> vicreg_expander
+  objectives
+    embedding_invariance  rows all  reduction mean
+      weight    constant 25.0
+      setting   branches = x_proj @ view=corrupted_a params=student and x_proj @ view=corrupted_b params=student
+      setting   value = mean over eligible rows and over d of (z - z')^2
+      setting   reduction = author F.mse_loss, elementwise; eq. (5) divided by d
+      setting   nothing is detached; both branches carry gradient
+      requires  x_proj @ view=corrupted_a params=student, x_proj @ view=corrupted_b params=student
+    embedding_variance    rows all  reduction mean
+      weight    constant 25.0
+      setting   branches = x_proj @ view=corrupted_a params=student and x_proj @ view=corrupted_b params=student
+      setting   value = (v(Z) + v(Z')) / 2, v(Z) = mean_j max(0, 1.0 - sqrt(Var(z^j) + 0.0001))
+      setting   Var over the eligible rows, correction = 1
+      setting   epsilon is inside the square root, not a floor on the hinge
+      setting   the author averages the two branches; eq. (6) sums them
+      setting   refuses fewer than 2 eligible rows
+      requires  x_proj @ view=corrupted_a params=student, x_proj @ view=corrupted_b params=student
+    embedding_covariance  rows all  reduction mean
+      weight    constant 1.0
+      setting   branches = x_proj @ view=corrupted_a params=student and x_proj @ view=corrupted_b params=student
+      setting   value = c(Z) + c(Z'), c(Z) = (1/d) * sum over off-diagonal C(Z)_ij^2
+      setting   C over the eligible rows, denominator n - 1
+      setting   the diagonal is excluded: it is the variance term's target
+      setting   refuses fewer than 2 eligible rows
+      requires  x_proj @ view=corrupted_a params=student, x_proj @ view=corrupted_b params=student
+  trainable
+    mlp_encoder, vicreg_expander
+
+stage joint_fit
+  rows: all
+  executor: gradient
+  initialise from: pretrain
+  sampler: uniform, batch_size=128, without replacement
+  steps: 3000
+  optimisation
+    optimiser     adam(betas=(0.9, 0.999), eps=1e-08)
+    lr            0.001
+    lr schedule   constant 1.0
+    weight decay  none
+    clipping      none
+  forward passes (1)
+    view=identity params=student: mlp_encoder -> tarnet_head -> categorical_propensity
+  objectives
+    observed_outcome_nll            rows t_observed  reduction population
+      weight    constant 1.0
+      requires  p(y|x,t) @ view=identity params=student
+    observed_treatment_nll          rows t_observed  reduction population
+      weight    constant 1.0
+      requires  p(t|x) @ view=identity params=student
+    missing_treatment_marginal_nll  rows t_missing   reduction population
+      weight    ramp 0.0 -> 0.5 over 1000 steps
+      requires  p(t|x) @ view=identity params=student, p(y|x,t) @ view=identity params=student
+  trainable
+    mlp_encoder, tarnet_head, categorical_propensity
+
+hyperparameters
+  architecture.activation
+    categorical_propensity = 'linear logits'
+    mlp_encoder            = 'relu'
+    tarnet_head            = 'elu'
+    vicreg_expander        = 'hidden relu; output linear'
+  architecture.dropout
+    categorical_propensity = 0.0
+    mlp_encoder            = 0.0
+    tarnet_head            = 0.0
+    vicreg_expander        = 0.0
+  architecture.initialisation
+    categorical_propensity = 'normal std=0.1/sqrt(fan_in), bias=0'
+    mlp_encoder            = 'normal std=0.1/sqrt(fan_in), bias=0'
+    tarnet_head            = 'normal std=0.1/sqrt(fan_in), bias=0'
+    vicreg_expander        = 'torch Linear reset_parameters; hidden bias=true; output bias=false; BN weight=1,bias=0,running_mean=0,running_var=1'
+  architecture.normalisation
+    categorical_propensity = 'none'
+    mlp_encoder            = 'none'
+    tarnet_head            = 'none'
+    vicreg_expander        = 'hidden BatchNorm1d(eps=1e-5, momentum=0.1, affine=true, track_running_stats=true); output none'
+  architecture.output_parameterisation
+    categorical_propensity = 'K softmax logits'
+    tarnet_head            = 'K means; fixed Gaussian scale=1.0'
+  architecture.widths_depths
+    categorical_propensity = 'linear 256 -> 2'
+    mlp_encoder            = (256, 256, 256, 256)
+    tarnet_head            = '2 independent heads, each [100, 100, 100]'
+    vicreg_expander        = (512, 512, 512)
+  data.missingness_mechanism = 'treatment MCAR to a budget of 40 labelled rows, keyed by row_id'
+  data.outcome_scaling       = "y: zscore fitted on 'train'"
+  data.split_protocol        = "fixed two-cluster DGP; disjoint train and held-out populations; no test-based selection; training rows are assignment 'train'"
+  data.standardisation       = "x: zscore fitted on 'train'"
+  gradients.gradient_clipping
+    joint_fit = 'none'
+    pretrain  = 'none'
+  gradients.marginal_nll_grad_path
+    joint_fit.missing_treatment_marginal_nll = 'both'
+  gradients.stop_gradients
+    joint_fit.missing_treatment_marginal_nll = 'none'
+    joint_fit.observed_outcome_nll           = 'none'
+    joint_fit.observed_treatment_nll         = 'none'
+    pretrain.embedding_covariance            = 'none'
+    pretrain.embedding_invariance            = 'none'
+    pretrain.embedding_variance              = 'none'
+  losses.eligible_rows
+    joint_fit.missing_treatment_marginal_nll = 't_missing'
+    joint_fit.observed_outcome_nll           = 't_observed'
+    joint_fit.observed_treatment_nll         = 't_observed'
+    pretrain.embedding_covariance            = 'all'
+    pretrain.embedding_invariance            = 'all'
+    pretrain.embedding_variance              = 'all'
+  losses.reduction
+    joint_fit.missing_treatment_marginal_nll = 'population'
+    joint_fit.observed_outcome_nll           = 'population'
+    joint_fit.observed_treatment_nll         = 'population'
+    pretrain.embedding_covariance            = 'mean'
+    pretrain.embedding_invariance            = 'mean'
+    pretrain.embedding_variance              = 'mean'
+  losses.schedules
+    joint_fit.missing_treatment_marginal_nll = 'ramp 0.0 -> 0.5 over 1000 steps'
+    joint_fit.observed_outcome_nll           = 'constant 1.0'
+    joint_fit.observed_treatment_nll         = 'constant 1.0'
+    pretrain.embedding_covariance            = 'constant 1.0'
+    pretrain.embedding_invariance            = 'constant 25.0'
+    pretrain.embedding_variance              = 'constant 25.0'
+  losses.weights
+    joint_fit.missing_treatment_marginal_nll = 0.5
+    joint_fit.observed_outcome_nll           = 1.0
+    joint_fit.observed_treatment_nll         = 1.0
+    pretrain.embedding_covariance            = 1.0
+    pretrain.embedding_invariance            = 25.0
+    pretrain.embedding_variance              = 25.0
+  optimisation.batch_size
+    joint_fit = 128
+    pretrain  = 128
+  optimisation.lr
+    joint_fit = 0.001
+    pretrain  = 0.001
+  optimisation.lr_schedule
+    joint_fit = 'constant 1.0'
+    pretrain  = 'constant 1.0'
+  optimisation.optimiser
+    joint_fit = 'adam(betas=(0.9, 0.999), eps=1e-08)'
+    pretrain  = 'adam(betas=(0.9, 0.999), eps=1e-08)'
+  optimisation.total_steps_or_epochs
+    joint_fit = 3000
+    pretrain  = 1000
+  optimisation.weight_decay
+    joint_fit = 'none'
+    pretrain  = 'none'

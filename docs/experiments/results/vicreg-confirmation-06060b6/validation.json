@@ -1,0 +1,131 @@
+{
+  "focused_vicreg_tests": 46,
+  "invariants_passed": 1515,
+  "mutants_failed": [
+    "substitute first view for second",
+    "remove nontriviality guard"
+  ],
+  "plumbing_check": "passed; reduced budget; not confirmation evidence",
+  "ruff_format": "passed",
+  "ruff_lint": "passed",
+  "smoke_modules": [
+    {
+      "exit_code": 0,
+      "file": "tests/smoke/test_cnflow.py",
+      "log_sha256": "ecc95bbcce1d130bfccf7da16d7f7703909951faac1719e794932761d0fa4342",
+      "passed": 4
+    },
+    {
+      "exit_code": 0,
+      "file": "tests/smoke/test_cycle_dual.py",
+      "log_sha256": "2279933ed71064f2c86980dcfd5de176e0e0fafbffaf0568bcc8b4a2b29d486b",
+      "passed": 4
+    },
+    {
+      "exit_code": 0,
+      "file": "tests/smoke/test_doublematch.py",
+      "log_sha256": "bb0bf5cbd580a2c97287a8438c505ae6e54d23633f86eab13b933f39724a72a1",
+      "passed": 8
+    },
+    {
+      "exit_code": 0,
+      "file": "tests/smoke/test_fixmatch.py",
+      "log_sha256": "830fe65a53be38cdc842835c7c5bba472edc440d6d9bb88dab65e8dbe2fe4798",
+      "passed": 9
+    },
+    {
+      "exit_code": 0,
+      "file": "tests/smoke/test_flexmatch.py",
+      "log_sha256": "3bd617bdb88bf80e12b7e5d41b78f5b66eff488c30ab014285850d4bf7f9da12",
+      "passed": 7
+    },
+    {
+      "exit_code": 0,
+      "file": "tests/smoke/test_freematch.py",
+      "log_sha256": "6ade543dbb51aa1ce6658a2a12d835c82c514535c8270e798193a68fe71da7dd",
+      "passed": 8
+    },
+    {
+      "exit_code": 0,
+      "file": "tests/smoke/test_mean_teacher.py",
+      "log_sha256": "d8ac264a20e49f75f334eed1ff262a377b1887ad6f0f3b1947929c5e0c3f487f",
+      "passed": 6
+    },
+    {
+      "exit_code": 0,
+      "file": "tests/smoke/test_meta_pseudo_labels.py",
+      "log_sha256": "dbcb1cfed3a880d7dc1a0f6c35e67a25ce8b53b458bf9bbce6d55b151856bc27",
+      "passed": 4
+    },
+    {
+      "exit_code": 0,
+      "file": "tests/smoke/test_paws.py",
+      "log_sha256": "509fd50745a972163a0c46b9662112e05148abca6316d828c87d52e24798a4ce",
+      "passed": 7
+    },
+    {
+      "exit_code": 0,
+      "file": "tests/smoke/test_remixmatch.py",
+      "log_sha256": "a00e281b95fe497b630a980c2d92f293f14f43f8d01ab5fab98310ffaaf278b2",
+      "passed": 4
+    },
+    {
+      "exit_code": 0,
+      "file": "tests/smoke/test_scaffolding.py",
+      "log_sha256": "4bcefcc9f6c645923b9993ccf73ad92e6b400ca25458ea14e095857fc2131342",
+      "passed": 1
+    },
+    {
+      "exit_code": 0,
+      "file": "tests/smoke/test_scarf.py",
+      "log_sha256": "b5bd807aa11cf36f6ce7e36b3c232c873d9730db3414048924bbe6223412f34a",
+      "passed": 8
+    },
+    {
+      "exit_code": 0,
+      "file": "tests/smoke/test_simmatch.py",
+      "log_sha256": "5c2ad10667ecd2340b59b484150d4a861830b0e16d23ce72e8d17df96e600f8a",
+      "passed": 16
+    },
+    {
+      "exit_code": 0,
+      "file": "tests/smoke/test_softmatch.py",
+      "log_sha256": "f957024caa2f8925a711196aa193ff207cecaa2b226e5aa88cefce2c90c91975",
+      "passed": 4
+    },
+    {
+      "exit_code": 0,
+      "file": "tests/smoke/test_ssdml.py",
+      "log_sha256": "98410c6c775f5acf50813bdcfaca9df1e6cffe84459b9026fa1bb29ae014a8b8",
+      "passed": 4
+    },
+    {
+      "exit_code": 0,
+      "file": "tests/smoke/test_tarnet.py",
+      "log_sha256": "8b7e592c13b154c34bb4d99a24c24b1912c3be0751eed01fd5b77d65b07b1017",
+      "passed": 4
+    },
+    {
+      "exit_code": 0,
+      "file": "tests/smoke/test_uda.py",
+      "log_sha256": "217add0a8388e1a8556078e006d4e3afed171a5e90a94b909731c798df5b20c1",
+      "passed": 8
+    },
+    {
+      "exit_code": 0,
+      "file": "tests/smoke/test_variational_treatment.py",
+      "log_sha256": "a2e572a8c1ffb3d9198f061bb4a31d418aafb85985258e4fe065e8092fd12192",
+      "passed": 6
+    },
+    {
+      "exit_code": 0,
+      "file": "tests/smoke/test_vicreg.py",
+      "log_sha256": "14aedfe9671505a07ab743ca6e0c3c36163b263d590880c7ae385096cc9787a7",
+      "passed": 3
+    }
+  ],
+  "smoke_passed": 115,
+  "source_commit": "06060b63d37ccf4ba9554dac0e21f7935ff0535f",
+  "strict_mypy": "208 source files passed",
+  "strict_mypy_experiments": "2 source files passed"
+}
