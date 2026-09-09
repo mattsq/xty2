@@ -93,6 +93,9 @@ barlow_twins = partial(
 
 ROOT = Path(__file__).resolve().parents[2]
 CARD = ROOT / "docs" / "recipes" / "barlow_twins.md"
+_BENCHMARK = (
+    ROOT / "xty2" / "evaluation" / "benchmarks" / "barlow_twins.py"
+).read_text(encoding="utf-8")
 RECIPE_SOURCE = ROOT / "xty2" / "recipes" / "barlow_twins.py"
 PRESERVED: frozenset[PreservedField] = frozenset(
     {"t", "y", "t_observed", "y_observed", "row_id", "fold_id", "weight"}
@@ -1336,18 +1339,36 @@ def test_every_card_value_the_plan_also_carries_agrees_with_it() -> None:
 
 
 def test_the_card_records_the_implementation_it_now_has() -> None:
-    """The status ladder is card content, and `smoke-passing` is a claim about
-    this file and about `tests/smoke/test_barlow_twins.py` (`FIDELITY.md`
-    §1.1: Tier 1 passes)."""
+    """The status ladder is card content, and `reproduced` is a claim about
+    three files: this one, `tests/smoke/test_barlow_twins.py`, and the Tier 2
+    module and test whose ten-seed result §6.1 records (`FIDELITY.md` §1.1)."""
     text = CARD.read_text(encoding="utf-8")
-    assert "**Status:** `smoke-passing`" in text
+    root = CARD.parents[2]
+    assert "**Status:** `reproduced`" in text
     assert "| Recipe implemented, Tier 0 passing (status → `implemented`) |" in text
     assert (
         "| Tier 1 study run on bases 419/523/631 (status → `smoke-passing`) |" in text
     )
-    assert (CARD.parents[2] / "tests/smoke/test_barlow_twins.py").is_file()
+    tier2_row = "| Tier 2 benchmark registered and ten-seed study run "
+    assert tier2_row + "(status → `reproduced`) |" in text
+    assert (root / "tests/smoke/test_barlow_twins.py").is_file()
+    assert (root / "tests/benchmarks/test_barlow_twins.py").is_file()
+    assert (root / "xty2/evaluation/benchmarks/barlow_twins.py").is_file()
     assert "0.0051" in text
     assert "390000+100*i" in text
+    # The §6.1 row the run wrote, not an empty placeholder: the commit it was
+    # produced on, and the four §6.4 bounds it scored, by the names the
+    # benchmark gives them.
+    assert "| | | | | |" not in text
+    assert "`eb47d8bcf810`" in text
+    for metric in (
+        "full_arm_diagonal_alignment",
+        "full_arm_active_fraction",
+        "off_diagonal_ablation_redundancy_gap",
+        "pretraining_outcome_NLL_cost",
+    ):
+        assert metric in text, metric
+        assert metric in _BENCHMARK, metric
     assert "| [`barlow_twins.md`](recipes/barlow_twins.md) | `barlow_twins` |" in (
         CARD.parents[1] / "RECIPES.md"
     ).read_text(encoding="utf-8")
