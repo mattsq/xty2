@@ -64,9 +64,9 @@ network sizes."""
 
 PROJECTOR_WIDTHS = (512, 512, 512)
 """`f_theta`'s projector, card §4 and deviation 2: the author's three-layer
-head at a tabular width. The published one is 8192-8192-8192, and §4.3 of the
-paper attributes real accuracy to that width; 512 is what this fixture's 1,024
-training rows and `B = 128` can support, and §6.4 states the consequence — at
+head at a tabular width. The published one is 8192-8192-8192, and §4's projector
+ablation studies width. Here 512 matches the local VICReg capacity; it is not
+a limit implied by the training population or batch size. Card §6.4 notes that at
 `B = 128` a centred cross-product has rank at most 127, so `C = I` is
 unreachable and zero loss is not the target."""
 
@@ -76,7 +76,7 @@ DIAGONAL_WEIGHT = 1.0
 OFF_DIAGONAL_WEIGHT = 0.0051
 """`lambda`, card §3.1 and deviation 1. The **parser's** value, not §2.2's
 printed 0.005: `main.py` writes `--lambd, default=0.0051`, and that is the
-number the published runs executed. Retained unchanged at `d = 512` against the
+default selected by the pinned code. Retained at `d = 512` against the
 published `d = 8192`; the card says explicitly that this is not a claim it is
 optimal there (deviation 4)."""
 
@@ -145,7 +145,7 @@ BARLOW_TWINS_ADAM = OptimiserSpec(
 )
 """Card §4, deviation 4.
 
-Deliberately **not** the paper's optimiser: §2.3 trains with LARS, a
+Deliberately **not** the paper's optimiser: §2.2 trains with LARS, a
 learning-rate warmup and cosine decay, weight decay 1.5e-6 and separate
 parameter groups for biases and BatchNorm, at batch 2,048 across 32 V100s —
 none of which this fixture's 1,024 rows can exercise. The card states a matched

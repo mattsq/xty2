@@ -386,6 +386,7 @@ update land together. A successful status refers only to this local mechanism.
 | Appropriate tabular view distribution | Explicit caller views and imported oracle fixture symmetries | VICReg's accepted contract; deviation 3, no automatic generalisation. |
 | Appropriate small-width/batch optimisation and thresholds | Fixed local budget, unchanged source lambda and prospective §6.4 bounds | Controlled experiment, not an optimality claim; deviations 2/4. |
 | Source projector bias/BN defaults not fully described in prose | Every linear bias off; explicit PyTorch BN defaults and reset initialisation | Pinned `BarlowTwins.__init__`, not the superficially similar VICReg component. |
+| Implementation comments misread centring and source sections | Both paper and code centre embeddings; nonzero epsilon still distinguishes code from eq. (2). Optimisation is §2.2; projector ablations are in §4. | Paper §2.1 assumes centred embeddings, Algorithm 1 centres them explicitly, and the pinned output BN adds epsilon. Corrected the comments without changing the selected arithmetic. |
 | Test-time embedding-statistic convention | Frozen hidden BN, fresh stateless output normalisation per fixed evaluation batch | Measure the training correlation functional without changing inference state. |
 
 ## 8. Review
@@ -395,6 +396,7 @@ update land together. A successful status refers only to this local mechanism.
 | Card reviewed (status → `reviewed`) | Repository owner | 2026-09-09 |
 | Plan diffed against §3.2 and §4 | Claude | 2026-09-09 |
 | Recipe implemented, Tier 0 passing (status → `implemented`) | Claude | 2026-09-09 |
+| Source, plan and implementation reviewed; input validation corrected | Codex | 2026-09-09 |
 
 Drafted from pinned author source on 2026-09-09. Review accepted the
 prospective §6.4 bounds, the explicit oracle-view scope and §5.1's two
@@ -409,3 +411,14 @@ Status is `implemented`, not `smoke-passing`: no Tier 1 fit has been run. No
 benchmark module, `RECIPES` entry or §6.1 ledger row is added either, since
 `CLAUDE.md` requires those three to land with a result rather than ahead of
 one. §6.1's placeholder row is therefore still the template's empty row.
+
+The implementation review added rejection of scalar, zero-width and mismatched
+embedding shapes: mismatched widths previously let the diagonal term silently
+score only the shared prefix of a rectangular cross-correlation. All three
+regressions failed on the original implementation. An independent training-mode
+`BatchNorm1d` oracle now checks both terms' values and input gradients, including
+the near-constant column. It rejects a sample-variance mutant and a
+correct-value/half-gradient mutant. Source-comment corrections also distinguish
+collapse's `D=d` from a maximum, epsilon-attenuated self-correlations from exact
+ones, and mean raw variance diagnostics from §6.4's active-coordinate fraction.
+These corrections preserve §3–§6's reviewed method and acceptance bounds.

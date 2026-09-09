@@ -647,6 +647,45 @@ def test_the_objectives_reject_what_they_cannot_mean() -> None:
         )
 
 
+@pytest.mark.parametrize("shape", [(), (ROWS, 0), (ROWS, WIDTH + 1)])
+def test_malformed_branch_shapes_are_rejected(shape: tuple[int, ...]) -> None:
+    first, second = _branches()
+    malformed = torch.ones(shape, dtype=torch.float64)
+    for left, right in ((malformed, second), (first, malformed)):
+        for objective in (_diagonal(), _off_diagonal()):
+            with pytest.raises(LossError, match="embedding"):
+                objective.compute(_state(left, right), _batch(), _all_rows(), _ctx())
+
+
+def test_terms_and_gradients_match_training_batchnorm() -> None:
+    """Independent executable reference, including a sub-epsilon column."""
+    for objective, diagonal in ((_diagonal(), True), (_off_diagonal(), False)):
+        first, second = (z.requires_grad_() for z in _branches())
+        actual = objective.compute(
+            _state(first, second), _batch(), _all_rows(), _ctx()
+        ).value
+        normalise = nn.BatchNorm1d(WIDTH, affine=False, eps=1e-5).double().train()
+        correlation = normalise(first).T @ normalise(second) / ROWS
+        expected = (
+            (correlation.diagonal() - 1).square().sum()
+            if diagonal
+            else correlation.flatten()[:-1]
+            .view(WIDTH - 1, WIDTH + 1)[:, 1:]
+            .flatten()
+            .square()
+            .sum()
+        )
+        torch.testing.assert_close(actual, expected, rtol=1e-10, atol=1e-10)
+        actual_gradients = torch.autograd.grad(actual, (first, second))
+        expected_gradients = torch.autograd.grad(expected, (first, second))
+        for actual_gradient, expected_gradient in zip(
+            actual_gradients, expected_gradients, strict=True
+        ):
+            torch.testing.assert_close(
+                actual_gradient, expected_gradient, rtol=1e-9, atol=1e-9
+            )
+
+
 def test_the_plan_shows_the_arithmetic_no_other_field_reveals() -> None:
     stage = compile(barlow_twins(_schema())).stage("pretrain")
     details = {objective.name: objective.plan_details for objective in stage.objectives}
@@ -979,7 +1018,7 @@ def test_the_two_views_are_independent_draws_of_one_transform() -> None:
     """`ViewSpec.apply` keys its generator by the view's *name*, so two names is
     what makes `Y^A` and `Y^B` independent. One name and two draws would tie
     both branches to one realisation, and `C` would be a within-view
-    correlation matrix with a diagonal of exactly one."""
+    correlation matrix, removing the cross-view alignment problem."""
     schema = _schema()
     batch = _batch(rows=16)
     population = _population(batch, schema)

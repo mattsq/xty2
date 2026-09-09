@@ -12,12 +12,12 @@ off_diag = off_diagonal(c).pow_(2).sum()
 loss = on_diag + self.args.lambd * off_diag
 ```
 
-Eq. (2) divides each entry by `sqrt(sum_b (z^A_bi)^2) * sqrt(sum_b (z^B_bj)^2)`,
-with no centring and no epsilon. `nn.BatchNorm1d` centres, divides by a
-*population* standard deviation, and adds `eps = 1e-5` **inside** the square
-root. On a batch whose columns are already centred the two agree; on one whose
-columns are not, they are different matrices, and the entry the diagonal term
-drives to `1` is a different statistic. The card records the choice as
+Eq. (2) divides each entry by `sqrt(sum_b (z^A_bi)^2) * sqrt(sum_b (z^B_bj)^2)`.
+Section 2.1 explicitly assumes batch-centred embeddings, and Algorithm 1
+performs that centring. `nn.BatchNorm1d` also centres, uses the *population*
+variance, and adds `eps = 1e-5` **inside** the square root. Even on centred
+inputs, nonzero epsilon attenuates correlations relative to eq. (2), especially
+for near-constant coordinates. The card records the numerical choice as
 deviation 1, together with the parser's `lambd = 0.0051` against §2.2's printed
 `0.005`.
 
@@ -104,6 +104,16 @@ def cross_correlation(
         `(U^A)^T U^B / B`, differentiable in both arguments and through the
         means and variances taken from them.
     """
+    if (
+        first.ndim != 2
+        or second.ndim != 2
+        or first.shape != second.shape
+        or first.shape[1] == 0
+    ):
+        raise LossError(
+            "cross_correlation needs matching [B, d] embeddings with d >= 1, "
+            f"got {tuple(first.shape)} and {tuple(second.shape)}"
+        )
     rows = first.shape[0]
     left, right = (
         (branch - branch.mean(dim=0, keepdim=True))
@@ -119,7 +129,8 @@ class CrossCorrelationDiagonal:
 
     The invariance half of the objective, and the one a collapse defeats: at
     exactly constant embeddings the normalisation returns zeros, `C` is zero,
-    and this term sits at its finite maximum `d` with no gradient to leave by.
+    and this term has finite value `d` with no gradient to leave by. This is
+    not its maximum: anti-correlated branches can have a larger loss.
     The card says so in §3.1 rather than promising escape from exact collapse.
 
     Attributes:
@@ -222,8 +233,8 @@ class CrossCorrelationOffDiagonal:
     Every **ordered** off-diagonal entry is included, as the author's
     `off_diagonal` helper does by flattening all but the diagonal: `C` is a
     cross-view matrix and is not symmetric, so `C_ij` and `C_ji` are two
-    different correlations and summing one triangle would charge half the
-    redundancy the paper charges (card §3.1).
+    different correlations and summing one triangle would omit ordered pairs,
+    not generally halve the penalty (card §3.1).
 
     This is the term the card's §6 study sets to a weight of exactly zero. It is
     declared even in that arm, so the two arms differ by one number in the
@@ -332,8 +343,9 @@ def _raw_variances(first: Tensor, second: Tensor, correction: int) -> dict[str, 
     embedding from a collapsed one. `C` is scale-free up to `epsilon`, so `O`
     falls toward zero either way, and the diagonal term reports the same `D = d`
     for a collapsed embedding as for a live but cross-view-uncorrelated one.
-    Only the raw variance says which happened, and card §6.4's activity guard
-    is defined against exactly this number.
+    Raw variance helps distinguish those cases. These means are diagnostics;
+    card §6.4's activity guard instead counts individual coordinates above its
+    variance threshold in both branches. A mean cannot determine that fraction.
     """
     return {
         "raw_variance_first": float(
@@ -378,16 +390,16 @@ def _embedding(
             f"{realisation} as an embedding tensor, but it carries "
             f"{type(value)}. Its PortSpec is the contract (DESIGN.md §2)."
         )
-    if value.shape[0] != batch.batch_size:
-        raise LossError(
-            f"objective {objective!r} got {value.shape[0]} rows from "
-            f"{realisation} for a batch of {batch.batch_size}"
-        )
-    if value.ndim != 2:
+    if value.ndim != 2 or value.shape[1] == 0:
         raise LossError(
             f"objective {objective!r} needs a [B, d] embedding from "
             f"{realisation}, got shape {tuple(value.shape)}. `C` is a matrix of "
             "the embedding coordinates against each other (eq. 2)."
+        )
+    if value.shape[0] != batch.batch_size:
+        raise LossError(
+            f"objective {objective!r} got {value.shape[0]} rows from "
+            f"{realisation} for a batch of {batch.batch_size}"
         )
     return value
 
@@ -430,10 +442,9 @@ def _validate(
     if first == second:
         raise LossError(
             f"{owner} reads {first} twice. `C` would be one branch's own "
-            "correlation matrix, whose diagonal is identically 1 — the "
-            "alignment term would be exactly zero and the redundancy term "
-            "would charge a within-view covariance the paper does not "
-            "penalise. `Y^A` and `Y^B` are two distorted versions of one batch "
+            "correlation matrix, removing the cross-view alignment problem. "
+            "With correction=0 its diagonal is var/(var+epsilon), not "
+            "identically 1. `Y^A` and `Y^B` are two distorted versions of one batch "
             "(eq. 1 and §2.1)."
         )
     try:
