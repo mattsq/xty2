@@ -1,6 +1,7 @@
 # Recipe spec card: simsiam
 
 **Status:** `draft`
+<!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
 > §6 for benchmark and reporting work.
@@ -101,6 +102,23 @@ Retain that path explicitly (deviation 6); log vector norms as well as cosine.
 Extend its explicit `stop_grad` policy from `target` to `target | none`
 for the no-stop-gradient control. `detaches`, computation and plan details must
 agree; existing DoubleMatch declarations remain `target`.
+
+That objective requires a norm check before it is pointed at a new pair of
+ports, because its gradient carries `1 / ||prediction||`: its first consumer
+collapsed under this term at a pre-normalisation representation norm of 0.011,
+arriving about ninety times louder than the paper's, and stopped collapsing
+only once a different initialisation put that representation back at order 1
+(`doublematch.md` deviation 9, evidence in its section 6.2). The same
+normalisation was retained across both. The failure does not transfer here, and
+the reason is structural rather than incidental. The projector terminates in
+non-affine BN, so the detached target carries `||z||` near `sqrt(d) = 16` by
+construction, independent of the encoder initialisation in section 4; and two
+BN layers sit between the encoder and `||p||`, so an encoder scale like 0.011
+cannot reach the cosine the way it did there. The source's output BN carries
+that argument (paper section 4.4), so removing or making it affine changes the
+scale claim and not only the topology. This is a construction argument, not a
+measurement: report realised norms for both ports per arm, and treat the
+section 6.4 near-zero fractions as the check that it held.
 
 The no-predictor arm uses the same two losses with `X_PROJ` on both sides
 and opposite views, retaining stop-gradient. Omit the dead predictor from its
