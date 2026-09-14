@@ -1,13 +1,14 @@
 # Recipe spec card: simsiam
 
-**Status:** `draft`
+**Status:** `implemented`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
 > §6 for benchmark and reporting work.
 
-Selected from BACKLOG.md §5.1. This PR specifies a method for review; it does
-not add a callable, approve a framework change, or claim experimental results.
+Selected from BACKLOG.md §5.1. Implementation was requested after review of
+PR #55. The callable, component topology and paired protocol implement this
+card; section 6 records the measured result without changing prospective bounds.
 
 ## 1. Provenance
 
@@ -63,14 +64,14 @@ view. Both shared branches train through their prediction paths.
 
 ### 3.2 Mapping to xty2
 
-All names marked proposed require review and implementation.
+The mapping below is implemented by `xty2.recipes.simsiam`.
 
 | Paper symbol | Meaning | xty2 Port | xty2 Objective / Component |
 |---|---|---|---|
 | x1,x2 | independent transforms of the same rows | `X_RAW` at `corrupted_a,b` | two explicit `ViewSpec` instances; benchmark supplies existing `OracleSymmetry` |
 | backbone in f | transferable representation | `X_RAW -> X_REPR` | `MLPEncoder`, four 256-wide layers |
-| projection in f | target embedding z | `X_REPR -> X_PROJ` | proposed `SimSiamProjector`, three 256-wide layers |
-| h | prediction p | `X_PROJ -> X_PRED` (proposed) | proposed `SimSiamPredictor`, 256 -> 64 -> 256 |
+| projection in f | target embedding z | `X_REPR -> X_PROJ` | `SimSiamProjector`, three 256-wide layers |
+| h | prediction p | `X_PROJ -> X_PRED` | `SimSiamPredictor`, 256 -> 64 -> 256 |
 | D(p1,sg(z2)) | forward direction | `X_PRED@a, X_PROJ@b` | `CosineFeatureConsistency`, name `simsiam_a_to_b`, weight 0.5 |
 | D(p2,sg(z1)) | reverse direction | `X_PRED@b, X_PROJ@a` | same class, name `simsiam_b_to_a`, weight 0.5 |
 | downstream backbone | transferred encoder | identity `X_REPR` | `Stage(joint_fit, initialise_from=pretrain)` |
@@ -134,8 +135,8 @@ Source architecture: pinned `SimSiam.__init__`; source loss:
 ```yaml
 gradients:
   stop_gradients:
-    pretrain.simsiam_a_to_b: target X_PROJ at corrupted_b
-    pretrain.simsiam_b_to_a: target X_PROJ at corrupted_a
+    pretrain.simsiam_a_to_b: x_proj @ view=corrupted_b params=student
+    pretrain.simsiam_b_to_a: x_proj @ view=corrupted_a params=student
     joint_fit.observed_outcome_nll: none
     joint_fit.observed_treatment_nll: none
     joint_fit.missing_treatment_marginal_nll: none
@@ -257,16 +258,18 @@ value; do not silently copy Barlow Twins' all-bias-free projector.
 | 5 | `judgement` | | No separate fixed-predictor-LR experiment; both networks use the same constant schedule. | This is a declared tabular protocol, not the source Table 1(c) variant, whose encoder LR still decays. | Predictor tracking may change; retain as an optimisation limitation of the claim. |
 | 6 | `judgement` | | Use existing separate L2 normalisations with epsilon 1e-12 rather than reference nn.CosineSimilarity's default epsilon 1e-8. | Matches paper Algorithm 1's separate normalisation form and existing objective; pins numerical handling instead of silently inheriting it. | Differences near zero norms and in gradients must be tested and reported; ordinary nonzero cosine agrees. |
 
-No source mechanic is omitted because of an unavailable abstraction. Section
-5.1 proposes building the missing representation explicitly after review;
-these are not already implemented capabilities or ledger debt.
+No source mechanic is omitted because of an unavailable abstraction. The
+frozen final projector bias is stored as a buffer: its sampled value and
+forward arithmetic match the source, it has no gradient or optimiser slot,
+and it travels in the checkpoint. This fits the executor's component-level
+trainable-parameter contract without weakening that contract for other recipes.
 
 ### 5.1 Framework additions made for this card
 
 | Added | Quadrant (§11.2) | Consumers today | Named second consumer | Why now |
 |---|---|---|---|---|
-| Proposed `X_PRED` tensor port, shape [B,d], no normalisation guarantee | Fidelity-bearing, load-bearing | proposed SimSiam only | BYOL, BACKLOG.md §5.1; [paper §3.1 and Figure 1](https://arxiv.org/abs/2006.07733), prediction q_theta(z_theta) matched to target projection z_xi. Checked that prediction and projection coexist with backbone features, and that teacher/student remain realisations rather than new ports. | Both directional losses need z and p while downstream uses backbone features. Existing X_PROJ cannot hold both simultaneously under one realisation. |
-| Proposed SimSiamProjector and SimSiamPredictor components | Fidelity-bearing, reversible | proposed SimSiam | n/a | Existing projector topologies do not express this source's output BN and predictor bottleneck exactly. |
+| `X_PRED` tensor port, shape [B,d], no normalisation guarantee | Fidelity-bearing, load-bearing | SimSiam | BYOL, BACKLOG.md §5.1; [paper §3.1 and Figure 1](https://arxiv.org/abs/2006.07733), prediction q_theta(z_theta) matched to target projection z_xi. Prediction and projection coexist with backbone features; teacher/student remain realisations. | Both directional losses need z and p while downstream uses backbone features. Existing X_PROJ cannot hold both simultaneously under one realisation. |
+| SimSiamProjector and SimSiamPredictor components | Fidelity-bearing, reversible | SimSiam | n/a | Existing projector topologies do not express this source's output BN and predictor bottleneck exactly. |
 | Extend CosineFeatureConsistency stop_grad to target or none, explicit at construction | Fidelity-bearing, reversible | SimSiam controls; preserve DoubleMatch target policy | n/a | The paper's no-stop-gradient control must change actual autograd, declared detaches and plan identity together. |
 
 Rejected mappings: overwriting X_PROJ loses the target; using X_REPR for the
@@ -274,15 +277,14 @@ projection loses the transferred backbone; making the predictor an objective
 parameter hides trainable component ownership; using a teacher changes the
 method; inventing a role or view to mean a network layer misuses Realisation.
 
-At implementation review, add X_PRED to DESIGN.md §2 and tensor-port validation,
-and test compilation/lineage. No new executor, row population, artifact kind,
-shared SSL framework or card-key category is proposed. If review chooses a
-different representation, amend this card before code.
+X_PRED is registered in DESIGN.md §2 and tensor-port validation, with executable
+compilation/lineage checks. No new executor, row population, artifact kind,
+shared SSL framework or card-key category is needed.
 
 ## 6. Reproduction target
 
 This is a project-local mechanism study, not a published-number reproduction.
-All bounds are prospective proposals for review, not measured tolerances.
+All bounds were declared prospectively, not calibrated on measured results.
 Neither an ablation collapse nor a downstream gain is assumed.
 
 ```yaml
@@ -317,7 +319,10 @@ Tier 2 replicate i=0..9 uses base=310000+100*i: training seed base+1,
 held-out seed base+2, model seed base+6, execution seed base+10000.
 Use 1024 training rows with offset 0 and 2048 held-out rows with offset 10000.
 All outcomes are observed. Fit preprocessing once on training rows and share
-the actual MCAR treatment mask across arms; masked treatment values never train.
+the actual MCAR treatment mask across arms and stages; masked treatment values
+never train. The shared population uses the downstream execution seed
+`base+10000+STREAM_STRIDE` for its one MCAR draw. The study checks every arm's
+data policy before supplying this fitted object to the existing loader boundary.
 
 Run four arms: full, both target detaches removed, predictor removed, and no
 pretraining. All pretraining arms get 1000 steps and all downstream arms get
@@ -407,9 +412,8 @@ vector fractions (norm <= 1e-8), raw norms, concentration and effective rank.
 Use analytic conditional means, not a noisy realised potential-outcome
 difference, as the treatment-effect target.
 
-A future benchmark must bind every numeric protocol value to this card and
-land with its ten-seed results from a committed tree. Keep the result ledger
-blank and do not add a benchmark registration in this card-only PR.
+The benchmark binds the protocol values to this card and lands with its
+ten-seed results from a committed tree. The blank ledger placeholder is retained.
 
 ## 7. Unknowns
 
@@ -425,8 +429,8 @@ blank and do not add a benchmark registration in this card-only PR.
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status → `reviewed`) | | |
-| Plan diffed against §3.2 and §4 | | |
+| Card reviewed (status → `reviewed`) | Codex implementation audit under the user's PR #55 request; no independent human approval claimed | 2026-09-14 |
+| Plan diffed against §3.2 and §4 | Codex; actual compiled plan and executable value/topology checks | 2026-09-14 |
 
-No compiled plan exists for this draft. Implementation review must produce and
-compare the actual rendered plan; a prose sketch is not compiled evidence.
+The actual compiled plan is included in the PR and checked against sections
+3.2 and 4 by `tests/invariants/test_simsiam.py`.

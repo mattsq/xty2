@@ -20,8 +20,8 @@ Four properties of that sentence are decisions rather than details.
   direction — that costs the representation everything, and there are no
   negatives here to punish it. The stop-gradient plus the predictor is what
   SimSiam's ablation shows is load-bearing against exactly that. So
-  `stop_grad` takes one value; a symmetrised or undetached variant is a
-  different method and waits for the card that states one (`DESIGN.md` §11).
+  `stop_grad` is explicit: DoubleMatch retains `target`; SimSiam's declared
+  no-stop-gradient control uses `none` (SimSiam card section 6).
   Neither is sufficient, and the first consumer measured that rather than
   inheriting the reassurance: it collapsed the representation within ten steps,
   at every weight from 0.5 down to 0.01, and never recovered
@@ -54,6 +54,7 @@ Four properties of that sentence are decisions rather than details.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import ClassVar, Literal
 
@@ -68,8 +69,8 @@ from xty2.core.loss import LossTerm, TrainContext, reduce_rows
 from xty2.core.ports import Port, port_spec
 from xty2.core.rows import RowIndex, Rows, validate_population
 
-FeatureStopGrad = Literal["target"]
-"""Which side carries no gradient. The target does; see the module note."""
+FeatureStopGrad = Literal["target", "none"]
+"""Target detach, or the explicitly declared SimSiam ablation."""
 
 
 @dataclass(frozen=True)
@@ -101,6 +102,7 @@ class CosineFeatureConsistency:
     prediction: Realisation
     target: Realisation
     stop_grad: FeatureStopGrad = REQUIRED
+    epsilon: float = 1e-12
     rows: Rows = "all"
     name: str = "cosine_feature_consistency"
 
@@ -108,6 +110,10 @@ class CosineFeatureConsistency:
 
     def __post_init__(self) -> None:
         card_hyperparameters(self)
+        if not math.isfinite(self.epsilon) or self.epsilon <= 0:
+            raise LossError(
+                "CosineFeatureConsistency.epsilon must be finite and positive"
+            )
         if not require_str("feature consistency name", self.name, error=LossError):
             raise LossError("CosineFeatureConsistency.name must be non-empty")
         for field, port in (
@@ -142,9 +148,9 @@ class CosineFeatureConsistency:
                 "realisations of one row, or two ports of one realisation "
                 "(DoubleMatch eq. 3)."
             )
-        if self.stop_grad != "target":
+        if self.stop_grad not in ("target", "none"):
             raise LossError(
-                f"CosineFeatureConsistency.stop_grad must be 'target', got "
+                f"CosineFeatureConsistency.stop_grad must be 'target' or 'none', got "
                 f"{self.stop_grad!r}. Eq. (3) holds `z_i` constant, and without "
                 "a stop-gradient the term has a trivial optimum — one direction "
                 "for every row — that no negative pair is present to punish. A "
@@ -170,7 +176,11 @@ class CosineFeatureConsistency:
     @property
     def detaches(self) -> frozenset[tuple[Port, Realisation]]:
         """The target side, derived from `stop_grad` rather than restated."""
-        return frozenset({(self.target_port, self.target)})
+        return (
+            frozenset({(self.target_port, self.target)})
+            if self.stop_grad == "target"
+            else frozenset()
+        )
 
     def plan_details(self) -> tuple[str, ...]:
         """Which side is which, and what the arithmetic is.
@@ -184,7 +194,9 @@ class CosineFeatureConsistency:
         """
         return (
             f"prediction (trained) = {self.prediction_port!s} @ {self.prediction}",
-            f"target (detached) = {self.target_port!s} @ {self.target}",
+            f"target ({'detached' if self.stop_grad == 'target' else 'trained'}) "
+            f"= {self.target_port!s} @ {self.target}",
+            f"separate L2 normalisation; epsilon={self.epsilon:g}",
             "value = -cosine(prediction, target), per row",
             "denominator = every eligible row; nothing is gated",
         )
@@ -207,7 +219,9 @@ class CosineFeatureConsistency:
         prediction = self._embedding(
             state, self.prediction_port, self.prediction, batch
         )
-        target = self._embedding(state, self.target_port, self.target, batch).detach()
+        target = self._embedding(state, self.target_port, self.target, batch)
+        if self.stop_grad == "target":
+            target = target.detach()
         if prediction.shape[-1] != target.shape[-1]:
             raise LossError(
                 f"CosineFeatureConsistency {self.name!r} compares "
@@ -216,8 +230,8 @@ class CosineFeatureConsistency:
                 "projection head is dimension-preserving, so a width mismatch "
                 "is a mis-declared head rather than something to broadcast."
             )
-        predicted = torch.nn.functional.normalize(prediction, dim=-1)
-        matched = torch.nn.functional.normalize(target, dim=-1)
+        predicted = torch.nn.functional.normalize(prediction, dim=-1, eps=self.epsilon)
+        matched = torch.nn.functional.normalize(target, dim=-1, eps=self.epsilon)
         per_row = -(predicted * matched).sum(dim=-1)
         return reduce_rows(
             per_row, rows, diagnostics=_concentrations(predicted, matched, rows)
@@ -233,6 +247,10 @@ class CosineFeatureConsistency:
                 f"{realisation} as an embedding tensor, but it carries "
                 f"{type(value)}. Its PortSpec is the contract (DESIGN.md §2)."
             )
+        if value.ndim != 2 or value.shape[1] < 1:
+            raise LossError("CosineFeatureConsistency requires rank-two embeddings")
+        if not bool(torch.isfinite(value).all()):
+            raise LossError("CosineFeatureConsistency requires finite embeddings")
         if value.shape[0] != batch.batch_size:
             raise LossError(
                 f"CosineFeatureConsistency {self.name!r} got {value.shape[0]} "
