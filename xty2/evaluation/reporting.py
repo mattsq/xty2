@@ -13,7 +13,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
 
-Relation = Literal["<=", ">=", "between", "info"]
+Relation = Literal["<=", ">=", ">", "between", "info"]
 CardStatus = Literal[
     "draft",
     "reviewed",
@@ -163,7 +163,7 @@ class MetricResult:
             raise ValueError(f"benchmark metric {self.name!r} has no replicates")
         if not all(math.isfinite(value) for value in self.values):
             raise ValueError(f"benchmark metric {self.name!r} must be finite")
-        if self.relation not in ("<=", ">=", "between", "info"):
+        if self.relation not in ("<=", ">=", ">", "between", "info"):
             raise ValueError(
                 f"metric {self.name!r} has unknown relation {self.relation!r}"
             )
@@ -171,7 +171,7 @@ class MetricResult:
             raise ValueError(
                 f"informational metric {self.name!r} cannot carry a target"
             )
-        if self.relation in ("<=", ">=") and (
+        if self.relation in ("<=", ">=", ">") and (
             not isinstance(self.target, int | float)
             or isinstance(self.target, bool)
             or not math.isfinite(float(self.target))
@@ -260,6 +260,8 @@ class MetricResult:
         margin = self.margin
         if margin is None:
             return None
+        if self.relation == ">":
+            return margin > self.stderr
         return margin >= self.stderr
 
     @property
@@ -305,6 +307,8 @@ class MetricResult:
                 "by at least one stderr"
             )
         assert isinstance(self.target, int | float)
+        if self.relation == ">":
+            return f"mean - stderr > {self.target:g}{suffix}"
         return f"mean {self.relation} {self.target:g}{suffix}, by at least one stderr"
 
     def summary(self) -> str:

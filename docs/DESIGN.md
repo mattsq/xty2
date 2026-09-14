@@ -87,6 +87,7 @@ pairing empty by construction is a compile error.
 | `Y_RAW` | tensor `[B, *Dy]` |
 | `X_REPR` | representation `[B, H]` |
 | `X_PROJ` | projection `[B, H]` |
+| `X_PRED` | learned prediction of a projection `[B, H]`, no normalisation guarantee; SimSiam, with BYOL as the named second consumer (SimSiam card section 5.1) |
 | `T_GIVEN_X` | treatment distribution with probabilities `[B, K]` |
 | `T_GIVEN_XY` | treatment distribution with probabilities `[B, K]` |
 | `Y_GIVEN_XT` | outcome distribution satisfying §3.1 |

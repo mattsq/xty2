@@ -36,7 +36,7 @@ def conforming_value(port: Port) -> object:
         return torch.randn(BATCH_SIZE, NUM_FEATURES)
     if port is Port.Y_RAW:
         return torch.randn(BATCH_SIZE)
-    if port in (Port.X_REPR, Port.X_PROJ, Port.PRETEXT_GIVEN_X):
+    if port in (Port.X_REPR, Port.X_PROJ, Port.X_PRED, Port.PRETEXT_GIVEN_X):
         return torch.randn(BATCH_SIZE, REPR_WIDTH)
     if port is Port.JOINT_ENERGY:
         return torch.randn(BATCH_SIZE, NUM_TREATMENTS)
@@ -52,6 +52,7 @@ def test_the_port_vocabulary_is_exactly_the_design_document_s() -> None:
         "y",
         "x_repr",
         "x_proj",
+        "x_pred",
         "p(y|x,t)",
         "p(t|x)",
         "q(t|x,y)",

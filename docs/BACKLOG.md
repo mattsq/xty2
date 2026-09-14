@@ -302,9 +302,10 @@ adaptation still failed spread; its failure ledger, original audit and
 [paired view diagnostic](experiments/2026-09-08-vicreg-views.md) remain recorded.
 
 Candidates: CoMatch, PAWS, SimMatch, VICReg, Barlow Twins, BYOL, and SimSiam.
-SimSiam now has a draft card at [`recipes/simsiam.md`](recipes/simsiam.md),
-stopped for review before implementation. It proposes separate prediction and
-projection outputs, with paired stop-gradient and predictor ablations.
+SimSiam is implemented at [`recipes/simsiam.md`](recipes/simsiam.md), with
+separate prediction and projection outputs and a paired ten-seed Tier 2 study
+of stop-gradient, predictor and pretraining ablations. Its card records the
+result against the original prospective bounds.
 Before tuning, measure representation norm, collapse concentration, and whether
 same-treatment rows are treated as negatives. Batch-coupled objectives must
 declare and bind batch size.
