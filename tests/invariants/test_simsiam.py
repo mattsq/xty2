@@ -12,6 +12,7 @@ from typing import Any, Literal
 import pytest
 import torch
 from torch import Tensor, nn
+from xty2.components import SimSiamPredictor, SimSiamProjector
 from xty2.core import (
     CompiledRun,
     GraphError,
@@ -75,9 +76,14 @@ def tensors(scale: float) -> tuple[Tensor, Tensor, Tensor, Tensor]:
 def scalar_cosine(p: Tensor, z: Tensor) -> Tensor:
     terms = []
     for row in range(7):
-        pn = sum(p[row, j] ** 2 for j in range(3)).sqrt().clamp_min(1e-12)
-        zn = sum(z[row, j] ** 2 for j in range(3)).sqrt().clamp_min(1e-12)
-        terms.append(-sum(p[row, j] * z[row, j] for j in range(3)) / (pn * zn))
+        p_squared, z_squared, dot = (p.new_zeros(()) for _ in range(3))
+        for j in range(3):
+            p_squared = p_squared + p[row, j] ** 2
+            z_squared = z_squared + z[row, j] ** 2
+            dot = dot + p[row, j] * z[row, j]
+        pn = p_squared.sqrt().clamp_min(1e-12)
+        zn = z_squared.sqrt().clamp_min(1e-12)
+        terms.append(-dot / (pn * zn))
     return torch.stack(terms).mean()
 
 
@@ -156,8 +162,12 @@ def test_bad_embeddings_rejected(bad: Tensor) -> None:
 
 def test_source_topology_and_fixed_bias() -> None:
     run = recipe_run()
-    projector = run.graph["simsiam_projector"].network
-    predictor = run.graph["simsiam_predictor"].network
+    projector_component = run.graph["simsiam_projector"]
+    predictor_component = run.graph["simsiam_predictor"]
+    assert isinstance(projector_component, SimSiamProjector)
+    assert isinstance(predictor_component, SimSiamPredictor)
+    projector = projector_component.network
+    predictor = predictor_component.network
     assert [type(m) for m in projector] == [
         nn.Linear,
         nn.BatchNorm1d,
@@ -174,12 +184,25 @@ def test_source_topology_and_fixed_bias() -> None:
         nn.ReLU,
         nn.Linear,
     ]
-    assert projector[0].bias is None and projector[3].bias is None
-    assert not projector[6].bias.requires_grad
-    assert bool(projector[6].bias.ne(0).any())
+    first, middle, final, output_bn = (
+        projector[0],
+        projector[3],
+        projector[6],
+        projector[7],
+    )
+    assert isinstance(first, nn.Linear) and isinstance(middle, nn.Linear)
+    assert isinstance(final, nn.Linear) and isinstance(output_bn, nn.BatchNorm1d)
+    assert (first.bias, middle.bias) == (None, None)
+    assert final.bias is not None
+    assert not final.bias.requires_grad
+    assert bool(final.bias.ne(0).any())
     assert "network.6.bias" in dict(run.graph["simsiam_projector"].named_buffers())
-    assert not projector[7].affine
-    assert predictor[0].bias is None and predictor[3].bias is not None
+    assert not output_bn.affine
+    predictor_first, predictor_final = predictor[0], predictor[3]
+    assert isinstance(predictor_first, nn.Linear)
+    assert isinstance(predictor_final, nn.Linear)
+    assert (predictor_first.bias,) == (None,)
+    assert predictor_final.bias is not None
     assert [
         (m.in_features, m.out_features) for m in projector if isinstance(m, nn.Linear)
     ] == [(256, 256)] * 3
@@ -197,7 +220,11 @@ def test_two_cached_bn_updates_and_encoder_branch_gradients() -> None:
         schema, two_cluster_population(128, seed=5, row_offset=0, low=SEPARATED).batch
     )
     population = build_population(data, DATA_POLICY, seed=6)
-    projector = run.graph["simsiam_projector"].network
+    component = run.graph["simsiam_projector"]
+    assert isinstance(component, SimSiamProjector)
+    projector = component.network
+    first, hidden_bn = projector[0], projector[1]
+    assert isinstance(first, nn.Linear) and isinstance(hidden_bn, nn.BatchNorm1d)
     run.graph.train()
     state = run.state(run.stages[0], population.rows, rng_key=8, population=population)
     for bn in [m for m in run.graph.modules() if isinstance(m, nn.BatchNorm1d)]:
@@ -211,11 +238,11 @@ def test_two_cached_bn_updates_and_encoder_branch_gradients() -> None:
             Port.X_REPR
         ]
         assert isinstance(features, Tensor)
-        hidden = projector[0](features)
+        hidden = first(features)
         expected_mean = 0.9 * expected_mean + 0.1 * hidden.mean(0)
         expected_var = 0.9 * expected_var + 0.1 * hidden.var(0, correction=1)
-    torch.testing.assert_close(projector[1].running_mean, expected_mean)
-    torch.testing.assert_close(projector[1].running_var, expected_var)
+    torch.testing.assert_close(hidden_bn.running_mean, expected_mean)
+    torch.testing.assert_close(hidden_bn.running_var, expected_var)
     mixed = LossMixer.for_stage(run.stages[0]).mix(
         state, population.rows, TrainContext(global_step=0, schema=schema)
     )
@@ -400,7 +427,11 @@ def test_topology_oracle_kills_affine_output_bn(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run = recipe_run()
-    run.graph["simsiam_projector"].network[7].affine = True
+    component = run.graph["simsiam_projector"]
+    assert isinstance(component, SimSiamProjector)
+    output_bn = component.network[7]
+    assert isinstance(output_bn, nn.BatchNorm1d)
+    output_bn.affine = True
     monkeypatch.setattr(sys.modules[__name__], "recipe_run", lambda: run)
     with pytest.raises(AssertionError):
         test_source_topology_and_fixed_bias()

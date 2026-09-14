@@ -85,7 +85,18 @@ def test_canonical_runner_rescores_the_saved_evidence(
         1,
         ROOT / "runs",
     )
-    assert result.as_json() == saved
+    actual = result.as_json()
+    assert {key: value for key, value in actual.items() if key != "metrics"} == {
+        key: value for key, value in saved.items() if key != "metrics"
+    }
+    for got, want in zip(actual["metrics"], saved["metrics"], strict=True):
+        assert got.keys() == want.keys()
+        for key in got:
+            # Derived summaries can differ by roundoff across platforms.
+            if key in {"mean", "stderr", "margin"} and want[key] is not None:
+                assert got[key] == pytest.approx(want[key], rel=1e-12, abs=1e-12)
+            else:
+                assert got[key] == want[key]
     assert_result_matches_card(result, CARD)
 
 
