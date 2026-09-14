@@ -88,6 +88,10 @@ def benchmark_function(recipe: str) -> BenchmarkFunction:
         from xty2.evaluation.benchmarks.vicreg import run
 
         return run
+    if recipe == "barlow_twins":
+        from xty2.evaluation.benchmarks.barlow_twins import run
+
+        return run
     if recipe == "simsiam":
         from xty2.evaluation.benchmarks.simsiam import run
 
@@ -117,6 +121,7 @@ RECIPES = (
     "remixmatch",
     "variational_treatment",
     "vicreg",
+    "barlow_twins",
     "simsiam",
 )
 

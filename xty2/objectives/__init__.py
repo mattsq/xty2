@@ -28,6 +28,11 @@ from xty2.objectives.adaptive_threshold import (
     SelfAdaptiveThresholds,
     SelfAdaptiveThresholdTreatmentNLL,
 )
+from xty2.objectives.barlow_twins import (
+    CrossCorrelationDiagonal,
+    CrossCorrelationOffDiagonal,
+    cross_correlation,
+)
 from xty2.objectives.comatch import (
     CoMatchConfidenceThresholds,
     MemorySmoothedLabelGraph,
@@ -132,6 +137,8 @@ __all__ = [
     "ConsistencyDivergence",
     "ConsistencyLoss",
     "CosineFeatureConsistency",
+    "CrossCorrelationDiagonal",
+    "CrossCorrelationOffDiagonal",
     "CurriculumMapping",
     "CurriculumPseudoLabelTreatmentNLL",
     "CurriculumStatus",
@@ -183,4 +190,5 @@ __all__ = [
     "UDASharpening",
     "UDAStopGrad",
     "VariationalTreatmentELBO",
+    "cross_correlation",
 ]

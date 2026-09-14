@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import sys
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal
@@ -28,14 +29,15 @@ from xty2.evaluation.benchmarks.common import (
     two_cluster_population,
 )
 from xty2.evaluation.reporting import MetricResult
-from xty2.evaluation.simsiam_study import arm_recipe, embedding_metrics, require_equal
+from xty2.evaluation.simsiam_study import arm_recipe, embedding_metrics, study
 from xty2.evaluation.vicreg_views import OracleSymmetry
 from xty2.objectives import CosineFeatureConsistency
 from xty2.recipes import simsiam
 from xty2.recipes.simsiam import CORRUPTED_A as A
 from xty2.recipes.simsiam import CORRUPTED_B as B
 from xty2.recipes.simsiam import DATA_POLICY
-from xty2.training.loading import build_population
+from xty2.training import executors
+from xty2.training.loading import build_population, iterate
 from xty2.training.loss_mixer import LossMixer
 
 from tests.invariants import test_doublematch as card_parser
@@ -283,10 +285,32 @@ def test_spread_rank_and_strict_boundary() -> None:
     assert math.isfinite(isotropic["raw_norm"])
 
 
-def test_mask_swap_mutant_is_rejected() -> None:
-    mask = torch.tensor([True, False, True, False])
-    with pytest.raises(RuntimeError, match="mismatch"):
-        require_equal({"t_observed": mask}, {"t_observed": mask.roll(1)})
+def test_mask_swap_mutant_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = iterate
+    calls = 0
+
+    def changed_mask(*args: Any, **kwargs: Any) -> Iterator[XTYBatch]:
+        nonlocal calls
+        calls += 1
+        alter = calls == 3  # First stage of the second arm.
+        for batch in original(*args, **kwargs):
+            if alter:
+                mask = batch.t_observed.roll(1)
+                assert mask.sum() == batch.t_observed.sum()
+                assert not torch.equal(mask, batch.t_observed)
+                batch = batch.replace(t_observed=mask)
+            yield batch
+
+    monkeypatch.setattr(executors, "iterate", changed_mask)
+    with pytest.raises(RuntimeError, match="actual row/mask/value traces differ"):
+        study(
+            42,
+            train_rows=128,
+            test_rows=128,
+            pretrain_steps=2,
+            fit_steps=2,
+            eval_batches=1,
+        )
 
 
 def test_every_answered_card_value_matches_plan(
