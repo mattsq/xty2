@@ -1,0 +1,160 @@
+{
+  "recipe": "barlow_twins",
+  "head": "84a10d8e0daa56f1ae1621920dfd3904ea5640aa",
+  "tier": 1,
+  "pretrain_steps": 200,
+  "joint_fit_steps": 300,
+  "eval_batches": 16,
+  "arms": [
+    "full",
+    "diagonal_only",
+    "no_pretrain",
+    "vicreg"
+  ],
+  "replicates": [
+    {
+      "arms": {
+        "diagonal_only": {
+          "active_fraction": 1.0,
+          "covariance_top_eigenvalue_share": 0.8364942508722917,
+          "diagonal_alignment": 0.999086357653141,
+          "diagonal_error": 1.0801678413940863e-06,
+          "encoder_parameter_norm": 4.193914191535276,
+          "outcome_nll": 1.1261930465698242,
+          "projector_parameter_norm": 39.45273198956502,
+          "raw_variance_first": 0.9522939547896385,
+          "raw_variance_second": 0.9506325386464596,
+          "redundancy": 0.6430856402372894,
+          "treatment_nll": 2.578962802886963
+        },
+        "full": {
+          "active_fraction": 1.0,
+          "covariance_top_eigenvalue_share": 0.06441726214572795,
+          "diagonal_alignment": 0.9725598134100437,
+          "diagonal_error": 0.0008141896614688449,
+          "encoder_parameter_norm": 4.262562288129273,
+          "outcome_nll": 1.1307889223098755,
+          "projector_parameter_norm": 39.937899268695595,
+          "raw_variance_first": 0.04804710694588721,
+          "raw_variance_second": 0.04796484764665365,
+          "redundancy": 0.021807074080241403,
+          "treatment_nll": 1.9625192880630493
+        },
+        "no_pretrain": {
+          "outcome_nll": 1.1722406148910522,
+          "treatment_nll": 2.0794293880462646
+        },
+        "vicreg": {
+          "active_fraction": 1.0,
+          "covariance_top_eigenvalue_share": 0.07357836865719747,
+          "diagonal_alignment": 0.9977616257965565,
+          "diagonal_error": 5.474199113564282e-06,
+          "encoder_parameter_norm": 4.705240874781984,
+          "outcome_nll": 1.1253529787063599,
+          "projector_parameter_norm": 42.08399448557241,
+          "raw_variance_first": 0.39268018677830696,
+          "raw_variance_second": 0.3926403746008873,
+          "redundancy": 0.028966361879135996,
+          "treatment_nll": 2.4545178413391113
+        }
+      },
+      "base": 419
+    },
+    {
+      "arms": {
+        "diagonal_only": {
+          "active_fraction": 1.0,
+          "covariance_top_eigenvalue_share": 0.6435062085052715,
+          "diagonal_alignment": 0.9987439513206482,
+          "diagonal_error": 1.966644731510314e-06,
+          "encoder_parameter_norm": 4.144759212687455,
+          "outcome_nll": 1.114511489868164,
+          "projector_parameter_norm": 39.456935385872264,
+          "raw_variance_first": 0.7416014783084393,
+          "raw_variance_second": 0.7405884452164173,
+          "redundancy": 0.4354881372470445,
+          "treatment_nll": 0.5539065599441528
+        },
+        "full": {
+          "active_fraction": 1.0,
+          "covariance_top_eigenvalue_share": 0.06580335427078018,
+          "diagonal_alignment": 0.9714240953326225,
+          "diagonal_error": 0.000879701223311713,
+          "encoder_parameter_norm": 4.251434188179319,
+          "outcome_nll": 1.1177306175231934,
+          "projector_parameter_norm": 39.9266621051898,
+          "raw_variance_first": 0.043807443929836154,
+          "raw_variance_second": 0.04373682662844658,
+          "redundancy": 0.022434343680476955,
+          "treatment_nll": 0.5803820490837097
+        },
+        "no_pretrain": {
+          "outcome_nll": 1.1273783445358276,
+          "treatment_nll": 0.5710384249687195
+        },
+        "vicreg": {
+          "active_fraction": 1.0,
+          "covariance_top_eigenvalue_share": 0.08612532738162793,
+          "diagonal_alignment": 0.9984369613230228,
+          "diagonal_error": 2.6688603327329474e-06,
+          "encoder_parameter_norm": 4.699290211479237,
+          "outcome_nll": 1.111667275428772,
+          "projector_parameter_norm": 42.10740135029416,
+          "raw_variance_first": 0.38849832862615585,
+          "raw_variance_second": 0.3888374138623476,
+          "redundancy": 0.03183867856714357,
+          "treatment_nll": 0.7606510519981384
+        }
+      },
+      "base": 523
+    },
+    {
+      "arms": {
+        "diagonal_only": {
+          "active_fraction": 1.0,
+          "covariance_top_eigenvalue_share": 0.6825901415382936,
+          "diagonal_alignment": 0.9994958564639091,
+          "diagonal_error": 2.916560601917695e-07,
+          "encoder_parameter_norm": 4.1832236504574505,
+          "outcome_nll": 1.172852873802185,
+          "projector_parameter_norm": 39.45653995379925,
+          "raw_variance_first": 0.947454571723938,
+          "raw_variance_second": 0.9479449391365051,
+          "redundancy": 0.5198008468239741,
+          "treatment_nll": 0.7618462443351746
+        },
+        "full": {
+          "active_fraction": 1.0,
+          "covariance_top_eigenvalue_share": 0.05912537319493232,
+          "diagonal_alignment": 0.9788124747574329,
+          "diagonal_error": 0.0004857370640820591,
+          "encoder_parameter_norm": 4.254647690152255,
+          "outcome_nll": 1.1807529926300049,
+          "projector_parameter_norm": 39.90827402174374,
+          "raw_variance_first": 0.04143234039656818,
+          "raw_variance_second": 0.04151235846802592,
+          "redundancy": 0.021041484028392576,
+          "treatment_nll": 0.8106572031974792
+        },
+        "no_pretrain": {
+          "outcome_nll": 1.1700201034545898,
+          "treatment_nll": 0.7604982256889343
+        },
+        "vicreg": {
+          "active_fraction": 1.0,
+          "covariance_top_eigenvalue_share": 0.0776114430415681,
+          "diagonal_alignment": 0.9979801662266254,
+          "diagonal_error": 4.483093519525028e-06,
+          "encoder_parameter_norm": 4.687733473330877,
+          "outcome_nll": 1.1450269222259521,
+          "projector_parameter_norm": 42.06139839703461,
+          "raw_variance_first": 0.3908234480768442,
+          "raw_variance_second": 0.3910755645483732,
+          "redundancy": 0.030383836383222368,
+          "treatment_nll": 0.7962466478347778
+        }
+      },
+      "base": 631
+    }
+  ]
+}

@@ -302,6 +302,12 @@ adaptation still failed spread; its failure ledger, original audit and
 [paired view diagnostic](experiments/2026-09-08-vicreg-views.md) remain recorded.
 
 Candidates: CoMatch, PAWS, SimMatch, VICReg, Barlow Twins, BYOL, and SimSiam.
+Barlow Twins is implemented against its
+[card](recipes/barlow_twins.md): the card is reviewed and Tier 0 passes, so its
+status is `implemented`. It tests the off-diagonal cross-correlation penalty
+with VICReg's explicit valid-view fixture and a paired diagonal-only ablation,
+and it does not claim an ImageNet reproduction. Its predeclared §6.4 bounds
+have not been measured — Tier 1 and the §6 study are the next packets.
 Before tuning, measure representation norm, collapse concentration, and whether
 same-treatment rows are treated as negatives. Batch-coupled objectives must
 declare and bind batch size.
