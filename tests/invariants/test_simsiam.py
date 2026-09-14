@@ -192,7 +192,7 @@ def test_source_topology_and_fixed_bias() -> None:
     )
     assert isinstance(first, nn.Linear) and isinstance(middle, nn.Linear)
     assert isinstance(final, nn.Linear) and isinstance(output_bn, nn.BatchNorm1d)
-    assert (first.bias, middle.bias) == (None, None)
+    assert first._parameters["bias"] is None and middle._parameters["bias"] is None
     assert final.bias is not None
     assert not final.bias.requires_grad
     assert bool(final.bias.ne(0).any())
@@ -201,7 +201,7 @@ def test_source_topology_and_fixed_bias() -> None:
     predictor_first, predictor_final = predictor[0], predictor[3]
     assert isinstance(predictor_first, nn.Linear)
     assert isinstance(predictor_final, nn.Linear)
-    assert (predictor_first.bias,) == (None,)
+    assert predictor_first._parameters["bias"] is None
     assert predictor_final.bias is not None
     assert [
         (m.in_features, m.out_features) for m in projector if isinstance(m, nn.Linear)
