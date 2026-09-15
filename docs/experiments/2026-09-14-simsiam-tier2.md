@@ -122,6 +122,13 @@ by these checks. The local optimisation and data departures remain plausible
 reasons for different ablation behaviour; this experiment does not identify
 which departure caused it. Both failed attribution bounds remain in the ledger.
 
+**Follow-up.** The [2026-09-15 re-audit](2026-09-15-simsiam-fidelity-audit.md)
+did identify them, and also found that the instrument those bounds are built on
+cannot express the claim they make. Nothing above is retracted — every check
+listed here still passes — but the "plausible reasons" sentence is superseded:
+the encoder initialiser and the optimiser both participate, and card section
+6.4's spread statistic scores 0.99 on an embedding of exact rank one.
+
 ## Validation and evidence
 
 The three declared Tier 1 bases 42, 142 and 242 passed at 128/256 steps,

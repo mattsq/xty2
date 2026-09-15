@@ -121,6 +121,18 @@ scale claim and not only the topology. This is a construction argument, not a
 measurement: report realised norms for both ports per arm, and treat the
 section 6.4 near-zero fractions as the check that it held.
 
+The 2026-09-15 audit measured that argument and found it sound at `X_PROJ` and
+incomplete before it. The terminal non-affine BN does pin the detached target
+near `sqrt(d)`, and every arm's near-zero fraction is exactly zero. But the
+check read only the objective's two ports, and the encoder scale it declined to
+look at is what the projector's *own* BatchNorm layers consume: the
+representation arrives at `3.8e-4`, so the two hidden layers divide by
+`sqrt(eps)` rather than by a batch standard deviation. Deviation 7 records the
+measurement; `tests/invariants/test_simsiam.py` carries it, and the
+[audit](../experiments/2026-09-15-simsiam-fidelity-audit.md) carries the rest.
+A norm check on this objective reads every port between the encoder and the
+cosine, not only the two the objective names.
+
 The no-predictor arm uses the same two losses with `X_PROJ` on both sides
 and opposite views, retaining stop-gradient. Omit the dead predictor from its
 compiled graph/trainables, while preserving all common initial tensors and RNG
@@ -251,12 +263,13 @@ value; do not silently copy Barlow Twins' all-bias-free projector.
 
 | # | Kind | Blocked on | What we do differently | Why | Expected effect on the §6 metric |
 |---|---|---|---|---|---|
-| 1 | `judgement` | | Tabular MLP replaces ResNet-50; projector width 256 replaces 2048 and predictor bottleneck 64 replaces 512. Retain three-layer projector, output non-affine BN, two-layer predictor and 4:1 bottleneck ratio. | Bounded local experiment. Encoder initialisation follows the existing local encoder rather than residual-network initialisation. | Capacity, norms and collapse dynamics can differ; no image score transfers. |
+| 1 | `judgement` | | Tabular MLP replaces ResNet-50; projector width 256 replaces 2048 and predictor bottleneck 64 replaces 512. Retain three-layer projector, output non-affine BN, two-layer predictor and 4:1 bottleneck ratio. | Bounded local experiment. The encoder initialisation clause this row used to carry has moved to deviation 7, where it is measured rather than asserted. | Capacity, norms and collapse dynamics can differ; no image score transfers. |
 | 2 | `judgement` | | Explicit caller-supplied views; the study imports VICReg's OracleSymmetry. | Preserve analytic propensity and conditional outcome means using known fixture symmetries. These are privileged DGP operations, not learned augmentations. | Tests a valid-view mechanism, not a general tabular policy. |
-| 3 | `judgement` | | Adam 0.001, constant LR for encoder and predictor, no decay, batch 128, 1000 pretrain steps, single-process float32. | Match the local transfer budget; deliberately depart from source SGD, momentum 0.9, base LR 0.05 scaled by batch/256, decay 1e-4 and cosine training. No claim that SGD or cosine is unavailable. | Optimisation may determine whether either ablation collapses; a miss audits this choice before changing a bound. |
+| 3 | `judgement` | | Adam 0.001, constant LR for encoder and predictor, no decay, batch 128, 1000 pretrain steps, single-process float32. | Match the local transfer budget; deliberately depart from source SGD, momentum 0.9, base LR 0.05 scaled by batch/256, decay 1e-4 and cosine training. No claim that SGD or cosine is unavailable. | Optimisation may determine whether either ablation collapses; a miss audits this choice before changing a bound. **The miss happened and the audit ran.** It does determine it: this row and deviation 7 together suppress the source's ordering, and returning either one alone does not restore it. Section 6.4's note and the 2026-09-15 audit carry the paired measurement. |
 | 4 | `judgement` | | Fit XTY heads for 3000 steps, with the explicit supervised and marginal-NLL weights in §4, rather than source frozen image linear evaluation. Train-only scaling and 40 MCAR labels. | Isolate transfer to the repository's task. | Evaluates a different task and estimand; report local bounds only. |
 | 5 | `judgement` | | No separate fixed-predictor-LR experiment; both networks use the same constant schedule. | This is a declared tabular protocol, not the source Table 1(c) variant, whose encoder LR still decays. | Predictor tracking may change; retain as an optimisation limitation of the claim. |
 | 6 | `judgement` | | Use existing separate L2 normalisations with epsilon 1e-12 rather than reference nn.CosineSimilarity's default epsilon 1e-8. | Matches paper Algorithm 1's separate normalisation form and existing objective; pins numerical handling instead of silently inheriting it. | Differences near zero norms and in gradients must be tested and reported; ordinary nonzero cosine agrees. |
+| 7 | `judgement` | | Encoder linear layers use `normal std=0.1/sqrt(fan_in)` inherited from the sibling tabular encoders, not the paper's own initialiser. The source's convolution and fc layers take the default PyTorch `U(-sqrt(k), sqrt(k))`, `k = 1/fan_in` (supplement A). At four 256-wide layers the inherited constant is `std = 0.00625`, and `X_REPR` reaches the projector at a mean row norm of `3.8e-4` instead of the pooled ResNet feature's order one. | Inherited from `vicreg` and `barlow_twins` without re-deriving it against this paper and this architecture, which is what section 3.2's norm check was for. **The audit recommends withdrawing this row and passing `TORCH_LINEAR_INITIALISATION`, which `MLPEncoder` already accepts.** Recorded rather than changed here, because section 4 binds the value and a material recipe change reruns section 6. | Measured, not predicted. The projector's two hidden BatchNorms perform `7.5e-6` and `0.078` of their declared normalisation (`var/(var+eps)`, ten section 6.2 model seeds), against `0.999` at the output layer, so the realised head sits between paper Table 3(a) and 3(b) rather than at its 3(c) default — an axis the paper measures at 33 accuracy points. Supplement A names an fc initialiser of this size as one whose models "may not converge". |
 
 No source mechanic is omitted because of an unavailable abstraction. The
 frozen final projector bias is stored as a buffer: its sampled value and
@@ -291,6 +304,23 @@ record all arms, per-seed values, rank/norm diagnostics and the source environme
 Passing spread did not imply high rank: the full projection's mean effective
 rank was 1.566 out of 256. No ImageNet reproduction or causal identification
 claim follows from this local result.
+
+Section 6.4 required an audit of gradients, topology, BN, initialisation, views
+and optimiser fidelity before any prospective amendment could be proposed. That
+[audit](../experiments/2026-09-15-simsiam-fidelity-audit.md) is complete and
+returns three things. The transcribed method is faithful: equations (1)-(4),
+Algorithm 1's two halves, the target-only detach, the pinned builder's
+topology, the frozen projector bias, the two-forward BN discipline and both
+ablation constructions all re-checked clean, and no new equation, detach or
+pairing mismatch was found. The measurement is not: card section 6.4's `S` is a
+channel-balance statistic downstream of a non-affine BatchNorm, it scores 0.99
+on an embedding of exact rank one, and the three bounds resting on it cannot
+express the attribution claim. And two declared departures jointly suppress the
+mechanism: under this card's Adam-and-inherited-initialiser protocol the full
+arm's projection effective rank sits *below* both ablations', while under the
+source's own initialiser and optimiser it sits two to three times above them on
+every seed. Deviation 7 and section 6.4's note carry the two proposals; the
+recorded ledger row stands unchanged until they are reviewed.
 
 ## 6. Reproduction target
 
@@ -424,6 +454,51 @@ vector fractions (norm <= 1e-8), raw norms, concentration and effective rank.
 Use analytic conditional means, not a noisy realised potential-outcome
 difference, as the treatment-effect target.
 
+#### Audit finding, 2026-09-15: S cannot carry these three bounds
+
+The bounds above are unchanged and the recorded result stays failed. This note
+records why the first three of them are not a fair test of the mechanism they
+name, so that a reviewer decides the replacement rather than a rerun inheriting
+the same instrument.
+
+`S` divides every row by its own norm, so it is invariant to the embedding's
+scale and what remains is how evenly the channels share the direction. The
+projector terminates in a non-affine BatchNorm, which equalises exactly that.
+Measured on a deliberately collapsed fixture in `tests/invariants/test_simsiam.py`:
+an embedding of **exact rank one** — every row a multiple of a single vector —
+scores `S = 0.79` bare and `S = 0.99` behind that BatchNorm, and an isotropic
+embedding of rank 98 scores the same 0.99. The first bound, `S >= 0.5`,
+therefore cannot fail for any embedding leaving a functioning output BatchNorm,
+and the two gap bounds are differences of two numbers both pinned near one,
+whose residual variation is row-norm heterogeneity rather than collapse: over
+the recorded run's thirty (arm, seed) points the correlation between mean
+projection row norm and `S` is 0.88.
+
+The decisive check is that correcting the recipe does not rescue them. In the
+audit's paired probe cell where both deviation 3 and deviation 7 are returned to
+the paper's values — and the full arm's projection effective rank is three times
+the no-stop-gradient arm's on every one of five seeds, with no overlap — the two
+gap bounds are still negative, at -0.018 and -0.032. The instrument has to
+change whatever else does.
+
+Paper section 4.1 reads this quantity at zero for its collapsed run, which
+requires the pre-BatchNorm output to be constant across rows; in eval mode on
+frozen buffers that is reachable. It is not reached here. The pre-BatchNorm
+per-channel variance measured in every arm of the recorded run is 0.5 to 1.0,
+five orders of magnitude above `eps = 1e-5`, so `var/(var+eps) = 0.99997` and
+the BatchNorm is squarely in its normalising regime. The card imported the
+paper's diagnostic without the state that makes it move.
+
+One diagnostic this section already requires does separate the arms on the
+recorded run, in the paper's own direction and on every seed: view alignment
+reaches 0.9998 and 0.99996 in the two ablations against 0.974 in the full arm,
+which is Figure 2 (left)'s "reaches the minimum possible loss of -1" in this
+fixture's terms. Centred covariance effective rank does not separate them on
+that run — 1.566 against 1.911 and 1.632, the wrong way round — but it does by
+factors once deviations 3 and 7 are corrected. A replacement bound should be
+built from these, and must be declared prospectively on a seed stream disjoint
+from every seed the audit has now seen.
+
 The benchmark binds the protocol values to this card and lands with its
 ten-seed results from a committed tree. The blank ledger placeholder is retained.
 
@@ -435,7 +510,8 @@ ten-seed results from a committed tree. The blank ledger placeholder is retained
 | Tabular capacity, initialisation, training budget and head losses | Exact §4 values | Declared local design, not source defaults; deviations 1, 3 and 4 |
 | Zero-norm numerical convention in the printed equations | Separate normalisation, epsilon 1e-12 | Existing objective and Algorithm 1 form; difference from pinned runtime disclosed in deviation 6 |
 | A transferable numeric noncollapse tolerance on this DGP | Prospective S >= 0.5 and positive paired gaps | Isotropic reference plus attribution question; not calibrated on results |
-| Whether the local Adam protocol preserves source ablation behaviour | Unknown until the paired study | Treat a negative result as an audit trigger; do not promise reproduced status |
+| Whether the local Adam protocol preserves source ablation behaviour | Answered: it does not | The 2026-09-15 audit's paired probe; deviations 3 and 7 both participate, and neither alone restores the source's ordering |
+| A collapse statistic this architecture can actually move | Unresolved; `S` cannot | Section 6.4's audit note; alignment and effective rank separate the arms but carry no reviewed bound yet |
 
 ## 8. Review
 
@@ -443,6 +519,8 @@ ten-seed results from a committed tree. The blank ledger placeholder is retained
 |---|---|---|
 | Card reviewed (status → `reviewed`) | Codex implementation audit under the user's PR #55 request; no independent human approval claimed | 2026-09-14 |
 | Plan diffed against §3.2 and §4 | Codex; actual compiled plan and executable value/topology checks | 2026-09-14 |
+| Fidelity re-audit after the failed §6 result | Claude Code, requested by the repository owner; recorded in `docs/experiments/2026-09-15-simsiam-fidelity-audit.md` | 2026-09-15 |
+| Deviation 7's withdrawal and §6.4's replacement metric | **Not reviewed.** Both are proposals; §4's bound values and §6.1's ledger row are unchanged pending that review | — |
 
 The actual compiled plan is included in the PR and checked against sections
 3.2 and 4 by `tests/invariants/test_simsiam.py`.

@@ -18,6 +18,7 @@ from xty2.core import (
     GraphError,
     LossError,
     Port,
+    Realisation,
     State,
     TrainContext,
     XTYBatch,
@@ -310,6 +311,225 @@ def test_spread_rank_and_strict_boundary() -> None:
     assert MetricResult("gap", (0.0, 2.0), ">", 0.0).passed is False
     assert MetricResult("gap", (1.0, 1.0), ">", 0.0).passed is True
     assert math.isfinite(isotropic["raw_norm"])
+
+
+def test_mixed_pretraining_loss_equals_the_reference_expression() -> None:
+    """The stage's mixed total against `main_simsiam.train`'s own line.
+
+    The reference writes
+    `-(criterion(p1, z2).mean() + criterion(p2, z1).mean()) * 0.5` with
+    `criterion = nn.CosineSimilarity(dim=1)`. That is a different code path
+    from this recipe's two half-weighted `Weighted(..., reduction="mean")`
+    terms over separate `F.normalize` calls, so the comparison checks the
+    whole objective-and-mixer chain rather than one function against itself:
+    both half-weights, both directions, the row mean, and the absence of a
+    second division by batch or width. Deviation 6 predicts that the epsilon
+    difference is invisible at ordinary norms, and this is where that is
+    checked; the near-zero behaviour is
+    `test_directional_values_and_gradients` at scale 1e-14.
+    """
+    schema = continuous_schema(6)
+    torch.manual_seed(310006)
+    run = recipe_run()
+    population = build_population(
+        training_dataset(
+            schema,
+            two_cluster_population(
+                1024, seed=310001, row_offset=0, low=SEPARATED
+            ).batch,
+        ),
+        DATA_POLICY,
+        seed=310002,
+    )
+    run.graph.train()
+    state = run.state(run.stages[0], population.rows, rng_key=7, population=population)
+    mixed = LossMixer.for_stage(run.stages[0]).mix(
+        state, population.rows, TrainContext(global_step=0, schema=schema)
+    )
+
+    def embedding(realisation: Realisation, port: Port) -> Tensor:
+        value = state[realisation][port]
+        assert isinstance(value, Tensor)
+        return value
+
+    prediction_a = embedding(A, Port.X_PRED)
+    projection_a = embedding(A, Port.X_PROJ)
+    prediction_b = embedding(B, Port.X_PRED)
+    projection_b = embedding(B, Port.X_PROJ)
+    criterion = nn.CosineSimilarity(dim=1)
+    reference = (
+        -(
+            criterion(prediction_a, projection_b.detach()).mean()
+            + criterion(prediction_b, projection_a.detach()).mean()
+        )
+        * 0.5
+    )
+    torch.testing.assert_close(mixed.total, reference)
+    # A degenerate agreement would be two zeros; the fixture is nondegenerate.
+    assert abs(reference.detach().item()) > 1e-4
+
+
+def projector_batchnorm_regimes(seed: int) -> list[float]:
+    """`var / (var + eps)` at each projector BatchNorm, on one training batch.
+
+    This is the fraction of the normalisation each declared layer actually
+    performs: one when the batch variance dominates `eps`, and zero when the
+    constant floor does. The pinned builder reads a ResNet-50 pooled feature,
+    where every projector BatchNorm sits at one.
+    """
+    schema = continuous_schema(6)
+    train = two_cluster_population(1024, seed=seed + 1, row_offset=0, low=SEPARATED)
+    population = build_population(
+        training_dataset(schema, train.batch), DATA_POLICY, seed=seed + 2
+    )
+    torch.manual_seed(seed + 6)
+    run = recipe_run()
+    component = run.graph["simsiam_projector"]
+    assert isinstance(component, SimSiamProjector)
+    rows = population.rows
+    view = run.recipe.views[0].apply(
+        rows, schema, rng_key=seed + 3, population=population
+    )
+    run.graph.train()
+    regimes: list[float] = []
+    with torch.no_grad():
+        value = run.graph.evaluate(view, schema=schema, only=("mlp_encoder",))[
+            Port.X_REPR
+        ]
+        assert isinstance(value, Tensor)
+        for module in component.network:
+            if isinstance(module, nn.BatchNorm1d):
+                variance = value.var(0, correction=0)
+                regimes.append(float((variance / (variance + 1e-5)).mean()))
+            value = module(value)
+    return regimes
+
+
+def test_projector_batchnorm_normalising_regime() -> None:
+    """Card section 5 row 7: two of three projector BatchNorms do not normalise.
+
+    The source projector normalises at every layer because its input is a
+    ResNet-50 pooled feature of order one (paper section 4.4 and the pinned
+    `SimSiam.__init__`). Under card section 4's inherited encoder
+    initialisation the representation arrives four orders of magnitude
+    smaller, so the two hidden layers divide by `sqrt(eps)` rather than by a
+    batch standard deviation. Paper supplement A names an fc initialiser of
+    this size as one that may not converge, and paper Table 3 measures the
+    projector's BatchNorm configuration as worth 33 accuracy points, so this
+    is a mechanic-level departure rather than a scale detail. Each threshold
+    sits between two measured, well-separated regimes rather than beside one
+    seed: over six seeds the two initialisers give `[6.1e-6, 9.2e-6]` against
+    `[0.887, 0.916]` at the first hidden layer, and `[0.066, 0.096]` against
+    `[0.99989, 0.99990]` at the second. The output layer normalises under both.
+    """
+    for seed in (310000, 310400, 310900, 42):
+        hidden_one, hidden_two, output = projector_batchnorm_regimes(seed)
+        assert hidden_one < 1e-3, seed
+        assert hidden_two < 0.5, seed
+        assert output > 0.99, seed
+
+
+def test_encoder_representation_norm_is_four_orders_below_the_source() -> None:
+    """The same departure at the port the card section 3.2 norm check reads.
+
+    Section 3.2 checked `||z||` at `X_PROJ`, which the terminal non-affine
+    BatchNorm pins near `sqrt(d) = 16` whatever the encoder does, so the check
+    could not see the encoder scale that the two hidden BatchNorms consume.
+    """
+    schema = continuous_schema(6)
+    torch.manual_seed(310006)
+    run = recipe_run()
+    run.graph.train()
+    with torch.no_grad():
+        representation = run.graph.evaluate(
+            two_cluster_population(128, seed=310001, row_offset=0, low=SEPARATED).batch,
+            schema=schema,
+            only=("mlp_encoder",),
+        )[Port.X_REPR]
+    assert isinstance(representation, Tensor)
+    assert float(representation.norm(dim=-1).mean()) < 1e-2
+
+
+def scalar_spread(rows: Tensor) -> float:
+    """Card section 6.4's S recomputed one index at a time."""
+    count, width = rows.shape
+    unit = []
+    for i in range(count):
+        squared = 0.0
+        for j in range(width):
+            squared += float(rows[i, j]) ** 2
+        norm = max(math.sqrt(squared), 1e-12)
+        unit.append([float(rows[i, j]) / norm for j in range(width)])
+    total = 0.0
+    for j in range(width):
+        mean = sum(unit[i][j] for i in range(count)) / count
+        variance = sum((unit[i][j] - mean) ** 2 for i in range(count)) / count
+        total += math.sqrt(variance)
+    return math.sqrt(width) * total / width
+
+
+def test_projection_spread_cannot_see_directional_collapse() -> None:
+    """Card section 6.4's S is a channel-balance statistic, not a rank test.
+
+    S divides each row by its own norm, so it is invariant to the embedding's
+    scale, and what remains is how evenly the channels share that direction.
+    An embedding of exact rank one — every row a multiple of one vector, the
+    strongest collapse there is — already scores above the `>= 0.5` bound on
+    its own, and scores 0.99 once the projector's terminal non-affine
+    BatchNorm equalises the channels. Paper section 4.1 reads the same
+    quantity at zero, which requires the pre-BatchNorm output to be constant
+    across rows; the measured pre-BatchNorm variance in every section 6.2 arm
+    is 0.5 to 1.0 per channel, five orders of magnitude above `eps = 1e-5`.
+    """
+    torch.manual_seed(0)
+    direction = torch.randn(256)
+    collapsed = torch.randn(128, 1) * direction
+    bare = embedding_metrics(collapsed)
+    assert bare["effective_rank"] == pytest.approx(1.0, abs=1e-6)
+    assert bare["spread"] == pytest.approx(scalar_spread(collapsed), abs=1e-6)
+    assert bare["spread"] > 0.5
+    normaliser = nn.BatchNorm1d(256, eps=1e-5, affine=False)
+    normaliser.train()
+    behind = embedding_metrics(normaliser(collapsed))
+    assert behind["effective_rank"] == pytest.approx(1.0, abs=1e-6)
+    assert behind["spread"] > 0.99
+    # The discriminating comparison: an isotropic embedding scores what the
+    # rank-one one scores, so at the values section 6.4 reads S carries no
+    # rank information at all. A centred 128-row cross-product has rank at
+    # most 127, so the ceiling below is the batch, not the width.
+    isotropic = embedding_metrics(torch.randn(128, 256))
+    assert isotropic["effective_rank"] > 90
+    assert abs(isotropic["spread"] - behind["spread"]) < 0.02
+    # S reaches zero only for a row-constant embedding, which the terminal
+    # BatchNorm cannot produce while its batch variance dominates eps.
+    assert embedding_metrics(torch.ones(8, 4))["spread"] == 0.0
+
+
+def test_initialisation_oracle_kills_the_normalising_projector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The proposed correction must retire card section 5 row 7 with it.
+
+    Giving the encoder the paper's own initialiser (supplement A: the default
+    PyTorch `U(-sqrt(k), sqrt(k))`, which `MLPEncoder` already accepts) puts
+    every projector BatchNorm back in its normalising regime, so the row's
+    two executable checks fail and cannot be left standing.
+    """
+    original = recipe_run
+
+    def corrected() -> CompiledRun:
+        run = original()
+        encoder = run.graph["mlp_encoder"]
+        for child in encoder.modules():
+            if isinstance(child, nn.Linear):
+                child.reset_parameters()
+        return run
+
+    monkeypatch.setattr(sys.modules[__name__], "recipe_run", corrected)
+    with pytest.raises(AssertionError):
+        test_projector_batchnorm_normalising_regime()
+    with pytest.raises(AssertionError):
+        test_encoder_representation_norm_is_four_orders_below_the_source()
 
 
 def test_mask_swap_mutant_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
