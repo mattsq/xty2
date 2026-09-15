@@ -16,10 +16,12 @@ from xty2.core import (
     CompiledRun,
     CompiledStage,
     ComponentGraph,
+    CosineAnneal,
     GaussianOutcome,
     Port,
     Program,
     Recipe,
+    Schema,
     TrainingPopulation,
     XTYBatch,
     compile,
@@ -135,6 +137,34 @@ def embedding_metrics(z: Tensor) -> dict[str, float]:
     }
 
 
+def encoder_diagnostics(
+    graph: ComponentGraph, views: Sequence[XTYBatch], schema: Schema
+) -> dict[str, float]:
+    """`X_REPR` diagnostics over the held-out views, in eval mode.
+
+    The encoder is the port the downstream stage inherits and the only one no
+    BatchNorm stands in front of, which is why section 6.4 reads its rank
+    rather than the projection's.
+    """
+    was_training = graph.training
+    graph.eval()
+    observations: dict[str, list[float]] = {}
+    try:
+        with torch.no_grad():
+            for view in views:
+                value = graph.evaluate(view, schema=schema, only=("mlp_encoder",))[
+                    Port.X_REPR
+                ]
+                assert isinstance(value, Tensor)
+                for name, measurement in embedding_metrics(value).items():
+                    observations.setdefault(name, []).append(measurement)
+    finally:
+        graph.train(was_training)
+    return {
+        name: math.fsum(values) / len(values) for name, values in observations.items()
+    }
+
+
 def study(
     base: int,
     *,
@@ -213,7 +243,18 @@ def study(
                 recipe,
                 program=Program(
                     (
-                        replace(pretrain, steps=pretrain_steps),
+                        replace(
+                            pretrain,
+                            steps=pretrain_steps,
+                            # The source anneals over the training length, so a
+                            # shortened budget re-bases the horizon with it
+                            # rather than running a prefix of the long curve.
+                            # A no-op at section 4's own 1000 steps.
+                            optimiser=replace(
+                                pretrain.optimiser,
+                                lr_schedule=CosineAnneal(steps=pretrain_steps),
+                            ),
+                        ),
                         replace(fit, steps=fit_steps),
                     )
                 ),
@@ -226,6 +267,19 @@ def study(
         start = snapshot(run.graph)
         if initial is None:
             initial = start
+            # Section 6.4's noncollapse reference: the untrained encoder on the
+            # same held-out views, under the shared initial tensors every arm
+            # is about to be checked against. Pretraining that ends below this
+            # has destroyed representation rank rather than built any.
+            metrics.update(
+                {
+                    f"initial_encoder_{name}": value
+                    for name, value in encoder_diagnostics(
+                        run.graph, views, schema
+                    ).items()
+                }
+            )
+            require_equal(snapshot(run.graph), start)
         require_equal(start, initial)
         transitions.clear()
         traces.clear()
@@ -429,6 +483,31 @@ def study(
             for name, values_list in observations.items():
                 metrics[f"{arm}_{name}"] = math.fsum(values_list) / len(values_list)
             require_equal(before, run.graph.state_dict())
+    # Section 6.4's required contrasts. An ablation sitting closer to the
+    # cosine's trivial optimum than the full arm is paper Figure 2 (left) in
+    # this fixture's terms; the retention term is the absolute guard.
+    metrics["stop_gradient_alignment_gap"] = (
+        metrics["no_stop_alignment"] - metrics["full_alignment"]
+    )
+    metrics["predictor_alignment_gap"] = (
+        metrics["no_predictor_alignment"] - metrics["full_alignment"]
+    )
+    for arm in ("no_stop", "no_predictor"):
+        name = "stop_gradient" if arm == "no_stop" else "predictor"
+        metrics[f"{name}_rank_gap"] = (
+            metrics["full_encoder_effective_rank"]
+            - metrics[f"{arm}_encoder_effective_rank"]
+        )
+    # Reported, never bounded: a random projection of six inputs already has an
+    # effective rank near 19, so concentrating below it is what a working
+    # representation does here (section 6.4).
+    metrics["encoder_rank_retention"] = (
+        metrics["full_encoder_effective_rank"]
+        - metrics["initial_encoder_effective_rank"]
+    )
+    # Retained as informational only: the 2026-09-15 audit shows S is a
+    # channel-balance statistic behind a non-affine BatchNorm, scoring 0.99 on
+    # an embedding of exact rank one, so it cannot carry a bound here.
     metrics["stop_gradient_spread_gap"] = (
         metrics["full_projection_spread"] - metrics["no_stop_projection_spread"]
     )

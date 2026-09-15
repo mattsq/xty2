@@ -1,7 +1,7 @@
 """Declarative tabular SimSiam assembly; card sections 3-5 govern departures."""
 
 from xty2.components import CategoricalPropensity, MLPEncoder, TARNetHead
-from xty2.components._nn import CFRNET_INITIALISATION
+from xty2.components._nn import CFRNET_INITIALISATION, TORCH_LINEAR_INITIALISATION
 from xty2.components.simsiam import (
     ACTIVATION,
     PREDICTOR_INITIALISATION,
@@ -14,6 +14,7 @@ from xty2.components.simsiam import (
 from xty2.core import (
     ComponentGraph,
     Constant,
+    CosineAnneal,
     DataSpec,
     GradientClipping,
     MissingnessSpec,
@@ -49,6 +50,21 @@ BATCH_SIZE = 128
 OBSERVED_TREATMENTS = 40
 CORRUPTED_A = Realisation(view="corrupted_a")
 CORRUPTED_B = Realisation(view="corrupted_b")
+# `main_simsiam.main_worker`: init_lr = args.lr * args.batch_size / 256 with
+# base lr 0.05 (paper section 4 "Baseline settings", linear scaling rule).
+PRETRAIN_LR = 0.05 * BATCH_SIZE / 256
+SGD = OptimiserSpec(
+    name="sgd",
+    lr=PRETRAIN_LR,
+    momentum=0.9,
+    # Supplement A: "a weight decay of 0.0001 for all parameter layers,
+    # including the BN scales and biases".
+    weight_decay=WeightDecay(value=1e-4, on_norm_and_bias=True, components=None),
+    lr_schedule=CosineAnneal(steps=PRETRAIN_STEPS),
+    clipping=GradientClipping.none(),
+)
+# Deviation 4: the downstream stage fits this repository's own heads, which the
+# source has no counterpart for, so it keeps the local protocol.
 ADAM = OptimiserSpec(
     name="adam",
     lr=0.001,
@@ -90,7 +106,10 @@ def simsiam(
                     activation="relu",
                     normalisation="none",
                     dropout=0.0,
-                    initialisation=CFRNET_INITIALISATION,
+                    # Paper supplement A: the source's fc layers take the torch
+                    # defaults, and it warns that a fixed small std may not
+                    # converge. Card deviation 7, withdrawn.
+                    initialisation=TORCH_LINEAR_INITIALISATION,
                 ),
                 SimSiamProjector(
                     "simsiam_projector",
@@ -167,7 +186,7 @@ def simsiam(
                 ),
                 trainable=("mlp_encoder", "simsiam_projector", "simsiam_predictor"),
                 rows="all",
-                optimiser=ADAM,
+                optimiser=SGD,
                 steps=PRETRAIN_STEPS,
                 sampler=UniformSampler(batch_size=BATCH_SIZE),
             ),

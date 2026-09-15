@@ -12,12 +12,15 @@ from typing import Any, Literal
 import pytest
 import torch
 from torch import Tensor, nn
-from xty2.components import SimSiamPredictor, SimSiamProjector
+from xty2.components import MLPEncoder, SimSiamPredictor, SimSiamProjector
+from xty2.components._nn import CFRNET_INITIALISATION
 from xty2.core import (
     CompiledRun,
+    CosineAnneal,
     GraphError,
     LossError,
     Port,
+    Program,
     Realisation,
     State,
     TrainContext,
@@ -37,7 +40,7 @@ from xty2.objectives import CosineFeatureConsistency
 from xty2.recipes import simsiam
 from xty2.recipes.simsiam import CORRUPTED_A as A
 from xty2.recipes.simsiam import CORRUPTED_B as B
-from xty2.recipes.simsiam import DATA_POLICY
+from xty2.recipes.simsiam import DATA_POLICY, ENCODER_WIDTHS
 from xty2.training import executors
 from xty2.training.loading import build_population, iterate
 from xty2.training.loss_mixer import LossMixer
@@ -273,6 +276,48 @@ def test_two_cached_bn_updates_and_encoder_branch_gradients() -> None:
         )
 
 
+def test_pretraining_anneal_spans_exactly_the_pretraining_budget() -> None:
+    """The source anneals over the training length, not over a fixed horizon.
+
+    `adjust_learning_rate` reads `epoch / args.epochs`, so the rate reaches the
+    bottom of the curve exactly as training ends. A schedule whose horizon
+    outlived the stage would run a prefix of the curve and never get there,
+    which is invisible in a diff and in a loss curve alike. Card section 4
+    binds both numbers to one constant; `simsiam_study` re-bases the horizon
+    whenever it shortens the budget, and this is the check on both.
+    """
+    pretrain = recipe_run().recipe.program[0]
+    schedule = pretrain.optimiser.lr_schedule
+    assert isinstance(schedule, CosineAnneal)
+    assert schedule.steps == pretrain.steps
+    assert schedule(0) == pytest.approx(1.0)
+    assert schedule(pretrain.steps // 2) == pytest.approx(0.5)
+    for budget in (16, 128):
+        shortened = arm_recipe(
+            replace(
+                recipe_run().recipe,
+                program=Program(
+                    (
+                        replace(
+                            pretrain,
+                            steps=budget,
+                            optimiser=replace(
+                                pretrain.optimiser,
+                                lr_schedule=CosineAnneal(steps=budget),
+                            ),
+                        ),
+                        recipe_run().recipe.program[1],
+                    )
+                ),
+            ),
+            "full",
+        )
+        rebased = shortened.program[0].optimiser.lr_schedule
+        assert isinstance(rebased, CosineAnneal)
+        assert rebased.steps == budget
+        assert rebased(budget // 2) == pytest.approx(0.5)
+
+
 def test_plan_and_ablation_contracts() -> None:
     run = recipe_run()
     plan = run.plan.hyperparameters
@@ -406,48 +451,52 @@ def projector_batchnorm_regimes(seed: int) -> list[float]:
 
 
 def test_projector_batchnorm_normalising_regime() -> None:
-    """Card section 5 row 7: two of three projector BatchNorms do not normalise.
+    """Every projector BatchNorm normalises, as the source's does.
 
-    The source projector normalises at every layer because its input is a
-    ResNet-50 pooled feature of order one (paper section 4.4 and the pinned
-    `SimSiam.__init__`). Under card section 4's inherited encoder
-    initialisation the representation arrives four orders of magnitude
-    smaller, so the two hidden layers divide by `sqrt(eps)` rather than by a
-    batch standard deviation. Paper supplement A names an fc initialiser of
-    this size as one that may not converge, and paper Table 3 measures the
-    projector's BatchNorm configuration as worth 33 accuracy points, so this
-    is a mechanic-level departure rather than a scale detail. Each threshold
-    sits between two measured, well-separated regimes rather than beside one
-    seed: over six seeds the two initialisers give `[6.1e-6, 9.2e-6]` against
-    `[0.887, 0.916]` at the first hidden layer, and `[0.066, 0.096]` against
-    `[0.99989, 0.99990]` at the second. The output layer normalises under both.
+    The pinned builder's projector reads a ResNet-50 pooled feature of order
+    one, so each `nn.BatchNorm1d` divides by a batch standard deviation that
+    dominates `eps`. Card deviation 7 recorded a period in which the encoder's
+    inherited initialiser put `X_REPR` four orders of magnitude below that and
+    floored the two hidden layers at `eps`; the withdrawal of that row is what
+    this asserts. Each threshold sits between two measured, well-separated
+    regimes rather than beside one seed: over six seeds the two initialisers
+    give `[0.888, 0.909]` against `[6.1e-6, 7.9e-6]` at the first hidden layer
+    and `[0.99989, 0.99989]` against `[0.068, 0.079]` at the second. Paper
+    Table 3 measures this configuration at 33 accuracy points, so it is a
+    mechanic and not a scale detail.
     """
-    for seed in (310000, 310400, 310900, 42):
+    for seed in (520000, 520400, 520900, 42):
         hidden_one, hidden_two, output = projector_batchnorm_regimes(seed)
-        assert hidden_one < 1e-3, seed
-        assert hidden_two < 0.5, seed
+        assert hidden_one > 0.5, seed
+        assert hidden_two > 0.9, seed
         assert output > 0.99, seed
 
 
-def test_encoder_representation_norm_is_four_orders_below_the_source() -> None:
-    """The same departure at the port the card section 3.2 norm check reads.
+def test_encoder_representation_arrives_at_the_source_scale() -> None:
+    """`X_REPR` reaches the projector at order one, as the pooled feature does.
 
-    Section 3.2 checked `||z||` at `X_PROJ`, which the terminal non-affine
-    BatchNorm pins near `sqrt(d) = 16` whatever the encoder does, so the check
-    could not see the encoder scale that the two hidden BatchNorms consume.
+    Card section 3.2's norm check reads `X_PROJ`, which the terminal non-affine
+    BatchNorm pins near `sqrt(d) = 16` whatever the encoder does. This is the
+    port that check did not read and the one the projector's own BatchNorm
+    layers consume; deviation 7 is the row it cost. Measured across six seeds
+    at `[0.567, 0.730]`, against `[2.9e-4, 3.3e-4]` under the withdrawn
+    initialiser.
     """
     schema = continuous_schema(6)
-    torch.manual_seed(310006)
-    run = recipe_run()
-    run.graph.train()
-    with torch.no_grad():
-        representation = run.graph.evaluate(
-            two_cluster_population(128, seed=310001, row_offset=0, low=SEPARATED).batch,
-            schema=schema,
-            only=("mlp_encoder",),
-        )[Port.X_REPR]
-    assert isinstance(representation, Tensor)
-    assert float(representation.norm(dim=-1).mean()) < 1e-2
+    for seed in (520000, 520400, 520900, 42):
+        torch.manual_seed(seed + 6)
+        run = recipe_run()
+        run.graph.train()
+        with torch.no_grad():
+            representation = run.graph.evaluate(
+                two_cluster_population(
+                    128, seed=seed + 1, row_offset=0, low=SEPARATED
+                ).batch,
+                schema=schema,
+                only=("mlp_encoder",),
+            )[Port.X_REPR]
+        assert isinstance(representation, Tensor)
+        assert 0.1 < float(representation.norm(dim=-1).mean()) < 10.0, seed
 
 
 def scalar_spread(rows: Tensor) -> float:
@@ -505,31 +554,37 @@ def test_projection_spread_cannot_see_directional_collapse() -> None:
     assert embedding_metrics(torch.ones(8, 4))["spread"] == 0.0
 
 
-def test_initialisation_oracle_kills_the_normalising_projector(
+def test_withdrawn_initialiser_oracle_kills_the_normalising_projector(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The proposed correction must retire card section 5 row 7 with it.
+    """Deviation 7's withdrawal is what the two checks above are worth.
 
-    Giving the encoder the paper's own initialiser (supplement A: the default
-    PyTorch `U(-sqrt(k), sqrt(k))`, which `MLPEncoder` already accepts) puts
-    every projector BatchNorm back in its normalising regime, so the row's
-    two executable checks fail and cannot be left standing.
+    Restoring the inherited `normal std=0.1/sqrt(fan_in)` encoder — the
+    initialiser paper supplement A warns about, at `std = 0.00625` for
+    `fan_in = 256` — floors the projector's two hidden BatchNorm layers at
+    `eps` again and drops `X_REPR` by four orders of magnitude, so both fail.
     """
     original = recipe_run
 
-    def corrected() -> CompiledRun:
+    def withdrawn() -> CompiledRun:
         run = original()
-        encoder = run.graph["mlp_encoder"]
-        for child in encoder.modules():
-            if isinstance(child, nn.Linear):
-                child.reset_parameters()
+        run.graph["mlp_encoder"].load_state_dict(
+            MLPEncoder(
+                input_dim=6,
+                widths=ENCODER_WIDTHS,
+                activation="relu",
+                normalisation="none",
+                dropout=0.0,
+                initialisation=CFRNET_INITIALISATION,
+            ).state_dict()
+        )
         return run
 
-    monkeypatch.setattr(sys.modules[__name__], "recipe_run", corrected)
+    monkeypatch.setattr(sys.modules[__name__], "recipe_run", withdrawn)
     with pytest.raises(AssertionError):
         test_projector_batchnorm_normalising_regime()
     with pytest.raises(AssertionError):
-        test_encoder_representation_norm_is_four_orders_below_the_source()
+        test_encoder_representation_arrives_at_the_source_scale()
 
 
 def test_mask_swap_mutant_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:

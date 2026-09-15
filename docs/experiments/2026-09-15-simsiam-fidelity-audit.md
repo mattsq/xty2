@@ -322,3 +322,28 @@ changing two departures in one rerun would confound them.
 
 Until both are reviewed, the card stays `deviating`, §6.1's failed row stands
 unchanged, and no bound has been widened.
+
+## 7. Outcome
+
+Both proposals were reviewed and accepted the same day, and the repository owner
+answered the open question in §6's last paragraph by directing that deviation 3
+move to the source's optimiser in the same change. All three are implemented;
+the rerun and its result are
+[`2026-09-15-simsiam-corrected-tier2.md`](2026-09-15-simsiam-corrected-tier2.md).
+
+Nothing above is retracted. Every measurement in §§1–4 was taken on the tree
+this document names, `140d193c67d2`, and the three tables are the evidence the
+amendments rest on. What changed after it:
+
+- Deviation 7 is withdrawn; the encoder takes the paper's initialiser.
+- Deviation 3 is narrowed to the batch and horizon: pretraining runs the
+  source's SGD with momentum 0.9, its linear scaling rule, weight decay 1e-4 on
+  every parameter layer, and `adjust_learning_rate`'s half cosine — which
+  needed a new `CosineAnneal` schedule, since neither `CosineDecay` nor
+  `WarmupCosine` is that curve.
+- Card §6.4's three spread-based bounds are replaced by four paired ones, on
+  view alignment and encoder effective rank, scored on a fresh seed stream.
+
+Because the owner chose to move both deviations together, this rerun does not by
+itself separate their contributions; §4's four cells are what does, and they
+stay the evidence for that attribution.
