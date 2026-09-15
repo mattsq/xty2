@@ -6,8 +6,10 @@
 > §6 for benchmark and reporting work.
 
 Selected from [BACKLOG.md §5.1](../BACKLOG.md). `xty2.recipes.byol` implements
-§3–§4 and `tests/invariants/test_byol.py` is its Tier 0 suite. No Tier 1 fit,
-benchmark module or §6 result exists yet: the §6.4 bounds remain prospective and
+§3–§4 and `tests/invariants/test_byol.py` is its core Tier 0 suite.
+`tests/smoke/test_byol.py` implements the §6.3 Tier 1 study, with arm and
+diagnostic invariants in `tests/invariants/test_byol_study.py`. No Tier 2
+benchmark or reproduction result exists: §6.4 bounds remain prospective and
 the §6.1 ledger is empty.
 
 ## 1. Provenance
@@ -375,12 +377,11 @@ implementation status are met there:
   lineage in the pretrained ports, encoder-only transfer with the projector and
   predictor absent from downstream passes, and a fresh downstream optimiser.
 
-Two predeclared Tier 0 items concern machinery this packet does not ship and
-land with it rather than being dropped: `encoder_effective_rank` on constant,
-rank-one and isotropic tensors, including its non-finite rejection, and the
-matched initial tensors and seed streams across the §6.2 arms. Both belong to
-the arm builder and diagnostics the Tier 2 packet adds; no §6 number is claimed
-before they exist.
+The Tier 1 packet adds `tests/invariants/test_byol_study.py`: effective rank
+on constant, rank-one, isotropic, anisotropic and below-floor tensors,
+non-finite rejection, smoke schedule/arm binding and exact common initial
+tensors. Actual batch/view streams and shared fitted scales/masks are checked
+inside `xty2.evaluation.byol_study.study` during each four-arm fit.
 
 The mutants recorded in the implementing commit, each observed failing the
 oracle named above: halve the loss; detach the prediction; point the target at
@@ -389,7 +390,7 @@ the target twice in one step, which is the observable form of updating it
 between directions; move weight decay after the trust ratio; apply the trust
 ratio to biases and BN; and shift the EMA horizon by one step.
 
-Tier 1 remains predeclared and unimplemented. It uses seeds 42, 43 and 44, 512
+Tier 1 is implemented in `tests/smoke/test_byol.py`. It uses seeds 42, 43 and 44, 512
 training rows, 512 held-out rows, 40 observed treatments, 100 pretraining and
 200 downstream steps; batch 128. Rebase warmup to 1 step, the EMA horizon to
 100 and the marginal ramp to 200, explicitly binding smoke overrides — the EMA
@@ -400,6 +401,56 @@ seed. Record norms, BN variance relative to epsilon, rank, predictor residual
 and outcome NLL. Do not assert EMA superiority or ablation collapse in a wiring
 test. Any proposed directional assertion needs a reviewed card amendment and
 evidence on every declared smoke seed.
+
+The 2026-09-16 smoke run passed all twelve fits under PyTorch 2.2.2 on CPU.
+All losses, gradients and diagnostics were finite. Actual initial tensors,
+batch/view traces, shared fitted scales/masks, target updates and downstream
+transfer passed their checks. These wiring results do not populate the Tier 2
+ledger or test §6.4's superiority bounds. Rounded diagnostic values:
+
+| Seed | Arm | Outcome NLL | Clean encoder rank | Encoder norm | Predictor residual |
+|---|---|---|---|---|---|
+| 42 | full | 1.158474 | 6.094008 | 1.475127 | 0.960369 |
+| 42 | zero-decay | 1.152634 | 2.782090 | 1.617800 | 0.247584 |
+| 42 | no-predictor | 1.155998 | 10.714819 | 1.054903 | 0.683423 |
+| 42 | no-pretraining | 1.149140 | 22.461118 | 0.674942 | n/a |
+| 43 | full | 1.189714 | 8.616748 | 1.545943 | 1.086880 |
+| 43 | zero-decay | 1.208598 | 4.056369 | 1.636624 | 0.306093 |
+| 43 | no-predictor | 1.215760 | 12.316316 | 1.027578 | 0.784320 |
+| 43 | no-pretraining | 1.202031 | 22.577982 | 0.745315 | n/a |
+| 44 | full | 1.143018 | 5.686602 | 1.615051 | 1.025360 |
+| 44 | zero-decay | 1.146747 | 2.969043 | 1.803678 | 0.227279 |
+| 44 | no-predictor | 1.148738 | 9.477957 | 1.035043 | 0.751790 |
+| 44 | no-pretraining | 1.140496 | 21.061956 | 0.714665 | n/a |
+
+Rank and norm use all 512 clean held-out rows before downstream fitting; the
+no-pretraining row measures the untrained encoder. Residual is the sum of the
+two directional normalised squared distances, averaged across four fixed
+held-out batch pairs, using target projections (online projections in the
+no-predictor arm's prediction slot). The test prints full per-seed JSON,
+including BN variance/epsilon and target-online lag. Across seeds, full-arm
+projector running variance/epsilon is 23.56–29.92 online and 10.55–12.01 target;
+predictor variance/epsilon is 8465.36–9175.60. No BN recalibration is performed.
+
+Additional observed failing mutants: remove the rank's energy floor;
+ignore state-pairing mismatches; bypass LARS finite-value validation;
+retain hidden treatment payloads; freeze
+the target; update it twice; EMA its buffers; remove LARS momentum. The last
+four run the smoke execution and fail its update oracle. Direct LARS construction now rejects
+NaN and infinite learning rates, momentum and eta, matching the existing
+`OptimiserSpec` validation; finite recipe settings and updates are unchanged.
+Missing treatment payloads are replaced with valid dummy class zero before
+either stage's forward pass, while preserving the shared missingness mask.
+
+Validation environment: `uv run` could not install locked Torch 2.13.0 on
+Intel macOS, so checks used `uv run --no-sync` with the existing Torch 2.2.2
+environment. Lint and formatting pass. Full strict mypy reports eight existing
+errors under that environment, reproduced on a clean archive of `c32a9cc`;
+the added files introduce no additional type errors.
+The final BYOL-focused run passed 72 tests. The broader Tier 0/Tier 1 run
+was intentionally interrupted after 26 minutes with 1747 passing tests and
+no reported failures; all invariants had completed, and existing FixMatch
+smoke tests were running. This is not a claim that the full smoke suite passed.
 
 ### 6.4 Metrics, tolerances and interpretation
 
@@ -450,6 +501,7 @@ requires a prospective amendment with the failed protocol retained.
 | Two automated review findings on PR #57 resolved | Claude Code; the EMA schedule's `TeacherSpec` validity and the unstated `WarmupCosine` final multiplier, both amended in §4 | 2026-09-15 |
 | Plan diffed against §3.2 and §4 | `tests/invariants/test_byol.py`, over the actual compiled plan and every answered §4 entry | 2026-09-15 |
 | Recipe implemented, Tier 0 passing (status → `implemented`) | Claude Code | 2026-09-15 |
+| Source audit and Tier 1 implementation; all declared smoke seeds pass | Codex; LARS finite-value validation corrected, paired execution and diagnostics added | 2026-09-16 |
 
 Four amendments were made at review, none of them to the method.
 

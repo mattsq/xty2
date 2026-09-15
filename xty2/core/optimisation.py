@@ -604,6 +604,8 @@ class LARS(torch.optim.Optimizer):
         momentum: float,
         eta: float,
     ) -> None:
+        for name, value in (("lr", lr), ("momentum", momentum), ("eta", eta)):
+            _require_finite(f"LARS {name}", value)
         if lr < 0.0:
             raise CompileError(f"LARS lr must be non-negative, got {lr!r}")
         if momentum < 0.0:
