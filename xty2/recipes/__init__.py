@@ -13,6 +13,7 @@ from xty2.recipes.barlow_twins import (
     PROJECTOR_WIDTHS,
     barlow_twins,
 )
+from xty2.recipes.byol import byol
 from xty2.recipes.cnflow import CNFLOW_ENCODER_WIDTHS, cnflow
 from xty2.recipes.comatch import COMATCH_STEPS, comatch
 from xty2.recipes.cycle_dual import (
@@ -182,6 +183,7 @@ __all__ = [
     "VICREG_PRETRAIN_STEPS",
     "WEAK_MASK_RATE",
     "barlow_twins",
+    "byol",
     "cnflow",
     "comatch",
     "cycle_dual",
