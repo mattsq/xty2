@@ -19,6 +19,7 @@ from itertools import pairwise
 import pytest
 from xty2.core import (
     Constant,
+    CosineAnneal,
     CosineDecay,
     ExponentialDecay,
     Ramp,
@@ -154,6 +155,61 @@ def test_cosine_decay_describes_its_formula_stably() -> None:
     assert CosineDecay(steps=3_000, phase=7 / 16).describe() == (
         "cosine 1.0 * cos(pi * 0.4375 * min(step/3000, 1))"
     )
+
+
+# ---------------------------------------------------------------------------
+# SimSiam / SGDR half cosine
+# ---------------------------------------------------------------------------
+
+
+def test_cosine_anneal_is_the_simsiam_rate_formula() -> None:
+    # `main_simsiam.adjust_learning_rate`:
+    # cur_lr = init_lr * 0.5 * (1. + math.cos(math.pi * epoch / args.epochs)),
+    # with the reference's epoch counter reading our optimiser-step horizon.
+    # Written out here rather than taken from the implementation's rearrangement.
+    total = 1_000
+    schedule = CosineAnneal(steps=total)
+    for step in (0, 1, 250, 500, 750, 999, 1_000):
+        assert schedule(step) == pytest.approx(
+            0.5 * (1.0 + math.cos(math.pi * step / total))
+        )
+
+
+def test_cosine_anneal_is_not_reachable_by_any_cosine_decay_phase() -> None:
+    # The two curves share their endpoints at phase 0.5 and nothing else, so a
+    # card naming one and compiling the other would agree at the boundaries and
+    # differ everywhere the rate is actually applied.
+    anneal = CosineAnneal(steps=100)
+    partial = CosineDecay(steps=100, phase=0.5)
+    assert anneal(0) == pytest.approx(partial(0))
+    assert anneal(100) == pytest.approx(partial(100), abs=1e-12)
+    assert anneal(50) == pytest.approx(0.5)
+    assert partial(50) == pytest.approx(math.cos(math.pi / 4.0))
+    assert abs(anneal(50) - partial(50)) > 0.2
+
+
+def test_cosine_anneal_holds_at_zero_and_never_turns_back_up() -> None:
+    schedule = CosineAnneal(steps=100)
+    assert schedule(100) == pytest.approx(0.0, abs=1e-12)
+    assert schedule(10_000) == schedule(100)
+    assert schedule.nominal == pytest.approx(0.0, abs=1e-12)
+    values = [schedule(step) for step in range(101)]
+    assert all(later <= earlier for earlier, later in pairwise(values))
+    # The reference evaluates at epoch 0..epochs-1, so the rate it applies is
+    # always positive; the zero above is this module's after-horizon convention.
+    assert schedule(99) > 0.0
+
+
+def test_cosine_anneal_describes_its_formula_stably() -> None:
+    assert CosineAnneal(steps=1_000).describe() == (
+        "cosine anneal 0.5 * (1 + cos(pi * min(step/1000, 1)))"
+    )
+
+
+@pytest.mark.parametrize("steps", [0, -1, 1.0, True, "100"])
+def test_cosine_anneal_needs_a_positive_integer_length(steps: object) -> None:
+    with pytest.raises(Xty2Error):
+        CosineAnneal(steps=steps)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

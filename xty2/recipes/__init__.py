@@ -69,6 +69,7 @@ from xty2.recipes.scarf import (
     scarf,
 )
 from xty2.recipes.simmatch import SIMMATCH_STEPS, simmatch
+from xty2.recipes.simsiam import simsiam
 from xty2.recipes.softmatch import (
     SOFTMATCH_STEPS,
     SOFTMATCH_WEIGHTING,
@@ -194,6 +195,7 @@ __all__ = [
     "remixmatch",
     "scarf",
     "simmatch",
+    "simsiam",
     "softmatch",
     "ssdml",
     "tarnet",

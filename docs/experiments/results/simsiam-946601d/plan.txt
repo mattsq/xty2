@@ -1,0 +1,195 @@
+recipe: simsiam
+purpose: causal
+card: docs/recipes/simsiam.md
+schema: D = 6, K = 2
+
+data
+  split            fixed two-cluster DGP; disjoint train and held-out populations; no test-based selection; training rows are assignment 'train'
+  standardisation  x: zscore fitted on 'train'
+  outcome scaling  y: zscore fitted on 'train'
+  missingness      treatment MCAR to a budget of 40 labelled rows, keyed by row_id
+
+views
+  corrupted_a
+    preserves  fold_id, row_id, t, t_observed, weight, y, y_observed
+    affects    x0, x1, x3, x4, x5
+    transform  OracleSymmetry(reflect=(3,5,0,-8),p=0.5; sign_x4,p=0.5; donor_x5)
+  corrupted_b
+    preserves  fold_id, row_id, t, t_observed, weight, y, y_observed
+    affects    x0, x1, x3, x4, x5
+    transform  OracleSymmetry(reflect=(3,5,0,-8),p=0.5; sign_x4,p=0.5; donor_x5)
+
+components (topological order)
+  mlp_encoder             [x] -> [x_repr]
+  simsiam_projector       [x_repr] -> [x_proj]
+  simsiam_predictor       [x_proj] -> [x_pred]
+  tarnet_head             [x_repr] -> [p(y|x,t)]
+  categorical_propensity  [x_repr] -> [p(t|x)]
+
+data lineage
+  mlp_encoder             x <- source
+  simsiam_projector       x_repr <- mlp_encoder
+  simsiam_predictor       x_proj <- simsiam_projector
+  tarnet_head             x_repr <- mlp_encoder
+  categorical_propensity  x_repr <- mlp_encoder
+  reads raw y directly:  none
+  depends on raw y:      none
+
+stage pretrain
+  rows: all
+  executor: gradient
+  sampler: uniform, batch_size=128, without replacement
+  steps: 1000
+  optimisation
+    optimiser     sgd(momentum=0.9, nesterov=False)
+    lr            0.025
+    lr schedule   cosine anneal 0.5 * (1 + cos(pi * min(step/1000, 1)))
+    weight decay  0.0001 (all trainable components; all parameters)
+    clipping      none
+  forward passes (2)
+    view=corrupted_a params=student: mlp_encoder -> simsiam_projector -> simsiam_predictor
+    view=corrupted_b params=student: mlp_encoder -> simsiam_projector -> simsiam_predictor
+  objectives
+    simsiam_a_to_b  rows all  reduction mean
+      weight    constant 0.5
+      setting   prediction (trained) = x_pred @ view=corrupted_a params=student
+      setting   target (detached) = x_proj @ view=corrupted_b params=student
+      setting   separate L2 normalisation; epsilon=1e-12
+      setting   value = -cosine(prediction, target), per row
+      setting   denominator = every eligible row; nothing is gated
+      requires  x_pred @ view=corrupted_a params=student, x_proj @ view=corrupted_b params=student
+      detaches  x_proj @ view=corrupted_b params=student
+    simsiam_b_to_a  rows all  reduction mean
+      weight    constant 0.5
+      setting   prediction (trained) = x_pred @ view=corrupted_b params=student
+      setting   target (detached) = x_proj @ view=corrupted_a params=student
+      setting   separate L2 normalisation; epsilon=1e-12
+      setting   value = -cosine(prediction, target), per row
+      setting   denominator = every eligible row; nothing is gated
+      requires  x_pred @ view=corrupted_b params=student, x_proj @ view=corrupted_a params=student
+      detaches  x_proj @ view=corrupted_a params=student
+  trainable
+    mlp_encoder, simsiam_projector, simsiam_predictor
+
+stage joint_fit
+  rows: all
+  executor: gradient
+  initialise from: pretrain
+  sampler: uniform, batch_size=128, without replacement
+  steps: 3000
+  optimisation
+    optimiser     adam(betas=(0.9, 0.999), eps=1e-08)
+    lr            0.001
+    lr schedule   constant 1.0
+    weight decay  none
+    clipping      none
+  forward passes (1)
+    view=identity params=student: mlp_encoder -> tarnet_head -> categorical_propensity
+  objectives
+    observed_outcome_nll            rows t_observed  reduction population
+      weight    constant 1.0
+      requires  p(y|x,t) @ view=identity params=student
+    observed_treatment_nll          rows t_observed  reduction population
+      weight    constant 1.0
+      requires  p(t|x) @ view=identity params=student
+    missing_treatment_marginal_nll  rows t_missing   reduction population
+      weight    ramp 0.0 -> 0.5 over 1000 steps
+      requires  p(t|x) @ view=identity params=student, p(y|x,t) @ view=identity params=student
+  trainable
+    mlp_encoder, tarnet_head, categorical_propensity
+
+hyperparameters
+  architecture.activation
+    categorical_propensity = 'linear logits'
+    mlp_encoder            = 'relu'
+    simsiam_predictor      = 'hidden relu; output linear'
+    simsiam_projector      = 'hidden relu; output linear'
+    tarnet_head            = 'elu'
+  architecture.dropout
+    categorical_propensity = 0.0
+    mlp_encoder            = 0.0
+    simsiam_predictor      = 0.0
+    simsiam_projector      = 0.0
+    tarnet_head            = 0.0
+  architecture.initialisation
+    categorical_propensity = 'normal std=0.1/sqrt(fan_in), bias=0'
+    mlp_encoder            = 'torch Linear default Kaiming-uniform'
+    simsiam_predictor      = 'torch Linear reset_parameters; hidden bias=false; final bias=true; BN weight=1,bias=0,running_mean=0,running_var=1'
+    simsiam_projector      = 'torch Linear reset_parameters; hidden bias=false; final bias initialised then frozen; BN affine weight=1,bias=0,running_mean=0,running_var=1'
+    tarnet_head            = 'normal std=0.1/sqrt(fan_in), bias=0'
+  architecture.normalisation
+    categorical_propensity = 'none'
+    mlp_encoder            = 'none'
+    simsiam_predictor      = 'hidden BN affine=true eps=1e-5 momentum=0.1 track_running_stats=true; output none'
+    simsiam_projector      = 'hidden BN affine=true; output BN affine=false; all eps=1e-5 momentum=0.1 track_running_stats=true'
+    tarnet_head            = 'none'
+  architecture.output_parameterisation
+    categorical_propensity = 'K softmax logits'
+    tarnet_head            = 'K means; fixed Gaussian scale=1.0'
+  architecture.widths_depths
+    categorical_propensity = 'linear 256 -> 2'
+    mlp_encoder            = (256, 256, 256, 256)
+    simsiam_predictor      = (64, 256)
+    simsiam_projector      = (256, 256, 256)
+    tarnet_head            = '2 independent heads, each [100, 100, 100]'
+  data.missingness_mechanism = 'treatment MCAR to a budget of 40 labelled rows, keyed by row_id'
+  data.outcome_scaling       = "y: zscore fitted on 'train'"
+  data.split_protocol        = "fixed two-cluster DGP; disjoint train and held-out populations; no test-based selection; training rows are assignment 'train'"
+  data.standardisation       = "x: zscore fitted on 'train'"
+  gradients.detached_targets
+    pretrain.simsiam_a_to_b = 'target'
+    pretrain.simsiam_b_to_a = 'target'
+  gradients.gradient_clipping
+    joint_fit = 'none'
+    pretrain  = 'none'
+  gradients.marginal_nll_grad_path
+    joint_fit.missing_treatment_marginal_nll = 'both'
+  gradients.stop_gradients
+    joint_fit.missing_treatment_marginal_nll = 'none'
+    joint_fit.observed_outcome_nll           = 'none'
+    joint_fit.observed_treatment_nll         = 'none'
+    pretrain.simsiam_a_to_b                  = 'x_proj @ view=corrupted_b params=student'
+    pretrain.simsiam_b_to_a                  = 'x_proj @ view=corrupted_a params=student'
+  losses.eligible_rows
+    joint_fit.missing_treatment_marginal_nll = 't_missing'
+    joint_fit.observed_outcome_nll           = 't_observed'
+    joint_fit.observed_treatment_nll         = 't_observed'
+    pretrain.simsiam_a_to_b                  = 'all'
+    pretrain.simsiam_b_to_a                  = 'all'
+  losses.reduction
+    joint_fit.missing_treatment_marginal_nll = 'population'
+    joint_fit.observed_outcome_nll           = 'population'
+    joint_fit.observed_treatment_nll         = 'population'
+    pretrain.simsiam_a_to_b                  = 'mean'
+    pretrain.simsiam_b_to_a                  = 'mean'
+  losses.schedules
+    joint_fit.missing_treatment_marginal_nll = 'ramp 0.0 -> 0.5 over 1000 steps'
+    joint_fit.observed_outcome_nll           = 'constant 1.0'
+    joint_fit.observed_treatment_nll         = 'constant 1.0'
+    pretrain.simsiam_a_to_b                  = 'constant 0.5'
+    pretrain.simsiam_b_to_a                  = 'constant 0.5'
+  losses.weights
+    joint_fit.missing_treatment_marginal_nll = 0.5
+    joint_fit.observed_outcome_nll           = 1.0
+    joint_fit.observed_treatment_nll         = 1.0
+    pretrain.simsiam_a_to_b                  = 0.5
+    pretrain.simsiam_b_to_a                  = 0.5
+  optimisation.batch_size
+    joint_fit = 128
+    pretrain  = 128
+  optimisation.lr
+    joint_fit = 0.001
+    pretrain  = 0.025
+  optimisation.lr_schedule
+    joint_fit = 'constant 1.0'
+    pretrain  = 'cosine anneal 0.5 * (1 + cos(pi * min(step/1000, 1)))'
+  optimisation.optimiser
+    joint_fit = 'adam(betas=(0.9, 0.999), eps=1e-08)'
+    pretrain  = 'sgd(momentum=0.9, nesterov=False)'
+  optimisation.total_steps_or_epochs
+    joint_fit = 3000
+    pretrain  = 1000
+  optimisation.weight_decay
+    joint_fit = 'none'
+    pretrain  = '0.0001 (all trainable components; all parameters)'
+

@@ -254,9 +254,18 @@ def test_a_distribution_port_is_refused_with_the_objective_that_takes_one() -> N
         _objective(target_port=Port.T_GIVEN_X)
 
 
-def test_the_stop_gradient_has_one_reviewed_value() -> None:
+def test_the_stop_gradient_rejects_undeclared_policies() -> None:
     with pytest.raises(LossError, match="trivial optimum"):
-        _objective(stop_grad="none")
+        _objective(stop_grad="prediction")
+
+
+def test_the_optional_epsilon_preserves_existing_positional_arguments() -> None:
+    objective = CosineFeatureConsistency(
+        Port.X_PROJ, Port.X_REPR, PREDICTION, TARGET, "target", "all", "legacy"
+    )
+    assert objective.rows == "all"
+    assert objective.name == "legacy"
+    assert objective.epsilon == 1e-12
 
 
 def test_the_stop_gradient_is_a_card_key_with_no_default() -> None:

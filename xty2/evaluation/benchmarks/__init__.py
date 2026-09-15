@@ -92,6 +92,10 @@ def benchmark_function(recipe: str) -> BenchmarkFunction:
         from xty2.evaluation.benchmarks.barlow_twins import run
 
         return run
+    if recipe == "simsiam":
+        from xty2.evaluation.benchmarks.simsiam import run
+
+        return run
     raise KeyError(
         f"unknown Tier 2 recipe {recipe!r}; expected one of {list(RECIPES)!r}"
     )
@@ -118,6 +122,7 @@ RECIPES = (
     "variational_treatment",
     "vicreg",
     "barlow_twins",
+    "simsiam",
 )
 
 __all__ = ["RECIPES", "BenchmarkFunction", "benchmark_function"]

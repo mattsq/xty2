@@ -302,6 +302,11 @@ adaptation still failed spread; its failure ledger, original audit and
 [paired view diagnostic](experiments/2026-09-08-vicreg-views.md) remain recorded.
 
 Candidates: CoMatch, PAWS, SimMatch, VICReg, Barlow Twins, BYOL, and SimSiam.
+SimSiam is implemented at [`recipes/simsiam.md`](recipes/simsiam.md), with
+separate prediction and projection outputs and a paired ten-seed Tier 2 study
+of stop-gradient, predictor and pretraining ablations. Its card records the
+result against the original prospective bounds.
+
 Barlow Twins is implemented against its
 [card](recipes/barlow_twins.md): the card is reviewed and Tier 0 passes, so its
 status is `implemented`. It tests the off-diagonal cross-correlation penalty
