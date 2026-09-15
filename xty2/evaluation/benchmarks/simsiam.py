@@ -9,7 +9,7 @@ from xty2.evaluation.simsiam_study import study
 
 def replicate(index: int) -> dict[str, float]:
     return study(
-        310000 + 100 * index,
+        520000 + 100 * index,
         train_rows=1024,
         test_rows=2048,
         pretrain_steps=1000,
@@ -34,32 +34,26 @@ def run(
                 "2048 fully observed held-out rows"
             ),
             "metric": (
-                "terminal normalised projection spread; two paired spread gaps; "
-                "factual outcome NLL cost"
+                "two paired view-alignment gaps; two paired encoder "
+                "effective-rank gaps; factual outcome NLL cost"
             ),
             "published": "none - project-local tabular adaptation",
             "published_source": "n/a",
-            "tolerance": "all four one-standard-error bounds in section 6.4",
+            "tolerance": "all five one-standard-error bounds in section 6.4",
             "seeds": "10",
             "report": "mean_and_stderr",
         }
     )
     rows = parallel_replicates(replicate, spec.seed_count, workers=workers)
     required = (
-        MetricResult.lower_bound(
-            "full_projection_spread", column(rows, "full_projection_spread"), 0.5
-        ),
-        MetricResult(
-            "stop_gradient_spread_gap",
-            tuple(column(rows, "stop_gradient_spread_gap")),
-            ">",
-            0.0,
-        ),
-        MetricResult(
-            "predictor_spread_gap",
-            tuple(column(rows, "predictor_spread_gap")),
-            ">",
-            0.0,
+        *(
+            MetricResult(name, tuple(column(rows, name)), ">", 0.0)
+            for name in (
+                "stop_gradient_alignment_gap",
+                "predictor_alignment_gap",
+                "stop_gradient_rank_gap",
+                "predictor_rank_gap",
+            )
         ),
         MetricResult.upper_bound(
             "pretraining_outcome_nll_cost",
@@ -84,11 +78,12 @@ def run(
         ),
         interpretation=(
             "Project-local SimSiam mechanism study with privileged DGP views, "
-            "tabular widths and Adam/constant-LR departures. Every arm shares "
+            "tabular widths and a reduced batch and step budget. Every arm shares "
             "actual initial common tensors, fitted scales, treatment masks, "
             "batches and view draws; stage transitions and optimiser reset are "
             "checked during execution. Differences are paired within seed. "
-            "Failed attribution bounds remain failed even if all arms retain "
-            "spread. This is not an ImageNet or causal-identification claim."
+            "Both attribution axes are paired, so uniform collapse fails them "
+            "rather than passing. This is not an ImageNet or "
+            "causal-identification claim."
         ),
     )

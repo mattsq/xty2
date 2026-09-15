@@ -12,12 +12,16 @@ from typing import Any, Literal
 import pytest
 import torch
 from torch import Tensor, nn
-from xty2.components import SimSiamPredictor, SimSiamProjector
+from xty2.components import MLPEncoder, SimSiamPredictor, SimSiamProjector
+from xty2.components._nn import CFRNET_INITIALISATION
 from xty2.core import (
     CompiledRun,
+    CosineAnneal,
     GraphError,
     LossError,
     Port,
+    Program,
+    Realisation,
     State,
     TrainContext,
     XTYBatch,
@@ -36,7 +40,7 @@ from xty2.objectives import CosineFeatureConsistency
 from xty2.recipes import simsiam
 from xty2.recipes.simsiam import CORRUPTED_A as A
 from xty2.recipes.simsiam import CORRUPTED_B as B
-from xty2.recipes.simsiam import DATA_POLICY
+from xty2.recipes.simsiam import DATA_POLICY, ENCODER_WIDTHS
 from xty2.training import executors
 from xty2.training.loading import build_population, iterate
 from xty2.training.loss_mixer import LossMixer
@@ -272,6 +276,48 @@ def test_two_cached_bn_updates_and_encoder_branch_gradients() -> None:
         )
 
 
+def test_pretraining_anneal_spans_exactly_the_pretraining_budget() -> None:
+    """The source anneals over the training length, not over a fixed horizon.
+
+    `adjust_learning_rate` reads `epoch / args.epochs`, so the rate reaches the
+    bottom of the curve exactly as training ends. A schedule whose horizon
+    outlived the stage would run a prefix of the curve and never get there,
+    which is invisible in a diff and in a loss curve alike. Card section 4
+    binds both numbers to one constant; `simsiam_study` re-bases the horizon
+    whenever it shortens the budget, and this is the check on both.
+    """
+    pretrain = recipe_run().recipe.program[0]
+    schedule = pretrain.optimiser.lr_schedule
+    assert isinstance(schedule, CosineAnneal)
+    assert schedule.steps == pretrain.steps
+    assert schedule(0) == pytest.approx(1.0)
+    assert schedule(pretrain.steps // 2) == pytest.approx(0.5)
+    for budget in (16, 128):
+        shortened = arm_recipe(
+            replace(
+                recipe_run().recipe,
+                program=Program(
+                    (
+                        replace(
+                            pretrain,
+                            steps=budget,
+                            optimiser=replace(
+                                pretrain.optimiser,
+                                lr_schedule=CosineAnneal(steps=budget),
+                            ),
+                        ),
+                        recipe_run().recipe.program[1],
+                    )
+                ),
+            ),
+            "full",
+        )
+        rebased = shortened.program[0].optimiser.lr_schedule
+        assert isinstance(rebased, CosineAnneal)
+        assert rebased.steps == budget
+        assert rebased(budget // 2) == pytest.approx(0.5)
+
+
 def test_plan_and_ablation_contracts() -> None:
     run = recipe_run()
     plan = run.plan.hyperparameters
@@ -310,6 +356,235 @@ def test_spread_rank_and_strict_boundary() -> None:
     assert MetricResult("gap", (0.0, 2.0), ">", 0.0).passed is False
     assert MetricResult("gap", (1.0, 1.0), ">", 0.0).passed is True
     assert math.isfinite(isotropic["raw_norm"])
+
+
+def test_mixed_pretraining_loss_equals_the_reference_expression() -> None:
+    """The stage's mixed total against `main_simsiam.train`'s own line.
+
+    The reference writes
+    `-(criterion(p1, z2).mean() + criterion(p2, z1).mean()) * 0.5` with
+    `criterion = nn.CosineSimilarity(dim=1)`. That is a different code path
+    from this recipe's two half-weighted `Weighted(..., reduction="mean")`
+    terms over separate `F.normalize` calls, so the comparison checks the
+    whole objective-and-mixer chain rather than one function against itself:
+    both half-weights, both directions, the row mean, and the absence of a
+    second division by batch or width. Deviation 6 predicts that the epsilon
+    difference is invisible at ordinary norms, and this is where that is
+    checked; the near-zero behaviour is
+    `test_directional_values_and_gradients` at scale 1e-14.
+    """
+    schema = continuous_schema(6)
+    torch.manual_seed(310006)
+    run = recipe_run()
+    population = build_population(
+        training_dataset(
+            schema,
+            two_cluster_population(
+                1024, seed=310001, row_offset=0, low=SEPARATED
+            ).batch,
+        ),
+        DATA_POLICY,
+        seed=310002,
+    )
+    run.graph.train()
+    state = run.state(run.stages[0], population.rows, rng_key=7, population=population)
+    mixed = LossMixer.for_stage(run.stages[0]).mix(
+        state, population.rows, TrainContext(global_step=0, schema=schema)
+    )
+
+    def embedding(realisation: Realisation, port: Port) -> Tensor:
+        value = state[realisation][port]
+        assert isinstance(value, Tensor)
+        return value
+
+    prediction_a = embedding(A, Port.X_PRED)
+    projection_a = embedding(A, Port.X_PROJ)
+    prediction_b = embedding(B, Port.X_PRED)
+    projection_b = embedding(B, Port.X_PROJ)
+    criterion = nn.CosineSimilarity(dim=1)
+    reference = (
+        -(
+            criterion(prediction_a, projection_b.detach()).mean()
+            + criterion(prediction_b, projection_a.detach()).mean()
+        )
+        * 0.5
+    )
+    torch.testing.assert_close(mixed.total, reference)
+    # A degenerate agreement would be two zeros; the fixture is nondegenerate.
+    assert abs(reference.detach().item()) > 1e-4
+
+
+def projector_batchnorm_regimes(seed: int) -> list[float]:
+    """`var / (var + eps)` at each projector BatchNorm, on one training batch.
+
+    This is the fraction of the normalisation each declared layer actually
+    performs: one when the batch variance dominates `eps`, and zero when the
+    constant floor does. The pinned builder reads a ResNet-50 pooled feature,
+    where every projector BatchNorm sits at one.
+    """
+    schema = continuous_schema(6)
+    train = two_cluster_population(1024, seed=seed + 1, row_offset=0, low=SEPARATED)
+    population = build_population(
+        training_dataset(schema, train.batch), DATA_POLICY, seed=seed + 2
+    )
+    torch.manual_seed(seed + 6)
+    run = recipe_run()
+    component = run.graph["simsiam_projector"]
+    assert isinstance(component, SimSiamProjector)
+    rows = population.rows
+    view = run.recipe.views[0].apply(
+        rows, schema, rng_key=seed + 3, population=population
+    )
+    run.graph.train()
+    regimes: list[float] = []
+    with torch.no_grad():
+        value = run.graph.evaluate(view, schema=schema, only=("mlp_encoder",))[
+            Port.X_REPR
+        ]
+        assert isinstance(value, Tensor)
+        for module in component.network:
+            if isinstance(module, nn.BatchNorm1d):
+                variance = value.var(0, correction=0)
+                regimes.append(float((variance / (variance + 1e-5)).mean()))
+            value = module(value)
+    return regimes
+
+
+def test_projector_batchnorm_normalising_regime() -> None:
+    """Every projector BatchNorm normalises, as the source's does.
+
+    The pinned builder's projector reads a ResNet-50 pooled feature of order
+    one, so each `nn.BatchNorm1d` divides by a batch standard deviation that
+    dominates `eps`. Card deviation 7 recorded a period in which the encoder's
+    inherited initialiser put `X_REPR` four orders of magnitude below that and
+    floored the two hidden layers at `eps`; the withdrawal of that row is what
+    this asserts. Each threshold sits between two measured, well-separated
+    regimes rather than beside one seed: over six seeds the two initialisers
+    give `[0.888, 0.909]` against `[6.1e-6, 7.9e-6]` at the first hidden layer
+    and `[0.99989, 0.99989]` against `[0.068, 0.079]` at the second. Paper
+    Table 3 measures this configuration at 33 accuracy points, so it is a
+    mechanic and not a scale detail.
+    """
+    for seed in (520000, 520400, 520900, 42):
+        hidden_one, hidden_two, output = projector_batchnorm_regimes(seed)
+        assert hidden_one > 0.5, seed
+        assert hidden_two > 0.9, seed
+        assert output > 0.99, seed
+
+
+def test_encoder_representation_arrives_at_the_source_scale() -> None:
+    """`X_REPR` reaches the projector at order one, as the pooled feature does.
+
+    Card section 3.2's norm check reads `X_PROJ`, which the terminal non-affine
+    BatchNorm pins near `sqrt(d) = 16` whatever the encoder does. This is the
+    port that check did not read and the one the projector's own BatchNorm
+    layers consume; deviation 7 is the row it cost. Measured across six seeds
+    at `[0.567, 0.730]`, against `[2.9e-4, 3.3e-4]` under the withdrawn
+    initialiser.
+    """
+    schema = continuous_schema(6)
+    for seed in (520000, 520400, 520900, 42):
+        torch.manual_seed(seed + 6)
+        run = recipe_run()
+        run.graph.train()
+        with torch.no_grad():
+            representation = run.graph.evaluate(
+                two_cluster_population(
+                    128, seed=seed + 1, row_offset=0, low=SEPARATED
+                ).batch,
+                schema=schema,
+                only=("mlp_encoder",),
+            )[Port.X_REPR]
+        assert isinstance(representation, Tensor)
+        assert 0.1 < float(representation.norm(dim=-1).mean()) < 10.0, seed
+
+
+def scalar_spread(rows: Tensor) -> float:
+    """Card section 6.4's S recomputed one index at a time."""
+    count, width = rows.shape
+    unit = []
+    for i in range(count):
+        squared = 0.0
+        for j in range(width):
+            squared += float(rows[i, j]) ** 2
+        norm = max(math.sqrt(squared), 1e-12)
+        unit.append([float(rows[i, j]) / norm for j in range(width)])
+    total = 0.0
+    for j in range(width):
+        mean = sum(unit[i][j] for i in range(count)) / count
+        variance = sum((unit[i][j] - mean) ** 2 for i in range(count)) / count
+        total += math.sqrt(variance)
+    return math.sqrt(width) * total / width
+
+
+def test_projection_spread_cannot_see_directional_collapse() -> None:
+    """Card section 6.4's S is a channel-balance statistic, not a rank test.
+
+    S divides each row by its own norm, so it is invariant to the embedding's
+    scale, and what remains is how evenly the channels share that direction.
+    An embedding of exact rank one — every row a multiple of one vector, the
+    strongest collapse there is — already scores above the `>= 0.5` bound on
+    its own, and scores 0.99 once the projector's terminal non-affine
+    BatchNorm equalises the channels. Paper section 4.1 reads the same
+    quantity at zero, which requires the pre-BatchNorm output to be constant
+    across rows; the measured pre-BatchNorm variance in every section 6.2 arm
+    is 0.5 to 1.0 per channel, five orders of magnitude above `eps = 1e-5`.
+    """
+    torch.manual_seed(0)
+    direction = torch.randn(256)
+    collapsed = torch.randn(128, 1) * direction
+    bare = embedding_metrics(collapsed)
+    assert bare["effective_rank"] == pytest.approx(1.0, abs=1e-6)
+    assert bare["spread"] == pytest.approx(scalar_spread(collapsed), abs=1e-6)
+    assert bare["spread"] > 0.5
+    normaliser = nn.BatchNorm1d(256, eps=1e-5, affine=False)
+    normaliser.train()
+    behind = embedding_metrics(normaliser(collapsed))
+    assert behind["effective_rank"] == pytest.approx(1.0, abs=1e-6)
+    assert behind["spread"] > 0.99
+    # The discriminating comparison: an isotropic embedding scores what the
+    # rank-one one scores, so at the values section 6.4 reads S carries no
+    # rank information at all. A centred 128-row cross-product has rank at
+    # most 127, so the ceiling below is the batch, not the width.
+    isotropic = embedding_metrics(torch.randn(128, 256))
+    assert isotropic["effective_rank"] > 90
+    assert abs(isotropic["spread"] - behind["spread"]) < 0.02
+    # S reaches zero only for a row-constant embedding, which the terminal
+    # BatchNorm cannot produce while its batch variance dominates eps.
+    assert embedding_metrics(torch.ones(8, 4))["spread"] == 0.0
+
+
+def test_withdrawn_initialiser_oracle_kills_the_normalising_projector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deviation 7's withdrawal is what the two checks above are worth.
+
+    Restoring the inherited `normal std=0.1/sqrt(fan_in)` encoder — the
+    initialiser paper supplement A warns about, at `std = 0.00625` for
+    `fan_in = 256` — floors the projector's two hidden BatchNorm layers at
+    `eps` again and drops `X_REPR` by four orders of magnitude, so both fail.
+    """
+    original = recipe_run
+
+    def withdrawn() -> CompiledRun:
+        run = original()
+        run.graph["mlp_encoder"].load_state_dict(
+            MLPEncoder(
+                input_dim=6,
+                widths=ENCODER_WIDTHS,
+                activation="relu",
+                normalisation="none",
+                dropout=0.0,
+                initialisation=CFRNET_INITIALISATION,
+            ).state_dict()
+        )
+        return run
+
+    monkeypatch.setattr(sys.modules[__name__], "recipe_run", withdrawn)
+    with pytest.raises(AssertionError):
+        test_projector_batchnorm_normalising_regime()
+    with pytest.raises(AssertionError):
+        test_encoder_representation_arrives_at_the_source_scale()
 
 
 def test_mask_swap_mutant_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:

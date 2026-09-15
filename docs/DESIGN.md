@@ -275,7 +275,8 @@ teacher passes and the plan has no artifact or evaluation surface.
 raw term, applies the scheduled weight and reduction, and sums active terms.
 Schedules are pure functions of global step and serve both objective weights
 and learning-rate multipliers. Current types are `Constant`, `Ramp`,
-`SigmoidRamp`, `Step`, `ExponentialDecay`, and `CosineDecay`.
+`SigmoidRamp`, `Step`, `ExponentialDecay`, `CosineDecay`, `WarmupCosine`,
+and `CosineAnneal`.
 
 ### 6.1 Reduction
 

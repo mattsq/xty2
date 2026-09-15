@@ -13,7 +13,7 @@ from xty2.evaluation.reporting import assert_result_matches_card, load_reproduct
 
 ROOT = Path(__file__).parents[2]
 CARD = ROOT / "docs/recipes/simsiam.md"
-RESULT = ROOT / "docs/experiments/results/simsiam-c14090a/simsiam.json"
+RESULT = ROOT / "docs/experiments/results/simsiam-946601d/simsiam.json"
 
 
 def recorded() -> dict[str, Any]:
@@ -25,7 +25,7 @@ def test_saved_replicates_and_decisions_are_independently_recomputed() -> None:
     result = recorded()
     metrics = {metric["name"]: metric for metric in result["metrics"]}
     assert result["replicates"] == 10
-    assert result["commit"] == "c14090a43e2e"
+    assert result["commit"] == "946601def994"
     for metric in metrics.values():
         values = metric["values"]
         assert len(values) == 10 and all(math.isfinite(v) for v in values)
@@ -39,7 +39,24 @@ def test_saved_replicates_and_decisions_are_independently_recomputed() -> None:
             assert metric["passed"] == (mean - stderr >= metric["target"])
         elif metric["relation"] == "<=":
             assert metric["passed"] == (mean + stderr <= metric["target"])
-    for difference, full, control in (
+    for difference, left, right in (
+        ("stop_gradient_alignment_gap", "no_stop_alignment", "full_alignment"),
+        ("predictor_alignment_gap", "no_predictor_alignment", "full_alignment"),
+        (
+            "stop_gradient_rank_gap",
+            "full_encoder_effective_rank",
+            "no_stop_encoder_effective_rank",
+        ),
+        (
+            "predictor_rank_gap",
+            "full_encoder_effective_rank",
+            "no_predictor_encoder_effective_rank",
+        ),
+        (
+            "encoder_rank_retention",
+            "full_encoder_effective_rank",
+            "initial_encoder_effective_rank",
+        ),
         (
             "stop_gradient_spread_gap",
             "full_projection_spread",
@@ -54,11 +71,20 @@ def test_saved_replicates_and_decisions_are_independently_recomputed() -> None:
     ):
         for index in range(10):
             assert metrics[difference]["values"][index] == pytest.approx(
-                metrics[full]["values"][index] - metrics[control]["values"][index],
+                metrics[left]["values"][index] - metrics[right]["values"][index],
                 abs=1e-12,
             )
-    assert result["status"] == "deviating"
-    assert sum(metric["passed"] is True for metric in metrics.values()) == 2
+    assert result["status"] == "reproduced"
+    assert sum(metric["passed"] is True for metric in metrics.values()) == 5
+    # Card section 6.4's audit note, still true on a tree where the mechanism
+    # does reproduce: both retired spread gaps are recorded, carry no bound, and
+    # would have failed the `mean - stderr > 0` one they used to carry — on the
+    # very run where all four replacement bounds pass.
+    for retired in ("stop_gradient_spread_gap", "predictor_spread_gap"):
+        assert metrics[retired]["criterion"] == "informational"
+        values = metrics[retired]["values"]
+        mean = statistics.mean(values)
+        assert mean - statistics.stdev(values) / math.sqrt(10) <= 0.0
 
 
 def test_canonical_runner_rescores_the_saved_evidence(

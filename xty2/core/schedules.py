@@ -11,6 +11,8 @@ different constants. `CosineDecay` arrives with FixMatch, whose section 2.4
 states `eta cos(7 pi k / 16 K)` and whose appendix B.4 ablates it against a
 linear decay and against none — the ledger entry in `DESIGN.md` §11 asks for
 exactly that, a card naming the schedule.
+`CosineAnneal` arrives with SimSiam: its reference decays the rate by SGDR's
+half cosine, which is a different curve from `CosineDecay`'s partial turn.
 `WarmupCosine` arrives with PAWS. Its reference warms the learning rate to its
 base value and only then starts a cosine fall to a non-zero final multiplier;
 making that one declaration keeps both phases visible in the plan.
@@ -250,6 +252,47 @@ class CosineDecay(Schedule):
             f"cosine {float(self.initial)!r} * cos(pi * {float(self.phase)!r} * "
             f"min(step/{self.steps}, 1))"
         )
+
+
+@dataclass(frozen=True)
+class CosineAnneal(Schedule):
+    """SGDR's half cosine, `0.5 * (1 + cos(pi * min(step/steps, 1)))`.
+
+    This is the shape SimSiam's pinned `main_simsiam.adjust_learning_rate`
+    computes, `init_lr * 0.5 * (1 + cos(pi * epoch / epochs))` [27], with its
+    epoch counter reading this card's optimiser-step horizon. It is a different
+    curve from `CosineDecay`, which walks `phase` of the way to the cosine's
+    zero and is FixMatch's `cos(7 pi k / 16 K)`: at the midpoint this one is at
+    `0.5` where `CosineDecay(phase=0.5)` is at `cos(pi/4) ~ 0.707`. Neither
+    reproduces the other at any `phase`, and `WarmupCosine` carries this same
+    half cosine but only after a warm-up of at least one step, which would
+    shift the horizon by that step and print a warm-up the source has not got.
+
+    The reference evaluates its formula at `epoch = 0 .. epochs - 1`, so it
+    never reaches zero; the executor likewise steps `0 .. steps - 1`. The value
+    at `steps` is zero and flat afterwards, which is the module's convention
+    rather than a rate the reference ever applies.
+    """
+
+    steps: int
+
+    def __post_init__(self) -> None:
+        if type(self.steps) is not int or self.steps < 1:
+            raise Xty2Error(
+                f"CosineAnneal.steps must be an integer at least 1, got {self.steps!r}"
+            )
+
+    def value(self, step: int) -> float:
+        progress = min(step / self.steps, 1.0)
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    @property
+    def nominal(self) -> float:
+        """Zero: the rate the anneal reaches at its horizon."""
+        return 0.0
+
+    def describe(self) -> str:
+        return f"cosine anneal 0.5 * (1 + cos(pi * min(step/{self.steps}, 1)))"
 
 
 @dataclass(frozen=True)
