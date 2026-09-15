@@ -296,6 +296,80 @@ class CosineAnneal(Schedule):
 
 
 @dataclass(frozen=True)
+class CosineEMADecay(Schedule):
+    """BYOL's target decay, `1 - (1 - base) * 0.5 * (1 + cos(pi * min(step/steps, 1)))`.
+
+    This is `utils/schedules.target_ema` at the pinned BYOL commit, whose
+    `_cosine_decay` clamps its step at `max_steps` exactly as the `min` here
+    does. The decay starts at `base` and rises towards one: the target tracks
+    the online parameters fastest at the beginning of pretraining and freezes at
+    the horizon. It is the affine complement of `CosineAnneal` rather than a
+    rescaling of it, so neither this curve nor its `nominal` is reachable by any
+    existing schedule.
+
+    `steps` is the stage's own optimiser-step budget, because the source passes
+    `max_steps` — the whole pretraining run — as the horizon. The executor
+    updates a teacher at global steps `0 .. steps - 1`, so `value(steps) == 1.0`
+    sits outside the applied domain: a frozen target is the limit this curve
+    approaches, never a decay it hands to an EMA update.
+
+    That endpoint is why `nominal` is `value(steps - 1)`, the last decay the
+    schedule is applied at, rather than the 1.0 it settles at afterwards.
+    `TeacherSpec` requires a decay in `[0, 1)` and `EMATeacher` re-checks every
+    step it reads; both checks are about decays that *run*. Reporting the
+    endpoint would reject the source's own schedule over a value no update ever
+    uses, and clamping the curve below one would change the decays that do run.
+    `describe()` prints the whole formula and its horizon, so the plan shows the
+    curve rather than this one point, and a recipe whose teacher outlives its
+    declared horizon is a mismatch Tier 0 checks against the stage's `steps`.
+
+    Attributes:
+        base: The decay at step 0 — BYOL's `base_target_ema`, 0.996 at the
+            1000-epoch preset.
+        steps: The horizon, **in optimiser steps**, and the stage's step budget.
+    """
+
+    base: float
+    steps: int
+
+    def __post_init__(self) -> None:
+        _require_finite("CosineEMADecay.base", self.base)
+        if not 0.0 <= float(self.base) < 1.0:
+            raise Xty2Error(
+                f"CosineEMADecay.base must be in [0, 1), got {self.base!r}. It is "
+                "the decay the curve starts at and rises from; a base at or "
+                "above one leaves an EMA that never tracks its student."
+            )
+        if type(self.steps) is not int or self.steps < 1:
+            raise Xty2Error(
+                f"CosineEMADecay.steps must be an integer at least 1, got "
+                f"{self.steps!r}"
+            )
+
+    def value(self, step: int) -> float:
+        progress = min(step / self.steps, 1.0)
+        return 1.0 - (1.0 - float(self.base)) * 0.5 * (
+            1.0 + math.cos(math.pi * progress)
+        )
+
+    @property
+    def nominal(self) -> float:
+        """The last decay this schedule is applied at, `value(steps - 1)`.
+
+        Not `value(steps)`: see the class docstring. The value is strictly below
+        one for every admissible `base` and `steps`, because `(steps - 1)/steps`
+        is strictly below one and the cosine there is therefore above `-1`.
+        """
+        return self.value(self.steps - 1)
+
+    def describe(self) -> str:
+        return (
+            f"cosine ema 1 - (1 - {float(self.base)!r}) * 0.5 * "
+            f"(1 + cos(pi * min(step/{self.steps}, 1)))"
+        )
+
+
+@dataclass(frozen=True)
 class WarmupCosine(Schedule):
     """Linear warm-up to 1, then cosine decay to `final` at `steps`.
 
@@ -472,6 +546,7 @@ def _require_finite(label: str, value: object) -> None:
 __all__ = [
     "Constant",
     "CosineDecay",
+    "CosineEMADecay",
     "ExponentialDecay",
     "Ramp",
     "Schedule",

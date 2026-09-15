@@ -302,9 +302,10 @@ adaptation still failed spread; its failure ledger, original audit and
 [paired view diagnostic](experiments/2026-09-08-vicreg-views.md) remain recorded.
 
 Candidates: CoMatch, PAWS, SimMatch, VICReg, Barlow Twins, BYOL, and SimSiam.
-BYOL has a draft [recipe card](recipes/byol.md), stopped for review before
-implementation. It tests scheduled target EMA against a matched zero-decay
-arm and specifies the LARS, projection/prediction and target-BN contracts.
+BYOL is implemented at [`recipes/byol.md`](recipes/byol.md) with its Tier 0
+suite, and carries the LARS, projection/prediction and target-BN contracts its
+card specifies. Its paired study of scheduled target EMA against a matched
+zero-decay arm is predeclared in §6 and has no Tier 1 fit or Tier 2 result yet.
 SimSiam is implemented at [`recipes/simsiam.md`](recipes/simsiam.md), with
 separate prediction and projection outputs and a paired ten-seed Tier 2 study
 of stop-gradient, predictor and pretraining ablations. Its card records the

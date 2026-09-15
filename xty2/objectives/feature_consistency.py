@@ -218,10 +218,11 @@ class CosineFeatureConsistency:
         self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
     ) -> LossTerm:
         del ctx
-        prediction = self._embedding(
-            state, self.prediction_port, self.prediction, batch
+        owner = f"CosineFeatureConsistency {self.name!r}"
+        prediction = _embedding(
+            state, self.prediction_port, self.prediction, batch, owner
         )
-        target = self._embedding(state, self.target_port, self.target, batch)
+        target = _embedding(state, self.target_port, self.target, batch, owner)
         if self.stop_grad == "target":
             target = target.detach()
         if prediction.shape[-1] != target.shape[-1]:
@@ -239,26 +240,238 @@ class CosineFeatureConsistency:
             per_row, rows, diagnostics=_concentrations(predicted, matched, rows)
         )
 
-    def _embedding(
-        self, state: State, port: Port, realisation: Realisation, batch: XTYBatch
-    ) -> Tensor:
-        value = state[realisation][port]
-        if not isinstance(value, Tensor):
-            raise PortContractError(
-                f"objective {self.name!r} read port {str(port)!r} under "
-                f"{realisation} as an embedding tensor, but it carries "
-                f"{type(value)}. Its PortSpec is the contract (DESIGN.md §2)."
-            )
-        if value.ndim != 2 or value.shape[1] < 1:
-            raise LossError("CosineFeatureConsistency requires rank-two embeddings")
-        if not bool(torch.isfinite(value).all()):
-            raise LossError("CosineFeatureConsistency requires finite embeddings")
-        if value.shape[0] != batch.batch_size:
+
+@dataclass(frozen=True)
+class NormalizedSquaredFeatureConsistency:
+    """BYOL eq. (2): the squared distance between two L2-normalised embeddings.
+
+    `docs/recipes/byol.md` §3.1 transcribes it. The pinned
+    `utils/helpers.regression_loss` is
+
+    ```python
+    normed_x, normed_y = l2_normalize(x, axis=-1), l2_normalize(y, axis=-1)
+    return jnp.sum((normed_x - normed_y)**2, axis=-1)
+    ```
+
+    and this is that expression, not the `2 - 2 cos` the paper writes beside it.
+    The two agree wherever both vectors have a norm, and the place they do not
+    is the reason this objective exists rather than a second `stop_grad` on
+    `CosineFeatureConsistency`:
+
+    * **the floor is on the squared norm, not on the norm.** `l2_normalize`
+      divides by `sqrt(max(sum(v**2), 1e-12))`, so a vector shorter than `1e-6`
+      is divided by `1e-6` and comes out *shorter than unit length*. Torch's
+      `F.normalize(v, eps=1e-12)` divides by `max(||v||, 1e-12)` instead, which
+      is the same policy with a floor a million times smaller, and a cosine
+      formulation has no floor to disagree about at all — it reads `-1` for any
+      two parallel vectors however short. Below the floor the value here is a
+      genuine squared distance between two sub-unit vectors and the second
+      equality of eq. (2) simply does not hold. That is the source's behaviour,
+      and it is what the Tier 0 oracle pins;
+    * **the value is a distance, so it is non-negative and minimised at zero,**
+      where the cosine term is minimised at `-1`. Weights and logged numbers do
+      not transfer between the two.
+
+    BYOL sums the two directional distances and takes one mean over rows
+    (`loss_fn`: `repr_loss = a + b`, then `jnp.mean`). That is two terms of
+    weight 1 under `reduction="mean"` here, and specifically *not* a half-weight
+    each: halving is SimSiam's convention, and `byol.md` §6.3 requires this
+    objective to be observed failing under exactly that mutant.
+
+    The target side is detached, and under BYOL it is also a teacher realisation
+    the executor evaluates under `torch.no_grad()`. The detach is still declared
+    rather than inferred: the source keeps its own `jax.lax.stop_gradient` for
+    the same reason, and the zero-decay arm of §6.2 — whose target parameters
+    equal the online ones after every update — is a control only if the gradient
+    policy is unchanged alongside it.
+
+    Attributes:
+        prediction_port: The port carrying the trained side, `q_theta(z_theta)`.
+        target_port: The port carrying the target side, `z'_xi`. BYOL reads a
+            projection here, never a target prediction.
+        prediction: The realisation the prediction is read under.
+        target: The realisation the target is read under.
+        stop_grad: Which side is detached. Binds `gradients.detached_targets`,
+            so it has no default (`DESIGN.md` §9.1).
+        epsilon: The floor on the **squared** norm; recorded in plan details.
+        rows: The population this term is entitled to. BYOL's is `all`.
+        name: Keys the per-objective log (§6.2).
+    """
+
+    prediction_port: Port
+    target_port: Port
+    prediction: Realisation
+    target: Realisation
+    stop_grad: FeatureStopGrad = REQUIRED
+    rows: Rows = "all"
+    name: str = "normalized_squared_feature_consistency"
+    epsilon: float = 1e-12
+
+    CARD_KEYS: ClassVar[dict[str, str]] = {"stop_grad": "gradients.detached_targets"}
+
+    def __post_init__(self) -> None:
+        card_hyperparameters(self)
+        if not math.isfinite(self.epsilon) or self.epsilon <= 0:
             raise LossError(
-                f"CosineFeatureConsistency {self.name!r} got {value.shape[0]} "
-                f"rows from {realisation} for a batch of {batch.batch_size}"
+                "NormalizedSquaredFeatureConsistency.epsilon must be finite and "
+                "positive"
             )
-        return value
+        if not require_str("feature consistency name", self.name, error=LossError):
+            raise LossError(
+                "NormalizedSquaredFeatureConsistency.name must be non-empty"
+            )
+        for field, port in (
+            ("prediction_port", self.prediction_port),
+            ("target_port", self.target_port),
+        ):
+            if not isinstance(port, Port):
+                raise LossError(
+                    f"NormalizedSquaredFeatureConsistency.{field} must be a Port, "
+                    f"got {type(port)}"
+                )
+            if port_spec(port).kind != "tensor":
+                raise LossError(
+                    f"NormalizedSquaredFeatureConsistency takes the squared "
+                    f"distance between two embeddings, but {field} {port!s} "
+                    f"carries {port_spec(port).kind}."
+                )
+        prediction: object = self.prediction
+        target: object = self.target
+        if not isinstance(prediction, Realisation) or not isinstance(
+            target, Realisation
+        ):
+            raise LossError(
+                "NormalizedSquaredFeatureConsistency.prediction and target must "
+                "be Realisations"
+            )
+        if (self.prediction_port, self.prediction) == (self.target_port, self.target):
+            raise LossError(
+                f"NormalizedSquaredFeatureConsistency matches "
+                f"{self.prediction_port!s} @ {self.prediction} with itself; every "
+                "distance would be exactly 0 and the term a constant. BYOL's "
+                "pair is one view's online prediction against the other view's "
+                "target projection (eq. 2)."
+            )
+        if self.stop_grad not in ("target", "none"):
+            raise LossError(
+                "NormalizedSquaredFeatureConsistency.stop_grad must be 'target' "
+                f"or 'none', got {self.stop_grad!r}. BYOL declares 'target': eq. "
+                "(3) differentiates with respect to theta alone, and without the "
+                "stop-gradient the pair has the trivial optimum the method has "
+                "no negatives to punish."
+            )
+        try:
+            validate_population(self.rows)
+        except Xty2Error as error:
+            raise LossError(
+                f"NormalizedSquaredFeatureConsistency {self.name!r}: {error}"
+            ) from error
+
+    @property
+    def requires(self) -> frozenset[tuple[Port, Realisation]]:
+        return frozenset(
+            {
+                (self.prediction_port, self.prediction),
+                (self.target_port, self.target),
+            }
+        )
+
+    @property
+    def detaches(self) -> frozenset[tuple[Port, Realisation]]:
+        """The target side, derived from `stop_grad` rather than restated."""
+        return (
+            frozenset({(self.target_port, self.target)})
+            if self.stop_grad == "target"
+            else frozenset()
+        )
+
+    def plan_details(self) -> tuple[str, ...]:
+        """Which side is which, and the arithmetic, including the floor.
+
+        The floor is printed because it is the whole difference between this
+        term and a cosine, and because `byol.md` §4 states it as a source
+        mechanic rather than as a numerical convenience.
+        """
+        return (
+            f"prediction (trained) = {self.prediction_port!s} @ {self.prediction}",
+            f"target ({'detached' if self.stop_grad == 'target' else 'trained'}) "
+            f"= {self.target_port!s} @ {self.target}",
+            f"separate L2 normalisation by sqrt(max(sum(v^2), {self.epsilon:g}))",
+            "value = sum over coordinates of (normalised difference)^2, per row",
+            "denominator = every eligible row; nothing is gated",
+        )
+
+    @property
+    def batch_coupled(self) -> bool:
+        """No: the distance pairs one row's two realisations with each other."""
+        return False
+
+    def compute(
+        self, state: State, batch: XTYBatch, rows: RowIndex, ctx: TrainContext
+    ) -> LossTerm:
+        del ctx
+        owner = f"NormalizedSquaredFeatureConsistency {self.name!r}"
+        prediction = _embedding(
+            state, self.prediction_port, self.prediction, batch, owner
+        )
+        target = _embedding(state, self.target_port, self.target, batch, owner)
+        if self.stop_grad == "target":
+            target = target.detach()
+        if prediction.shape[-1] != target.shape[-1]:
+            raise LossError(
+                f"NormalizedSquaredFeatureConsistency {self.name!r} compares "
+                f"{self.prediction_port!s} of width {prediction.shape[-1]} with "
+                f"{self.target_port!s} of width {target.shape[-1]}. BYOL's "
+                "predictor maps the projection to its own width, so a mismatch "
+                "is a mis-declared head rather than something to broadcast."
+            )
+        predicted = squared_norm_floor_normalize(prediction, self.epsilon)
+        matched = squared_norm_floor_normalize(target, self.epsilon)
+        per_row = (predicted - matched).pow(2).sum(dim=-1)
+        return reduce_rows(
+            per_row, rows, diagnostics=_concentrations(predicted, matched, rows)
+        )
+
+
+def squared_norm_floor_normalize(value: Tensor, epsilon: float) -> Tensor:
+    """`utils/helpers.l2_normalize`: `v * rsqrt(max(sum(v**2), epsilon))`.
+
+    A free function rather than a method because `epsilon` floors the *squared*
+    norm, which is the one thing about this objective a reader is most likely to
+    assume is `F.normalize` with a different constant. Anything else that wants
+    the source's normalisation — a diagnostic, a Tier 1 probe — calls this
+    rather than writing the expression a second time.
+    """
+    squared = value.pow(2).sum(dim=-1, keepdim=True)
+    return value * torch.rsqrt(squared.clamp_min(epsilon))
+
+
+def _embedding(
+    state: State, port: Port, realisation: Realisation, batch: XTYBatch, owner: str
+) -> Tensor:
+    """The rank-two, finite, batch-sized tensor a feature term reads.
+
+    Shared by both objectives in this module because the three rejections are
+    the same three rejections, and a second copy of them is a second thing to
+    keep in step with `PortSpec`.
+    """
+    value = state[realisation][port]
+    if not isinstance(value, Tensor):
+        raise PortContractError(
+            f"{owner} read port {str(port)!r} under "
+            f"{realisation} as an embedding tensor, but it carries "
+            f"{type(value)}. Its PortSpec is the contract (DESIGN.md §2)."
+        )
+    if value.ndim != 2 or value.shape[1] < 1:
+        raise LossError(f"{owner} requires rank-two embeddings")
+    if not bool(torch.isfinite(value).all()):
+        raise LossError(f"{owner} requires finite embeddings")
+    if value.shape[0] != batch.batch_size:
+        raise LossError(
+            f"{owner} got {value.shape[0]} rows from {realisation} for a batch "
+            f"of {batch.batch_size}"
+        )
+    return value
 
 
 def _concentrations(
@@ -292,4 +505,9 @@ def _concentration(unit: Tensor, rows: RowIndex) -> float:
     return float(unit.detach().index_select(0, rows).mean(dim=0).norm())
 
 
-__all__ = ["CosineFeatureConsistency", "FeatureStopGrad"]
+__all__ = [
+    "CosineFeatureConsistency",
+    "FeatureStopGrad",
+    "NormalizedSquaredFeatureConsistency",
+    "squared_norm_floor_normalize",
+]
