@@ -1,12 +1,14 @@
 # Recipe spec card: byol
 
-**Status:** `draft`
+**Status:** `implemented`
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
 > §6 for benchmark and reporting work.
 
-Selected from [BACKLOG.md §5.1](../BACKLOG.md). This packet specifies a
-prospective study and stops for card review. No callable or result exists yet.
+Selected from [BACKLOG.md §5.1](../BACKLOG.md). `xty2.recipes.byol` implements
+§3–§4 and `tests/invariants/test_byol.py` is its Tier 0 suite. No Tier 1 fit,
+benchmark module or §6 result exists yet: the §6.4 bounds remain prospective and
+the §6.1 ledger is empty.
 
 ## 1. Provenance
 
@@ -74,27 +76,27 @@ not hold. Preserve that implementation, including the sum over coordinates.
 
 ### 3.2 Mapping to xty2
 
-Names marked proposed below are implementation scope, not existing APIs.
+Every name below exists; the four added for this card are §5.1's.
 
 | Paper symbol | Meaning | xty2 Port | xty2 Objective / Component |
 |---|---|---|---|
 | v,v' | two views of one source row | `X_RAW` in views `byol_a`, `byol_b` | two `ViewSpec`s; explicit caller transforms, study uses `OracleSymmetry` |
 | f_theta | online backbone | `X_RAW -> X_REPR` | existing `MLPEncoder`, four 256-wide ReLU layers |
-| g_theta | online projection | `X_REPR -> X_PROJ` | proposed `BYOLProjector`, 256 -> 4096 -> 256 |
-| q_theta | online predictor | `X_PROJ -> X_PRED` | proposed `BYOLPredictor`, 256 -> 4096 -> 256 |
+| g_theta | online projection | `X_REPR -> X_PROJ` | `BYOLProjector`, 256 -> 4096 -> 256 |
+| q_theta | online predictor | `X_PROJ -> X_PRED` | `BYOLPredictor`, 256 -> 4096 -> 256 |
 | f_xi,g_xi | target backbone/projector | teacher realisations of `X_REPR`, `X_PROJ` | existing stage-owned `TeacherSpec` / `EMATeacher` |
-| L_theta,xi | a predicts target b | online `X_PRED@byol_a`, teacher `X_PROJ@byol_b` | proposed `NormalizedSquaredFeatureConsistency`, weight 1 |
+| L_theta,xi | a predicts target b | online `X_PRED@byol_a`, teacher `X_PROJ@byol_b` | `NormalizedSquaredFeatureConsistency`, weight 1 |
 | L_tilde_theta,xi | b predicts target a | online `X_PRED@byol_b`, teacher `X_PROJ@byol_a` | same objective class, distinct name, weight 1 |
-| tau | target update schedule | n/a | proposed `CosineEMADecay`, §4 |
-| optimizer | online update | n/a | proposed LARS option in `OptimiserSpec`, existing gradient executor |
+| tau | target update schedule | n/a | `CosineEMADecay`, §4 |
+| optimizer | online update | n/a | `OptimiserSpec(name='lars')` and `core.optimisation.LARS`, existing gradient executor |
 | transferred f_theta | downstream encoder | identity `X_REPR` | `Stage(joint_fit, initialise_from=pretrain)` |
 | local outcome | factual conditional density | `Y_GIVEN_XT` | `TARNetHead`, `ObservedOutcomeNLL` |
 | local propensity | categorical treatment law | `T_GIVEN_X` | `CategoricalPropensity`, `ObservedTreatmentNLL` |
 | local missing-t likelihood | exact treatment enumeration | `T_GIVEN_X`, `Y_GIVEN_XT` | `MissingTreatmentMarginalNLL(grad_path=both)` |
 
 Use two ordinary gradient stages, `UniformSampler(128)`, `Weighted`,
-`WarmupCosine`, `Ramp`, `Constant` and explicit `DataSpec` preprocessing and
-MCAR missingness. Pretraining trains only encoder/projector/predictor and
+`WarmupCosine` with an explicit final multiplier of 0, `Ramp`, `Constant` and
+explicit `DataSpec` preprocessing and MCAR missingness. Pretraining trains only encoder/projector/predictor and
 reads neither outcomes nor treatment values. Fine-tuning trains only the
 online encoder and XTY heads, with a fresh Adam optimiser and no teacher.
 Preserve all row identifiers, supervision masks, weights and split fields in
@@ -111,55 +113,127 @@ downstream inference export the online encoder, not the target or projector.
 
 ## 4. Mechanics checklist
 
-This block defines the full local arm. References in comments distinguish
-source settings from the explicit adaptations in §5. All applicable keys must
-bind into the future compiled plan; this draft cannot yet be compiled.
+This block defines the full local arm and is the compiled plan, key for key:
+`pretrain` is the source's, `joint_fit` is deviation 4's local protocol.
+Comments cite the pinned file the value comes from, or the §5 row that changed
+it.
 
 ```yaml
 gradients:
-  stop_gradients: target projection in each direction; no online prediction detach # eqs (1)-(3)
-  detached_targets: true # loss_fn
-  gradient_clipping: none # reference lars pipeline
-  marginal_nll_grad_path: both # local downstream, deviation 4
-
+  stop_gradients:  # eqs (1)-(3); `loss_fn`'s jax.lax.stop_gradient on the target projection only
+    pretrain.byol_a_to_b: x_proj @ view=byol_b params=teacher
+    pretrain.byol_b_to_a: x_proj @ view=byol_a params=teacher
+    joint_fit.observed_outcome_nll: none
+    joint_fit.observed_treatment_nll: none
+    joint_fit.missing_treatment_marginal_nll: none
+  detached_targets: target
+  gradient_clipping:
+    pretrain: none                                # the reference lars chain clips nothing
+    joint_fit: none
+  marginal_nll_grad_path:
+    joint_fit.missing_treatment_marginal_nll: both   # deviation 4
 teacher:
-  ema_decay: 1-(1-0.996)*(1+cos(pi*k/1000))/2; k=0..999 # section 3.3, schedules.target_ema; horizon deviation 3
-  ema_applies_to_buffers: false # _update_fn returns separately forwarded target_state
-  teacher_in_train_mode: true # loss_fn is_training=True for both networks
-  teacher_requires_grad: false # eq (3)
-
+  # `schedules.target_ema` with base_ema 0.996 and max_steps 1000, evaluated at
+  # the zero-based pretraining step. The scalar bound here is the decay at the
+  # last applied step k=999; the curve itself is the `decay_schedule=` field of
+  # the plan's teacher line, `1 - (1 - 0.996) * 0.5 * (1 + cos(pi * min(k/1000, 1)))`.
+  # See the indexing note below for why the k=1000 endpoint is not this number.
+  ema_decay:
+    pretrain: 0.9999999901304037
+  ema_applies_to_buffers:
+    pretrain: false                               # `_update_fn` returns a separately forwarded target_state
+  teacher_in_train_mode:
+    pretrain: true                                # `loss_fn` applies both networks with is_training=True
+  teacher_requires_grad:
+    pretrain: false                               # eq. (3)
 losses:
-  reduction: pretrain mean over rows after coordinate sum; downstream population # loss_fn; deviation 4
-  eligible_rows: pretrain all train rows; outcome t/y observed; treatment t observed; marginal t missing/y observed
-  weights: pretrain directions 1 each; downstream outcome 1, treatment 1, marginal 0 to 0.5 # loss_fn; deviation 4
-  schedules: pretrain constant; downstream marginal linear ramp over first 1000 steps # deviation 4
+  reduction:  # `loss_fn`: one jnp.mean over rows of the summed directional distances
+    pretrain.byol_a_to_b: mean
+    pretrain.byol_b_to_a: mean
+    joint_fit.observed_outcome_nll: population
+    joint_fit.observed_treatment_nll: population
+    joint_fit.missing_treatment_marginal_nll: population
+  eligible_rows:
+    pretrain.byol_a_to_b: all
+    pretrain.byol_b_to_a: all
+    joint_fit.observed_outcome_nll: t_observed
+    joint_fit.observed_treatment_nll: t_observed
+    joint_fit.missing_treatment_marginal_nll: t_missing
+  weights:  # `repr_loss = a + b`, not (a + b) / 2; deviation 4 for joint_fit
+    pretrain.byol_a_to_b: 1.0
+    pretrain.byol_b_to_a: 1.0
+    joint_fit.observed_outcome_nll: 1.0
+    joint_fit.observed_treatment_nll: 1.0
+    joint_fit.missing_treatment_marginal_nll: 0.5
+  schedules:
+    pretrain.byol_a_to_b: constant 1.0
+    pretrain.byol_b_to_a: constant 1.0
+    joint_fit.observed_outcome_nll: constant 1.0
+    joint_fit.observed_treatment_nll: constant 1.0
+    joint_fit.missing_treatment_marginal_nll: ramp 0.0 -> 0.5 over 1000 steps   # deviation 4
   temperature: n/a
   sharpening: n/a
   confidence_threshold: n/a
-
 optimisation:
-  optimiser: pretrain LARS momentum=0.9 eta=0.001 no Nesterov; downstream Adam betas=(0.9,0.999) eps=1e-8 # configs/byol.py; deviation 4
-  lr: pretrain 0.2*128/256=0.1; downstream 0.001 # 1000-epoch preset; deviations 3,4
-  lr_schedule: pretrain WarmupCosine start=0 warmup=10 steps=1000; downstream constant # learning_schedule, compressed horizon
-  weight_decay: pretrain 1.5e-6 excluding biases and BN from both decay and LARS adaptation; downstream none # 1000-epoch preset
-  batch_size: 128 for both stages # deviation 3
-  labelled_unlabelled_ratio: no fixed quota; uniform sampling of shared population with 40 observed treatments # deviation 4
-  total_steps_or_epochs: pretrain 1000 optimiser steps; joint_fit 3000 optimiser steps # deviations 3,4
-
+  optimiser:
+    pretrain: lars(momentum=0.9, eta=0.001, adaptation on parameters of rank two or more)   # `optimizer_config`; the filter is `optimizers.exclude_bias_and_norm`
+    joint_fit: adam(betas=(0.9, 0.999), eps=1e-08)                                          # deviation 4
+  lr:
+    pretrain: 0.1                                 # _LR_PRESETS[1000] = 0.2, scaled by batch/256 in `learning_schedule`; deviations 3, 4
+    joint_fit: 0.001
+  lr_schedule:
+    pretrain: warmup cosine 0.0 -> 1.0 over 10 steps, then cosine -> 0.0 at 1000 steps   # `learning_schedule`, whose post-warmup half cosine reaches zero at the horizon; deviation 3
+    joint_fit: constant 1.0
+  weight_decay:
+    pretrain: 1.5e-06 (all trainable components; norm and bias exempt)   # _WD_PRESETS[1000]; `exclude_bias_and_norm` also exempts them from the trust ratio
+    joint_fit: none
+  batch_size:
+    pretrain: 128                                 # deviation 3; the source's preset is 4096
+    joint_fit: 128
+  labelled_unlabelled_ratio: n/a                  # UniformSampler enforces no quota
+  total_steps_or_epochs:
+    pretrain: 1000                                # deviation 3: optimiser steps, not the source's 1000 epochs
+    joint_fit: 3000                               # deviation 4
 architecture:
-  widths_depths: encoder [256,256,256,256]; projector [4096,256]; predictor [4096,256]; outcome [100,100,100]; linear propensity # deviation 1; networks.MLP
-  activation: encoder ReLU; projector/predictor hidden ReLU only; outcome ELU; propensity linear logits
-  normalisation: encoder none; each projector/predictor hidden affine BN eps=1e-5 momentum=0.1; no output BN; heads none # networks.MLP; deviations 1,6
-  dropout: none # source networks; local backbone
-  initialisation: encoder/projector/predictor torch Linear default; BN scale=1 bias=0; target copies online; heads CFRNET_INITIALISATION # deviations 5,6
-  output_parameterisation: raw 256-vector projection/prediction; outcome K means with fixed Gaussian scale=1; K softmax propensity logits
-
-data:
-  standardisation: zscore features fitted once on training population only # deviation 4
-  outcome_scaling: train-only zscore; primary NLL on common training scale; original-scale metrics diagnostic # deviation 4
-  treatment_encoding: integers 0..K-1 with K=2 # local fixture
-  split_protocol: disjoint generated train/held-out populations; final checkpoint; no test selection # section 6.2
-  missingness_mechanism: treatment MCAR to exactly 40 training rows, shared row_id-keyed mask; all outcomes observed # deviation 4
+  widths_depths:  # deviation 1 for the encoder; `configs/byol.py` sizes for both heads
+    mlp_encoder: [256, 256, 256, 256]
+    byol_projector: [4096, 256]
+    byol_predictor: [4096, 256]
+    tarnet_head: K independent heads, each [100, 100, 100]
+    categorical_propensity: linear X_REPR -> K
+  activation:
+    mlp_encoder: relu
+    byol_projector: hidden relu; output linear
+    byol_predictor: hidden relu; output linear
+    tarnet_head: elu
+    categorical_propensity: linear logits
+  normalisation:  # bn_config decay_rate 0.9 is torch momentum 0.1; deviations 1, 6
+    mlp_encoder: none
+    byol_projector: hidden BN affine=true eps=1e-5 momentum=0.1 track_running_stats=true; output none
+    byol_predictor: hidden BN affine=true eps=1e-5 momentum=0.1 track_running_stats=true; output none
+    tarnet_head: none
+    categorical_propensity: none
+  dropout:  # no source network uses any
+    mlp_encoder: 0.0
+    byol_projector: 0.0
+    byol_predictor: 0.0
+    tarnet_head: 0.0
+    categorical_propensity: 0.0
+  initialisation:  # deviations 5, 6; `networks.MLP` biases the hidden layer and not the output
+    mlp_encoder: torch Linear default Kaiming-uniform
+    byol_projector: torch Linear reset_parameters; hidden bias=true; output bias=false; BN weight=1,bias=0,running_mean=0,running_var=1
+    byol_predictor: torch Linear reset_parameters; hidden bias=true; output bias=false; BN weight=1,bias=0,running_mean=0,running_var=1
+    tarnet_head: normal std=0.1/sqrt(fan_in), bias=0
+    categorical_propensity: normal std=0.1/sqrt(fan_in), bias=0
+  output_parameterisation:
+    tarnet_head: K means; fixed Gaussian scale=1.0
+    categorical_propensity: K softmax logits
+data:  # deviations 2 and 4
+  standardisation: "x: zscore fitted on 'train'"
+  outcome_scaling: "y: zscore fitted on 'train'"
+  treatment_encoding: n/a                         # XTYBatch supplies integer classes 0..K-1, K=2 on this fixture
+  split_protocol: fixed two-cluster DGP; disjoint train and held-out populations; no test-based selection; training rows are assignment 'train'
+  missingness_mechanism: treatment MCAR to a budget of 40 labelled rows, keyed by row_id
 ```
 
 LARS must match `optimizers.lars`: add the filtered weight decay to the
@@ -168,11 +242,15 @@ gradient, apply eta*parameter_norm/update_norm when both norms are positive
 Excluded bias and BN parameters still receive ordinary momentum updates.
 Do not substitute AdamW, damped trust ratios or decay outside this sequence.
 
-The target schedule consumes zero-based pretraining step k, including the
-post-update EMA at k=999. Evaluate it in sufficient precision to keep every
-used value below 1. The unused mathematical endpoint k=1000 is 1 and must
-not be passed to the existing teacher, which rejects decay=1. This is an
-indexing contract, not a licence to clamp or alter the curve.
+The target schedule consumes zero-based pretraining step k, and its horizon is
+the stage's own step budget, so the executor applies it at k=0..999 including
+the post-update EMA at k=999. The mathematical endpoint k=1000 is exactly 1 —
+a frozen target — and is never applied. `CosineEMADecay.nominal` therefore
+reports the decay at k=999 rather than that endpoint, which is what the
+`ema_decay` key above binds: `TeacherSpec` and `EMATeacher` both reject a decay
+outside [0, 1), and those checks are about decays that run. This is an indexing
+contract, not a licence to clamp or alter the curve, and Tier 0 checks the
+horizon against the stage's `steps` rather than trusting the two to agree.
 
 ## 5. Deviations from the paper
 
@@ -187,22 +265,23 @@ indexing contract, not a licence to clamp or alter the curve.
 
 ### 5.1 Framework additions made for this card
 
-These are proposed for implementation after review, not implemented by this
-documentation PR. No source mechanic is being omitted for a framework gap;
-the reversible additions below are required before declaring `implemented`.
+Each addition below is built, reversible, and reaches `plan.hyperparameters`
+through an existing card key. No source mechanic is omitted for a framework
+gap, so §5 carries no `framework-limitation` row and this card owes the
+`DESIGN.md` §11.4 ledger nothing.
 
 | Added | Quadrant (§11.2) | Consumers today | Named second consumer | Why now |
 |---|---|---|---|---|
-| BYOLProjector and BYOLPredictor | Fidelity-bearing, reversible | proposed BYOL | n/a | Existing SimSiam output BN and bottleneck topology are different. Use biased hidden linear, affine BN, ReLU, then bias-free final linear, as networks.MLP. |
-| NormalizedSquaredFeatureConsistency | Fidelity-bearing, reversible | proposed BYOL | n/a | Existing negative cosine lacks source squared-norm floor and literal squared-distance values near zero. Keep ports, row scopes and target detach explicit. |
-| CosineEMADecay schedule | Fidelity-bearing, reversible | proposed BYOL | n/a | Existing Schedule/TeacherSpec can carry the curve but no existing primitive represents its affine complement. Bind base, horizon and index convention in plan details. |
-| LARS optimiser option | Fidelity-bearing, reversible | proposed BYOL | n/a | OptimiserSpec currently supports SGD/Adam families; preserve source trust-ratio and decay ordering in that existing boundary. Bind eta, momentum and exclusions in optimisation metadata. |
+| `BYOLProjector` and `BYOLPredictor` (`components/byol.py`) | Fidelity-bearing, reversible | byol | n/a | SimSiam's output BN and bottleneck topology are a different network. These are `networks.MLP`: biased hidden linear, affine BN, ReLU, then bias-free final linear. |
+| `NormalizedSquaredFeatureConsistency` (`objectives/feature_consistency.py`) | Fidelity-bearing, reversible | byol | n/a | The existing negative cosine has neither the source squared-norm floor nor its literal squared-distance values near zero. Ports, row scopes and target detach stay explicit. |
+| `CosineEMADecay` (`core/schedules.py`) | Fidelity-bearing, reversible | byol | n/a | `Schedule`/`TeacherSpec` can carry a scheduled decay, but no primitive represented the affine complement of a half cosine. Base, horizon and index convention are bound in the plan's teacher line. |
+| `lars` in `OptimiserSpec`, and `core.optimisation.LARS` | Fidelity-bearing, reversible | byol | n/a | `OptimiserSpec` built the SGD and Adam families only. The trust-ratio and decay ordering live inside that existing boundary, and eta, momentum and the adaptation exclusion are rendered into `optimisation.optimiser`. |
 
-No new port or executor contract is proposed. BYOL is the named second
-consumer that SimSiam's `X_PRED` addition anticipated. Do not add an EMA
-framework, generic SSL engine, checkpoint system or new card-key category.
-If implementation discovers another missing mechanic, amend and review this
-card first; if a mechanic is omitted, add typed debt and reconcile DESIGN §11.4.
+No new port or executor contract was added. BYOL is the named second consumer
+that SimSiam's `X_PRED` addition anticipated. Do not add an EMA framework,
+generic SSL engine, checkpoint system or new card-key category. If further work
+discovers a missing mechanic, amend and review this card first; if a mechanic is
+omitted, add typed debt and reconcile `DESIGN.md` §11.4.
 
 ## 6. Reproduction target
 
@@ -270,41 +349,57 @@ No early stopping, test-based selection, or additional seed search.
 
 ### 6.3 Tier 0 and Tier 1 evidence
 
-Tier 0 requirements before implementation status:
+Tier 0 is `tests/invariants/test_byol.py`, and the requirements predeclared for
+implementation status are met there:
 
-- Independent scalar and autograd oracles for squared distances, both
-  directional weights and the 1e-12 squared-norm floor, including zero and
-  near-zero vectors. A cosine-only shortcut must fail these tests.
-- Nonzero online encoder/projector/predictor gradients and absent target
-  gradients; target outputs use X_PROJ, not X_PRED. Check B != K, empty eligible
-  scopes, shape errors, non-finite inputs and singleton training BN rejection.
-- Hand-computed two-step LARS updates including bias/BN exclusions, zero
-  norms, momentum and weight decay ordering; independent schedule checks at
-  k=0, warmup boundary, midpoint and k=999.
-- Exact initial teacher copy, one EMA update after the optimiser, both views
-  using the same target parameters, independently updated BN buffers, one
-  forward per network/view and no teacher mutation from diagnostic reads.
-- Card/plan value agreement, absence of label/outcome lineage in pretraining,
-  only encoder transfer to active downstream computations, fresh downstream
-  optimiser, shared head initialisation and matched streams across controls.
-- Demonstrate effective-rank handling on constant, rank-one and isotropic
-  tensors. NaN or infinite metrics fail, including in an ablation arm.
+- Independent scalar and autograd oracles for the squared distances, both
+  directional weights and the 1e-12 squared-norm floor, at ordinary scale,
+  below the floor and at exactly zero. Both a `2 - 2cos` shortcut and torch's
+  own `normalize`, whose floor is on the norm rather than on the square, are
+  shown to disagree below the floor and to agree above it.
+- Nonzero online encoder/projector/predictor gradients, absent target
+  gradients, and targets read from `X_PROJ`: the compiler plans no `X_PRED`
+  pass under teacher parameters at all. Empty eligible scopes, rank and width
+  errors, non-finite inputs and singleton training BN rejection are covered
+  here; `B != K` candidate scoring is a repository-wide contract that
+  `tests/invariants/test_objectives.py` holds for the downstream terms.
+- Hand-computed two-step LARS updates including the bias and BN exclusions,
+  both zero-norm guards, momentum accumulation and weight-decay ordering, plus
+  independent oracles for `target_ema` and `learning_schedule` at k=0, the
+  warmup boundary, the midpoint, k=999 and every step between.
+- Exact initial teacher copy, one EMA update after the optimiser step, both
+  directions reading one target parameter set, target BN statistics owned by
+  target forwards, two target forwards per step, and a teacher unchanged by
+  having been read.
+- Card/plan value agreement across every answered §4 key, absence of outcome
+  lineage in the pretrained ports, encoder-only transfer with the projector and
+  predictor absent from downstream passes, and a fresh downstream optimiser.
 
-When implementing these assertions, observe failures under mutants that halve
-the loss, detach the prediction, use target predictions, EMA-update buffers,
-update the teacher between directions, move weight decay after adaptation,
-apply adaptation to BN, or shift the EMA schedule by one step. Record mutants
-in the implementation commit; this draft does not claim those tests exist.
+Two predeclared Tier 0 items concern machinery this packet does not ship and
+land with it rather than being dropped: `encoder_effective_rank` on constant,
+rank-one and isotropic tensors, including its non-finite rejection, and the
+matched initial tensors and seed streams across the §6.2 arms. Both belong to
+the arm builder and diagnostics the Tier 2 packet adds; no §6 number is claimed
+before they exist.
 
-Tier 1 uses seeds 42, 43 and 44, 512 training rows, 512 held-out rows, 40
-observed treatments, 100 pretraining and 200 downstream steps; batch 128.
-Rebase warmup to 1 step, EMA horizon to 100 and marginal ramp to 200, explicitly
-binding smoke overrides. Run all four arms. Require finite losses/gradients,
-source update identities, actual target movement and successful transfer on
-every seed. Record norms, BN variance relative to epsilon, rank, predictor
-residual and outcome NLL. Do not assert EMA superiority or ablation collapse
-in a wiring test. Any proposed directional assertion needs a reviewed card
-amendment and evidence on every declared smoke seed.
+The mutants recorded in the implementing commit, each observed failing the
+oracle named above: halve the loss; detach the prediction; point the target at
+`X_PRED`; floor the norm instead of the square; EMA the target's buffers; move
+the target twice in one step, which is the observable form of updating it
+between directions; move weight decay after the trust ratio; apply the trust
+ratio to biases and BN; and shift the EMA horizon by one step.
+
+Tier 1 remains predeclared and unimplemented. It uses seeds 42, 43 and 44, 512
+training rows, 512 held-out rows, 40 observed treatments, 100 pretraining and
+200 downstream steps; batch 128. Rebase warmup to 1 step, the EMA horizon to
+100 and the marginal ramp to 200, explicitly binding smoke overrides — the EMA
+horizon is the stage's step budget, so shortening one without the other runs a
+prefix of the curve. Run all four arms. Require finite losses/gradients, source
+update identities, actual target movement and successful transfer on every
+seed. Record norms, BN variance relative to epsilon, rank, predictor residual
+and outcome NLL. Do not assert EMA superiority or ablation collapse in a wiring
+test. Any proposed directional assertion needs a reviewed card amendment and
+evidence on every declared smoke seed.
 
 ### 6.4 Metrics, tolerances and interpretation
 
@@ -351,10 +446,37 @@ requires a prospective amendment with the failed protocol retained.
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status → `reviewed`) | | |
-| Plan diffed against §3.2 and §4 | | |
+| Card reviewed (status → `reviewed`) | Claude Code, at the repository owner's request on PR #57, against the pinned source files; no independent human approval claimed | 2026-09-15 |
+| Two automated review findings on PR #57 resolved | Claude Code; the EMA schedule's `TeacherSpec` validity and the unstated `WarmupCosine` final multiplier, both amended in §4 | 2026-09-15 |
+| Plan diffed against §3.2 and §4 | `tests/invariants/test_byol.py`, over the actual compiled plan and every answered §4 entry | 2026-09-15 |
+| Recipe implemented, Tier 0 passing (status → `implemented`) | Claude Code | 2026-09-15 |
 
-Review must settle the proposed LARS and loss contracts, target initialisation,
-BN policy and the prospective attribution bound. No execution-plan rendering
-is available before implementation; do not present a schematic as compiler
-output. Implement only after this draft is reviewed.
+Four amendments were made at review, none of them to the method.
+
+The first two answer PR #57's review comments. A `CosineEMADecay` faithful to
+`schedules.target_ema` reaches exactly 1 at its horizon, and `TeacherSpec`
+rejects any decay outside `[0, 1)` before the stage runs, so the draft's
+schedule would have compiled into nothing. The endpoint is real — a frozen
+target — but it is outside the applied domain, because the executor updates a
+teacher at steps `0 .. steps - 1`. `nominal` therefore reports the decay at the
+last applied step and §4 binds that number, which keeps both range checks
+meaningful without clamping the curve the draft explicitly forbade clamping.
+Separately, §4's `lr_schedule` line named `WarmupCosine` without its `final`
+multiplier, which has no default. The pinned `learning_schedule` runs
+`_cosine_decay` over `total_steps - warmup_steps` all the way down, so the
+value is 0, and §4 now says so.
+
+The third is the one the draft could not have: §4 was written as prose and is
+now the two-level form the other cards use, so that `FIDELITY.md` §1.2's
+cross-check compares every answered leaf by value against `plan.hyperparameters`
+rather than merely by presence.
+
+The fourth corrects two keys the draft answered that nothing binds.
+`labelled_unlabelled_ratio` is `n/a` under `UniformSampler`, which enforces no
+quota, and `treatment_encoding` is `n/a` because `XTYBatch` supplies integer
+classes; both had prose answers that would have claimed a plan entry that does
+not exist.
+
+The Tier 2 claim is untouched by any of this. §6.1 is empty, §6.4's bounds
+remain prospective and unmeasured, and neither `reproduced` nor `deviating` is
+available until a Tier 2 result exists.

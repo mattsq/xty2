@@ -58,6 +58,8 @@ from xty2.objectives.curriculum import (
 from xty2.objectives.feature_consistency import (
     CosineFeatureConsistency,
     FeatureStopGrad,
+    NormalizedSquaredFeatureConsistency,
+    squared_norm_floor_normalize,
 )
 from xty2.objectives.marginal import (
     GRAD_PATHS,
@@ -160,6 +162,7 @@ __all__ = [
     "MetaPseudoLabelScore",
     "MissingTreatmentMarginalNLL",
     "MixedTargetTreatmentNLL",
+    "NormalizedSquaredFeatureConsistency",
     "ObservedOutcomeMSE",
     "ObservedOutcomeNLL",
     "ObservedTreatmentNLL",
@@ -191,4 +194,5 @@ __all__ = [
     "UDAStopGrad",
     "VariationalTreatmentELBO",
     "cross_correlation",
+    "squared_norm_floor_normalize",
 ]

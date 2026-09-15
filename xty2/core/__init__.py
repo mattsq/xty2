@@ -103,12 +103,14 @@ from xty2.core.loss import (
 )
 from xty2.core.mixing import MixingPlan, MixMember, MixSpec
 from xty2.core.optimisation import (
+    LARS,
     OPTIMISER_NAMES,
     ClipMode,
     GradientClipping,
     OptimiserName,
     OptimiserSpec,
     WeightDecay,
+    adapts_under_lars,
     gradient_norm,
 )
 from xty2.core.ports import (
@@ -151,6 +153,7 @@ from xty2.core.schedules import (
     Constant,
     CosineAnneal,
     CosineDecay,
+    CosineEMADecay,
     ExponentialDecay,
     Ramp,
     Schedule,
@@ -175,6 +178,7 @@ __all__ = [
     "CARD_KEY_VOCABULARY",
     "DEFAULT",
     "IDENTITY_VIEW",
+    "LARS",
     "META_GRADIENT_ORDER",
     "OPTIMISER_NAMES",
     "PORT_SPECS",
@@ -201,6 +205,7 @@ __all__ = [
     "ContractError",
     "CosineAnneal",
     "CosineDecay",
+    "CosineEMADecay",
     "DataSpec",
     "Dataset",
     "ExecutionPlan",
@@ -277,6 +282,7 @@ __all__ = [
     "WithinStepState",
     "XTYBatch",
     "Xty2Error",
+    "adapts_under_lars",
     "apply_reduction",
     "as_schedule",
     "assert_unchanged_by",
