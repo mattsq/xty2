@@ -1,8 +1,4 @@
-"""BYOL card §6.3: paired wiring fits and pre-transfer diagnostics.
-
-This is not a registered Tier 2 benchmark. Smoke budgets are explicit and do
-not change the recipe's published local protocol.
-"""
+"""BYOL card §6: paired execution and pre-transfer diagnostics for both tiers."""
 
 from __future__ import annotations
 
@@ -16,6 +12,7 @@ import torch
 from torch import Tensor, nn
 
 from xty2.core import (
+    CategoricalTreatment,
     CompiledRun,
     CompiledStage,
     ComponentGraph,
@@ -81,31 +78,41 @@ def training_batch(batch: XTYBatch) -> XTYBatch:
     return batch.replace(t=torch.where(batch.t_observed, batch.t, 0))
 
 
-def arm_recipe(recipe: Recipe, arm: str) -> Recipe:
-    """Construct common modules before ablation; rebase all smoke schedules."""
+def arm_recipe(
+    recipe: Recipe,
+    arm: str,
+    *,
+    pretrain_steps: int = PRETRAIN_STEPS,
+    fit_steps: int = FIT_STEPS,
+    warmup_steps: int = 1,
+    ramp_steps: int = 200,
+) -> Recipe:
+    """Construct common modules before ablation; bind each tier's schedules."""
     if arm not in ARMS:
         raise ValueError(f"unknown BYOL arm {arm!r}")
     pretrain, fit = recipe.program
     assert pretrain.teacher is not None
     pretrain = replace(
         pretrain,
-        steps=PRETRAIN_STEPS,
+        steps=pretrain_steps,
         teacher=replace(
             pretrain.teacher,
             decay=Constant(0.0)
             if arm == "zero_decay"
-            else CosineEMADecay(base=BASE_TARGET_EMA, steps=PRETRAIN_STEPS),
+            else CosineEMADecay(base=BASE_TARGET_EMA, steps=pretrain_steps),
         ),
         optimiser=replace(
             pretrain.optimiser,
-            lr_schedule=WarmupCosine(start=0.0, final=0.0, warmup=1, steps=100),
+            lr_schedule=WarmupCosine(
+                start=0.0, final=0.0, warmup=warmup_steps, steps=pretrain_steps
+            ),
         ),
     )
     fit = replace(
         fit,
-        steps=FIT_STEPS,
+        steps=fit_steps,
         objectives=tuple(
-            replace(term, weight=Ramp(0.0, 0.5, steps=200))
+            replace(term, weight=Ramp(0.0, 0.5, steps=ramp_steps))
             if term.objective.name == "missing_treatment_marginal_nll"
             else term
             for term in fit.objectives
@@ -163,6 +170,7 @@ def diagnostics(
 ) -> dict[str, float]:
     """Clean encoder rank over all rows; directional residuals use fixed views."""
     before = snapshot(graph)
+    target_before = snapshot(teacher.graph) if teacher is not None else None
     modes = [(module, module.training) for module in graph.modules()]
     if teacher is not None:
         modes.extend((module, module.training) for module in teacher.graph.modules())
@@ -222,26 +230,44 @@ def diagnostics(
             metrics["predictor_residual"] = math.fsum(residuals) / len(residuals)
             metrics["prediction_norm"] = math.fsum(norms) / len(norms)
         require_equal(before, snapshot(graph))
+        if teacher is not None and target_before is not None:
+            require_equal(target_before, snapshot(teacher.graph))
         return metrics
     finally:
         for module, mode in modes:
             module.training = mode
 
 
-def study(base: int) -> dict[str, float]:
-    """All four card-declared smoke arms, with actual execution checks."""
+def study(
+    base: int,
+    *,
+    train_rows: int = 512,
+    test_rows: int = 512,
+    pretrain_steps: int = PRETRAIN_STEPS,
+    fit_steps: int = FIT_STEPS,
+    warmup_steps: int = 1,
+    ramp_steps: int = 200,
+    eval_batches: int = 4,
+) -> dict[str, float]:
+    """All four card-declared arms, with actual execution checks."""
+    if eval_batches * BATCH_SIZE != test_rows:
+        raise ValueError("diagnostic batches must cover the held-out population")
     configure_worker()
     schema = continuous_schema(6)
-    train = two_cluster_population(512, seed=base + 1, row_offset=0, low=SEPARATED)
-    test = two_cluster_population(512, seed=base + 2, row_offset=10000, low=SEPARATED)
+    train = two_cluster_population(
+        train_rows, seed=base + 1, row_offset=0, low=SEPARATED
+    )
+    test = two_cluster_population(
+        test_rows, seed=base + 2, row_offset=10000, low=SEPARATED
+    )
     data = training_dataset(schema, train.batch)
     population = build_population(data, DATA_POLICY, seed=base + 10000 + STREAM_STRIDE)
     if int(population.rows.t_observed.sum()) != 40:
-        raise RuntimeError("BYOL smoke requires exactly 40 observed treatments")
+        raise RuntimeError("BYOL study requires exactly 40 observed treatments")
     heldout = on_the_training_scale(test.batch, population)
     views = []
     max_error = 0.0
-    for i in range(4):
+    for i in range(eval_batches):
         batch = take(heldout, torch.arange(i * BATCH_SIZE, (i + 1) * BATCH_SIZE))
         for branch in range(2):
             view = OracleSymmetry().apply(
@@ -287,6 +313,10 @@ def study(base: int) -> dict[str, float]:
                 second_transforms=(OracleSymmetry(),),
             ),
             arm,
+            pretrain_steps=pretrain_steps,
+            fit_steps=fit_steps,
+            warmup_steps=warmup_steps,
+            ramp_steps=ramp_steps,
         )
         run = compile(recipe)
         start = snapshot(run.graph)
@@ -317,7 +347,8 @@ def study(base: int) -> dict[str, float]:
             tau = (
                 0.0
                 if arm == "zero_decay"
-                else 1 - (1 - 0.996) * (1 + math.cos(math.pi * step / 100)) / 2
+                else 1
+                - (1 - 0.996) * (1 + math.cos(math.pi * step / pretrain_steps)) / 2
             )
             original_update(teacher, student, step)
             online = dict(student.named_parameters())
@@ -384,7 +415,11 @@ def study(base: int) -> dict[str, float]:
             # Independently check the executed LARS rule at an early, middle,
             # and final update, including momentum accumulated at zero LR.
             lars_before = []
-            if compiled.name == "pretrain" and step in (1, 50, 99):
+            if compiled.name == "pretrain" and step in (
+                warmup_steps,
+                pretrain_steps // 2,
+                pretrain_steps - 1,
+            ):
                 for group in optimiser.param_groups:
                     for parameter in group["params"]:
                         previous = optimiser.state[parameter].get("momentum_buffer")
@@ -486,12 +521,12 @@ def study(base: int) -> dict[str, float]:
         if arm == "no_pretrain":
             require_equal(start, transitions["joint_fit"])
         else:
-            if not moved or updates[0] != PRETRAIN_STEPS:
+            if not moved or updates[0] != pretrain_steps:
                 raise RuntimeError("BYOL target did not move through the full stage")
             if paired_views is not None and paired_views != view_trace:
                 raise RuntimeError("BYOL actual view draws differ across arms")
             paired_views = view_trace
-            if int(view_trace["calls"]) != 2 * PRETRAIN_STEPS:
+            if int(view_trace["calls"]) != 2 * pretrain_steps:
                 raise RuntimeError("BYOL requires exactly two cached views per step")
             checkpoint = result.stage("pretrain").checkpoint
             saved = {
@@ -524,15 +559,49 @@ def study(base: int) -> dict[str, float]:
             )
         run.graph.eval()
         with torch.no_grad():
-            outcome = run.graph.evaluate(
+            values = run.graph.evaluate(
                 heldout,
                 schema=schema,
                 only=("mlp_encoder", "tarnet_head", "categorical_propensity"),
-            )[Port.Y_GIVEN_XT]
+            )
+            outcome = values[Port.Y_GIVEN_XT]
             assert isinstance(outcome, GaussianOutcome)
             metrics[f"{arm}_outcome_nll"] = float(
                 -outcome.log_prob(heldout.y, heldout.t).mean()
             )
+            propensity = values[Port.T_GIVEN_X]
+            assert isinstance(propensity, CategoricalTreatment)
+            metrics[f"{arm}_treatment_nll"] = float(
+                -propensity.log_prob(heldout.t).mean()
+            )
+            effect = (
+                outcome.mean(torch.ones(test_rows, dtype=torch.long))
+                - outcome.mean(torch.zeros(test_rows, dtype=torch.long))
+            ).reshape(-1) * population.statistics["y_scale"]
+            metrics[f"{arm}_effect_rmse"] = float(
+                (effect - test.true_effect.reshape(-1)).square().mean().sqrt()
+            )
+    metrics.update(paired_metrics(metrics))
     if not all(math.isfinite(v) for v in metrics.values()):
-        raise RuntimeError("non-finite BYOL smoke diagnostics")
+        raise RuntimeError("non-finite BYOL diagnostics")
     return metrics
+
+
+def paired_metrics(metrics: Mapping[str, float]) -> dict[str, float]:
+    """Form contrasts within seed before the runner computes sampling error."""
+    return {
+        "ema_outcome_nll_gain": (
+            metrics["zero_decay_outcome_nll"] - metrics["full_outcome_nll"]
+        ),
+        "pretraining_outcome_nll_cost": (
+            metrics["full_outcome_nll"] - metrics["no_pretrain_outcome_nll"]
+        ),
+        "encoder_effective_rank": metrics["full_encoder_effective_rank"],
+        "predictor_outcome_nll_gain": (
+            metrics["no_predictor_outcome_nll"] - metrics["full_outcome_nll"]
+        ),
+        "predictor_encoder_rank_gain": (
+            metrics["full_encoder_effective_rank"]
+            - metrics["no_predictor_encoder_effective_rank"]
+        ),
+    }

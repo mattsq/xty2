@@ -1,6 +1,6 @@
 # Recipe spec card: byol
 
-**Status:** `implemented`
+**Status:** `deviating`
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
 > §6 for benchmark and reporting work.
@@ -8,9 +8,12 @@
 Selected from [BACKLOG.md §5.1](../BACKLOG.md). `xty2.recipes.byol` implements
 §3–§4 and `tests/invariants/test_byol.py` is its core Tier 0 suite.
 `tests/smoke/test_byol.py` implements the §6.3 Tier 1 study, with arm and
-diagnostic invariants in `tests/invariants/test_byol_study.py`. No Tier 2
-benchmark or reproduction result exists: §6.4 bounds remain prospective and
-the §6.1 ledger is empty.
+diagnostic invariants in `tests/invariants/test_byol_study.py`. Tier 2 is
+registered in `xty2.evaluation.benchmarks.byol`, with its nightly adapter and
+protocol/result invariants. The complete ten-seed, forty-fit run is
+`deviating`: the paired EMA superiority gate fails, while the pretraining-cost
+and encoder-rank gates pass. See §6.1 and the
+[review and complete evidence](../experiments/2026-09-16-byol-tier2.md).
 
 ## 1. Provenance
 
@@ -285,10 +288,15 @@ generic SSL engine, checkpoint system or new card-key category. If further work
 discovers a missing mechanic, amend and review this card first; if a mechanic is
 omitted, add typed debt and reconcile `DESIGN.md` §11.4.
 
+### Tier 2 outcome
+
+On 2026-09-16, commit `49df876e8ad9` produced a `deviating` result: Project-local BYOL mechanism study, not ImageNet reproduction. All four arms share actual common initial tensors, fitted scales, masks and batch streams; pretraining arms share actual view draws. EMA changes only target parameter decay; target BN owns its state. Contrasts are formed within each of the ten predeclared seeds. Rank is measured on all 2048 clean held-out rows before transfer, without BN recalibration. OracleSymmetry uses privileged DGP knowledge; no general tabular or causal-identification claim follows. Within noise of the target: ema_outcome_nll_gain was 0.00386575 +/- 0.00407 against mean - stderr > 0, inside its target by 0.00387 — less than its own standard error, so the run does not distinguish it from a miss.
+
 ## 6. Reproduction target
 
-This is a project-local mechanism study. All bounds below are unmeasured and
-prospective. They are not paper numbers or values copied from SimSiam results.
+This is a project-local mechanism study. All bounds below were predeclared
+before the first Tier 2 run and are unchanged. They are not paper numbers or
+values copied from SimSiam results.
 
 ```yaml
 reproduction:
@@ -307,7 +315,7 @@ reproduction:
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
-| | | | | |
+| 2026-09-16 | `49df876e8ad9` | ema_outcome_nll_gain<br>pretraining_outcome_nll_cost<br>encoder_effective_rank | 0.00386575 +/- 0.00407<br>-0.00357281 +/- 0.00355 nat/row<br>3.24223 +/- 0.115 | no |
 
 ### 6.2 Fixed DGP and paired execution
 
@@ -491,7 +499,7 @@ requires a prospective amendment with the failed protocol retained.
 | Numerical normalisation at zero | Pinned helper's squared-norm floor 1e-12 and literal squared distance | Source code resolves equation's undefined zero case |
 | PyTorch equivalent of unpinned Haiku Linear defaults | Explicit torch Linear defaults; no numerical equivalence claim | Backend judgement §5.6, not an assumed source initialiser |
 | Appropriate tabular widths, view policy and short-horizon EMA base | Fixed §4 settings and §6 fixture; no post-hoc tuning | Prospective local choices; departures §5.1–§5.4 |
-| Whether moving targets help this low-dimensional fixture | Unresolved; measured by the declared zero-decay pair | This is the experiment, not a source fact |
+| Whether moving targets help this low-dimensional fixture | The ten-seed run does not clear the declared one-SE superiority gate | Mean gain 0.003866 ± 0.004075 SE; this does not establish either superiority or equivalence |
 
 ## 8. Review
 
@@ -502,6 +510,7 @@ requires a prospective amendment with the failed protocol retained.
 | Plan diffed against §3.2 and §4 | `tests/invariants/test_byol.py`, over the actual compiled plan and every answered §4 entry | 2026-09-15 |
 | Recipe implemented, Tier 0 passing (status → `implemented`) | Claude Code | 2026-09-15 |
 | Source audit and Tier 1 implementation; all declared smoke seeds pass | Codex; LARS finite-value validation corrected, paired execution and diagnostics added | 2026-09-16 |
+| Source re-audit and complete Tier 2 execution (status → `deviating`) | Codex; all forty fits complete; two of three unchanged gates pass; strict upper-bound reporting and saved-result verification added | 2026-09-16 |
 
 Four amendments were made at review, none of them to the method.
 
@@ -529,6 +538,13 @@ quota, and `treatment_encoding` is `n/a` because `XTYBatch` supplies integer
 classes; both had prose answers that would have claimed a plan entry that does
 not exist.
 
-The Tier 2 claim is untouched by any of this. §6.1 is empty, §6.4's bounds
-remain prospective and unmeasured, and neither `reproduced` nor `deviating` is
-available until a Tier 2 result exists.
+The 2026-09-16 Tier 2 implementation leaves the claim and all §6.4 thresholds
+unchanged. Mean EMA gain is 0.0038657546 nat/row with SE 0.0040746716; its lower
+one-SE bound is -0.0002089170, so superiority is not demonstrated. Six of ten
+paired gains are positive. Pretraining cost is -0.0035728097 ± 0.0035531770
+nat/row and full-arm encoder rank is 3.2422294 ± 0.1147409: both guards pass.
+The source audit found no additional method error; it checked the loss,
+topology, LARS, schedules, teacher/BN state and local deviations. Do not turn
+this uncertain local gain into a claim that EMA is useless or that BYOL fails
+on its original task. All arm and per-seed diagnostics, environment details
+and source provenance are retained in the linked experiment report.
