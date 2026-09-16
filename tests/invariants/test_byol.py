@@ -892,14 +892,17 @@ def test_every_answered_card_value_matches_the_plan(
 
 
 def test_the_card_and_the_recipe_index_agree() -> None:
+    from xty2.evaluation.reporting import card_status
+
     card = CARD.read_text(encoding="utf-8")
-    assert "**Status:** `implemented`" in card
+    assert card_status(card) in ("reproduced", "deviating")
     index = (CARD.parents[1] / "RECIPES.md").read_text(encoding="utf-8")
     row = next(line for line in index.splitlines() if "byol.md" in line)
     assert "`byol`" in row
-    # No Tier 2 entry is claimed before a recorded result.
+    # Tier 2 now exists; its independent rescore is in test_byol_benchmark.py.
     ledger = card.split("### 6.1 Result ledger", 1)[1].split("###", 1)[0]
-    assert ledger.strip().endswith("| | | | | |")
+    assert "| | | | | |" not in ledger
+    assert "ema_outcome_nll_gain" in ledger
 
 
 # ---------------------------------------------------------------------------
