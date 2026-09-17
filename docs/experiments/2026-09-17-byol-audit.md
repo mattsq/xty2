@@ -168,4 +168,93 @@ Environment: Python 3.11.15, Torch 2.14.0+cu130, NumPy 2.4.6, CPU, four workers.
 
 ## 6. Results
 
-Pending; this section is completed by the run above before the result lands.
+**Status: `deviating`.** All fifty fits completed with finite diagnostics. Both
+attribution gates fail, and one fails with its sign reversed.
+
+| Gate | Mean ± SE | One-SE bound | Decision |
+|---|---|---|---|
+| `ema_alignment_gap` | -0.001139 ± 0.000142 | -0.001281 | fail |
+| `ema_rank_gap` | -0.883912 ± 0.080480 | -0.964391 | fail |
+| `pretraining_outcome_nll_cost` | -0.050577 ± 0.004392 | -0.046185 | pass |
+| `encoder_effective_rank` | 2.220651 ± 0.079634 | 2.141017 | pass |
+
+Per arm, read from the terminal pretraining checkpoint except the last column:
+
+| Arm | View alignment `A` | Encoder rank `R` | Target-online lag | Downstream NLL |
+|---|---|---|---|---|
+| full (base 0.68722) | 0.997849 | 2.2207 | 0.01077 | 1.101720 |
+| source-ema (base 0.996) | 0.987225 | 3.1147 | 0.86350 | 1.104234 |
+| zero-decay | 0.996710 | 3.1046 | 0.00000 | 1.104537 |
+| no-predictor | 0.999948 | 2.3187 | 0.04039 | 1.117911 |
+| no-pretraining | n/a | 22.2923 | n/a | 1.152296 |
+
+The run changed three things at once, and the `source_ema` control arm is what
+separates them. Three findings.
+
+### 6.1 The frozen transfer worked
+
+`pretraining_outcome_nll_cost` is -0.050577 ± 0.004392: pretraining *helps* the
+endpoint by 0.051 nat, against 0.0036 under the fine-tuned protocol — a factor of
+fourteen, where §2's six-seed probe predicted +0.037. The endpoint has real
+dynamic range for the first time on this card.
+
+`ema_outcome_nll_gain`, now informational, is +0.002817 ± 0.001557, a lower
+one-standard-error bound of +0.001260. The statistic this card withdrew as a gate
+would have passed under the protocol that replaced it. That is recorded because
+it is awkward rather than despite it, and it does not restore the gate: the
+withdrawal was argued from the instrument's dynamic range and its 49.3% power,
+not from its verdict, and re-adopting a statistic on the one run where it happens
+to pass is exactly what §6's disclosure rule exists to prevent.
+
+### 6.2 One instrument replicated, one did not
+
+Measured at the inherited base — which is what the 2026-09-16 run measured, and
+what the `source_ema` arm reproduces on the new stream:
+
+| Contrast at base 0.996 | 620000 stream | 630000 stream |
+|---|---|---|
+| alignment gap `A_zero_decay - A_source_ema` | +0.009726 ± 0.001119, 10/10, t=8.69 | **+0.009485 ± 0.000706, 10/10, t=13.44** |
+| rank gap `R_source_ema - R_zero_decay` | +0.304 ± 0.125, 8/10, t=2.44 | **+0.010102 ± 0.073859, 5/10, t=0.14** |
+
+The alignment gap returns the same number on a stream chosen after it was
+selected, which is as much as a prospective re-run can give it. The rank gap does
+not: +0.304 was a property of the old seed stream, not of the mechanism.
+Withdrawing row 7 would not rescue `ema_rank_gap`, because at the inherited base
+it still misses its bound.
+
+### 6.3 Deviation 7 is falsified by its own control
+
+| Paired contrast, full (0.68722) vs source-ema (0.996) | mean ± SE | seeds | t |
+|---|---|---|---|
+| `A_full - A_source_ema` (negative would favour the re-derivation) | +0.010624 ± 0.000748 | 10/10 | 14.20 |
+| `R_source_ema - R_full` (negative would favour it) | +0.894013 ± 0.035187 | 10/10 | 25.41 |
+| `N_source_ema - N_full` (downstream, informational) | +0.002515 ± 0.003254 | 6/10 | 0.77 |
+
+At the re-derived base the target has a 3.2-step time constant and ends 0.01077
+behind the online network — within a hair of the teacher-free rule — and on both
+attribution instruments the full arm is *worse* than zero-decay, which is why
+`ema_alignment_gap` comes back negative. Preserving the EMA time constant as a
+fraction of the horizon was the wrong invariant: the run says the 0.86 lag at
+base 0.996 is doing the work the mechanism needs, and §5 row 7's own reasoning —
+that a target this far behind is "a frozen early snapshot, not a slowly moving
+average" — is what the measurement contradicts.
+
+The `source_ema` arm was declared in the amendment precisely so this would be
+measurable rather than assumed. It did its job.
+
+### 6.4 What is not done here
+
+Nothing is rescored, no threshold moved, and the base is left where the
+amendment put it. Two questions go to the next prospective amendment, and both
+need a stream disjoint from 630000-630900:
+
+1. whether to withdraw §5 row 7 and return the base to 0.996, for which the
+   evidence is §6.3 above;
+2. what replaces `ema_rank_gap`, now that it is known not to replicate. The
+   alignment gap is the surviving attribution instrument, and one instrument is
+   a thinner claim than the amendment assumed.
+
+The [machine-readable result](results/byol-tier2-2026-09-17/byol.json) retains
+all replicate values and the BN, norm, spread, residual, gradient and
+target-lag diagnostics, beside its
+[environment manifest](results/byol-tier2-2026-09-17/environment.json).

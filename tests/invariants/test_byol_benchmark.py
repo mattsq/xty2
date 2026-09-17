@@ -25,7 +25,11 @@ from xty2.recipes import byol
 
 ROOT = Path(__file__).parents[2]
 CARD = ROOT / "docs/recipes/byol.md"
-RESULT = ROOT / "docs/experiments/results/byol-tier2/byol.json"
+# The card's current §6.1 row. The 2026-09-16 directory beside this one is the
+# superseded protocol's evidence and is retained, not replayed: its arms and
+# contrasts are the ones §5 rows 4 and 7 and §6.4 have since amended.
+RESULT = ROOT / "docs/experiments/results/byol-tier2-2026-09-17/byol.json"
+SUPERSEDED = ROOT / "docs/experiments/results/byol-tier2/byol.json"
 
 
 def test_tier2_seed_stream_and_budgets() -> None:
@@ -248,6 +252,18 @@ def test_every_reproduction_scalar_is_bound(key: str) -> None:
     changed = replace(spec, values={**spec.values, key: "changed"})
     with pytest.raises(ValueError, match="reviewed value"):
         benchmark.run(changed, "unused", "2026-09-16", 1, ROOT / "runs")
+
+
+def test_the_superseded_run_is_retained_intact() -> None:
+    """§6.1 keeps the 2026-09-16 row, so its evidence has to still be there."""
+    saved: dict[str, Any] = json.loads(SUPERSEDED.read_text())
+    assert saved["replicates"] == 10 and saved["status"] == "deviating"
+    metrics = {m["name"]: m for m in saved["metrics"]}
+    assert metrics["ema_outcome_nll_gain"]["relation"] == ">"
+    assert metrics["ema_outcome_nll_gain"]["mean"] == pytest.approx(0.0038657546)
+    assert not metrics["ema_outcome_nll_gain"]["passed"]
+    card = CARD.read_text(encoding="utf-8")
+    assert "49df876e8ad9" in card
 
 
 def test_recorded_evidence_recomputes_from_all_ten_paired_replicates() -> None:
