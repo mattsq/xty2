@@ -831,11 +831,12 @@ def test_pretraining_reads_no_outcome_and_transfers_only_the_encoder() -> None:
             assert port in (Port.X_PRED, Port.X_PROJ)
     assert joint_fit.initialise_from == "pretrain"
     assert joint_fit.teacher is None
-    assert joint_fit.trainable == (
-        "mlp_encoder",
-        "tarnet_head",
-        "categorical_propensity",
-    )
+    # Deviation 4, as amended: the encoder transfers and is *not* declared
+    # trainable. Its absence is asserted separately from the tuple compare,
+    # which a rewrite alongside the recipe would satisfy without noticing.
+    assert joint_fit.trainable == ("tarnet_head", "categorical_propensity")
+    assert "mlp_encoder" not in joint_fit.trainable
+    assert "mlp_encoder" in {c for f in run.stages[-1].passes for c in f.components}
     # A fresh optimiser, not the pretraining one: no LARS state travels.
     assert joint_fit.optimiser.name == "adam"
     assert joint_fit.optimiser is not pretrain.optimiser
@@ -846,6 +847,61 @@ def test_pretraining_reads_no_outcome_and_transfers_only_the_encoder() -> None:
     }
     assert "byol_projector" not in downstream
     assert "byol_predictor" not in downstream
+
+
+def test_the_target_base_is_the_preset_row_the_local_horizon_reaches() -> None:
+    """Card §5 row 7, written from `configs/byol.py` rather than from the recipe.
+
+    Two assertions, not one. The literal is the oracle: it shares no call path
+    with `recipes/byol.py` and fails the moment the base drifts. The expression
+    beside it restates the derivation so the literal is checkable by eye rather
+    than being a number to keep in step by hand.
+    """
+    # `_EMA_PRESETS`, and `max_steps = num_epochs * train_images_per_epoch //
+    # batch_size` with the pinned ImageNet count and the 4096 preset batch.
+    presets = {40: 0.97, 100: 0.99, 300: 0.99, 1000: 0.996}
+    steps = {epochs: epochs * 1281167 // 4096 for epochs in presets}
+    assert steps == {40: 12511, 100: 31278, 300: 93835, 1000: 312784}
+
+    assert pytest.approx(0.68722) == BASE_TARGET_EMA
+
+    # 1000 steps of batch 128 over the §6 fixture's 1024 training rows.
+    assert PRETRAIN_STEPS * BATCH_SIZE / 1024 == 125.0
+    reached = max(epochs for epochs in presets if epochs <= 125)
+    assert reached == 100
+    translated = {
+        epochs: 1.0 - (1.0 - base) * steps[epochs] / PRETRAIN_STEPS
+        for epochs, base in presets.items()
+    }
+    assert pytest.approx(translated[reached]) == BASE_TARGET_EMA
+
+    # The row §5 row 3 originally inherited is unreachable at this horizon: no
+    # base in [0, 1) reproduces it, which is why row 7 reselects rather than
+    # rescales. `TeacherSpec` and `EMATeacher` both reject a decay outside that
+    # interval, so this is a fact about the curve and not about our taste.
+    assert translated[1000] < 0.0
+    with pytest.raises(Xty2Error):
+        CosineEMADecay(base=translated[1000], steps=PRETRAIN_STEPS)
+
+
+def test_the_inherited_base_is_observably_a_different_regime() -> None:
+    """§5 row 7's measured claim: integrated tracking, `sum(1 - tau)`.
+
+    The mutant this kills is the card's original choice — inherit 0.996 — and
+    the number it fails on is the one row 7 quotes.
+    """
+
+    def tracking(base: float) -> float:
+        curve = CosineEMADecay(base=base, steps=PRETRAIN_STEPS)
+        return math.fsum(1.0 - curve.value(k) for k in range(PRETRAIN_STEPS))
+
+    # The 100-epoch row this card now takes, at its own horizon.
+    assert tracking(BASE_TARGET_EMA) == pytest.approx(156.5, abs=0.1)
+    assert math.fsum(
+        (1.0 - 0.99) * 0.5 * (1.0 + math.cos(math.pi * k / 31278)) for k in range(31278)
+    ) == pytest.approx(156.4, abs=0.1)
+    # The inherited row at this horizon is two, not one hundred and fifty-six.
+    assert tracking(0.996) == pytest.approx(2.0, abs=0.01)
 
 
 # ---------------------------------------------------------------------------

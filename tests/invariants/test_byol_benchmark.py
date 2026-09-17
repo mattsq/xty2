@@ -25,7 +25,11 @@ from xty2.recipes import byol
 
 ROOT = Path(__file__).parents[2]
 CARD = ROOT / "docs/recipes/byol.md"
-RESULT = ROOT / "docs/experiments/results/byol-tier2/byol.json"
+# The card's current §6.1 row. The 2026-09-16 directory beside this one is the
+# superseded protocol's evidence and is retained, not replayed: its arms and
+# contrasts are the ones §5 rows 4 and 7 and §6.4 have since amended.
+RESULT = ROOT / "docs/experiments/results/byol-tier2-2026-09-17/byol.json"
+SUPERSEDED = ROOT / "docs/experiments/results/byol-tier2/byol.json"
 
 
 def test_tier2_seed_stream_and_budgets() -> None:
@@ -33,7 +37,7 @@ def test_tier2_seed_stream_and_budgets() -> None:
         for index in range(10):
             benchmark.replicate(index)
             study.assert_called_with(
-                620000 + 100 * index,
+                630000 + 100 * index,
                 train_rows=1024,
                 test_rows=2048,
                 pretrain_steps=1000,
@@ -73,26 +77,42 @@ def test_full_budget_arms_preserve_recipe_schedules_and_initial_tensors() -> Non
         else:
             assert adapted.program[0].steps == 1000
             assert adapted.program[0].optimiser == recipe.program[0].optimiser
-            if arm != "zero_decay":
+            # `source_ema` carries deviation 7's control decay, so only the
+            # arms that do not touch the teacher keep the recipe's own.
+            if arm not in ("zero_decay", "source_ema"):
                 assert adapted.program[0].teacher == recipe.program[0].teacher
 
 
 def test_paired_contrast_signs_use_within_seed_values() -> None:
+    # Exact binary values throughout, so an equality compare is meaningful.
     assert paired_metrics(
         {
             "full_outcome_nll": 2.0,
+            "source_ema_outcome_nll": 2.5,
             "zero_decay_outcome_nll": 5.0,
             "no_pretrain_outcome_nll": 1.0,
             "no_predictor_outcome_nll": 7.0,
             "full_encoder_effective_rank": 4.0,
+            "source_ema_encoder_effective_rank": 6.0,
+            "zero_decay_encoder_effective_rank": 3.0,
             "no_predictor_encoder_effective_rank": 1.5,
+            "full_view_alignment": 0.5,
+            "source_ema_view_alignment": 0.625,
+            "zero_decay_view_alignment": 0.75,
+            "no_predictor_view_alignment": 0.875,
         }
     ) == {
-        "ema_outcome_nll_gain": 3.0,
+        "ema_alignment_gap": 0.25,
+        "ema_rank_gap": 1.0,
         "pretraining_outcome_nll_cost": 1.0,
         "encoder_effective_rank": 4.0,
+        "ema_outcome_nll_gain": 3.0,
+        "predictor_alignment_gap": 0.375,
         "predictor_outcome_nll_gain": 5.0,
         "predictor_encoder_rank_gain": 2.5,
+        "source_ema_alignment_gap": 0.125,
+        "source_ema_rank_gap": -2.0,
+        "source_ema_outcome_nll_gain": 0.5,
     }
 
 
@@ -143,6 +163,11 @@ def test_protocol_oracles_kill_seed_budget_and_contrast_mutants() -> None:
 
     def wrong_sign(metrics: dict[str, float]) -> dict[str, float]:
         result = original_metrics(metrics)
+        # Both the scored attribution contrast and the retained diagnostic:
+        # §6.4's two gaps point in opposite directions by construction, so a
+        # single flipped sign is exactly the mutant that would pass unnoticed.
+        result["ema_alignment_gap"] *= -1
+        result["ema_rank_gap"] *= -1
         result["ema_outcome_nll_gain"] *= -1
         return result
 
@@ -153,12 +178,14 @@ def test_protocol_oracles_kill_seed_budget_and_contrast_mutants() -> None:
         test_paired_contrast_signs_use_within_seed_values()
 
 
-def test_runner_keeps_all_three_gates_and_diagnostics() -> None:
+def test_runner_keeps_all_four_gates_and_diagnostics() -> None:
     rows = tuple(
         {
-            "ema_outcome_nll_gain": 0.02,
+            "ema_alignment_gap": 0.008,
+            "ema_rank_gap": 0.3,
             "pretraining_outcome_nll_cost": 0.01,
             "encoder_effective_rank": 2.0,
+            "ema_outcome_nll_gain": 0.02,
             "no_predictor_effect_rmse": 99.0,
         }
         for _ in range(10)
@@ -173,14 +200,21 @@ def test_runner_keeps_all_three_gates_and_diagnostics() -> None:
         )
         run.assert_called_once_with(benchmark.replicate, 10, workers=3)
     assert result.status == "reproduced"
+    # §6.4's four scored rows, in the order the card's table declares them,
+    # then every remaining column as information. `ema_outcome_nll_gain` is in
+    # the second group now: the 2026-09-17 amendment withdrew it as a gate and
+    # a run that silently rescored it would pass this list otherwise.
     assert [(m.name, m.relation, m.target) for m in result.metrics] == [
-        ("ema_outcome_nll_gain", ">", 0.0),
+        ("ema_alignment_gap", ">", 0.0),
+        ("ema_rank_gap", ">", 0.0),
         ("pretraining_outcome_nll_cost", "<", 0.05),
         ("encoder_effective_rank", ">", 1.1),
+        ("ema_outcome_nll_gain", "info", None),
         ("no_predictor_effect_rmse", "info", None),
     ]
     for key, bad in (
-        ("ema_outcome_nll_gain", 0.0),
+        ("ema_alignment_gap", 0.0),
+        ("ema_rank_gap", 0.0),
         ("pretraining_outcome_nll_cost", 0.05),
         ("encoder_effective_rank", 1.1),
     ):
@@ -220,6 +254,18 @@ def test_every_reproduction_scalar_is_bound(key: str) -> None:
         benchmark.run(changed, "unused", "2026-09-16", 1, ROOT / "runs")
 
 
+def test_the_superseded_run_is_retained_intact() -> None:
+    """§6.1 keeps the 2026-09-16 row, so its evidence has to still be there."""
+    saved: dict[str, Any] = json.loads(SUPERSEDED.read_text())
+    assert saved["replicates"] == 10 and saved["status"] == "deviating"
+    metrics = {m["name"]: m for m in saved["metrics"]}
+    assert metrics["ema_outcome_nll_gain"]["relation"] == ">"
+    assert metrics["ema_outcome_nll_gain"]["mean"] == pytest.approx(0.0038657546)
+    assert not metrics["ema_outcome_nll_gain"]["passed"]
+    card = CARD.read_text(encoding="utf-8")
+    assert "49df876e8ad9" in card
+
+
 def test_recorded_evidence_recomputes_from_all_ten_paired_replicates() -> None:
     saved: dict[str, Any] = json.loads(RESULT.read_text())
     manifest = json.loads((RESULT.parent / "environment.json").read_text())
@@ -245,6 +291,14 @@ def test_recorded_evidence_recomputes_from_all_ten_paired_replicates() -> None:
     )
     for row in rows:
         # Independent signs, using the saved arm observations directly.
+        assert row["ema_alignment_gap"] == pytest.approx(
+            row["zero_decay_view_alignment"] - row["full_view_alignment"], abs=1e-12
+        )
+        assert row["ema_rank_gap"] == pytest.approx(
+            row["full_encoder_effective_rank"]
+            - row["zero_decay_encoder_effective_rank"],
+            abs=1e-12,
+        )
         assert row["ema_outcome_nll_gain"] == pytest.approx(
             row["zero_decay_outcome_nll"] - row["full_outcome_nll"], abs=1e-12
         )
@@ -252,6 +306,10 @@ def test_recorded_evidence_recomputes_from_all_ten_paired_replicates() -> None:
             row["full_outcome_nll"] - row["no_pretrain_outcome_nll"], abs=1e-12
         )
         assert row["encoder_effective_rank"] == row["full_encoder_effective_rank"]
+        # Deviation 7 executed: the control's target moved on a different
+        # curve, and the zero-decay target never left the online network.
+        assert row["source_ema_target_online_lag"] != row["full_target_online_lag"]
+        assert row["zero_decay_target_online_lag"] == 0.0
         for arm in ARMS:
             for diagnostic in ("treatment_nll", "effect_rmse", "encoder_spread"):
                 assert math.isfinite(row[f"{arm}_{diagnostic}"])

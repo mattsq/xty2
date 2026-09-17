@@ -7,9 +7,12 @@ from xty2.evaluation.byol_study import study
 from xty2.evaluation.reporting import BenchmarkResult, MetricResult, ReproductionSpec
 
 
+# Card §6.2: a stream disjoint from 620000-620900, which the 2026-09-16 run and
+# the 2026-09-17 audit both saw. §6.4's statistics were chosen on that audit;
+# their thresholds are each statistic's own zero and were not read off it.
 def replicate(index: int) -> dict[str, float]:
     return study(
-        620000 + 100 * index,
+        630000 + 100 * index,
         train_rows=1024,
         test_rows=2048,
         pretrain_steps=1000,
@@ -31,19 +34,20 @@ def run(
                 "K=2; OracleSymmetry views"
             ),
             "variant": (
-                "scheduled EMA versus zero-decay target, no predictor, "
-                "and no pretraining"
+                "scheduled EMA versus zero-decay target, the inherited "
+                "1000-epoch EMA base, no predictor, and no pretraining"
             ),
             "split": (
-                "1024 train, 40 observed treatments; 2048 fully observed held-out rows"
+                "1024 train, 40 observed treatments; 2048 fully observed "
+                "held-out rows; frozen-encoder transfer"
             ),
             "metric": (
-                "ema_outcome_nll_gain; pretraining_outcome_nll_cost; "
-                "encoder_effective_rank"
+                "ema_alignment_gap; ema_rank_gap; "
+                "pretraining_outcome_nll_cost; encoder_effective_rank"
             ),
             "published": "none - project-local tabular adaptation",
             "published_source": "n/a",
-            "tolerance": "all three one-standard-error bounds in section 6.4",
+            "tolerance": "all four one-standard-error bounds in section 6.4",
             "seeds": "10",
             "report": "mean_and_stderr",
         }
@@ -51,8 +55,14 @@ def run(
     rows = parallel_replicates(replicate, spec.seed_count, workers=workers)
     required = (
         MetricResult(
-            "ema_outcome_nll_gain",
-            tuple(column(rows, "ema_outcome_nll_gain")),
+            "ema_alignment_gap",
+            tuple(column(rows, "ema_alignment_gap")),
+            ">",
+            0.0,
+        ),
+        MetricResult(
+            "ema_rank_gap",
+            tuple(column(rows, "ema_rank_gap")),
             ">",
             0.0,
         ),
@@ -86,10 +96,15 @@ def run(
         ),
         interpretation=(
             "Project-local BYOL mechanism study, not ImageNet reproduction. "
-            "All four arms share actual common initial tensors, fitted scales, "
+            "All five arms share actual common initial tensors, fitted scales, "
             "masks and batch streams; pretraining arms share actual view draws. "
             "EMA changes only target parameter decay; target BN owns its state. "
             "Contrasts are formed within each of the ten predeclared seeds. "
+            "Attribution is carried by alignment and rank read from the terminal "
+            "pretraining checkpoint; downstream NLL is a non-inferiority budget "
+            "and no longer a superiority gate (section 6.4, amendment 2026-09-17). "
+            "The encoder transfers frozen, so downstream numbers are a probe of "
+            "the pretrained representation rather than of a fine-tuned one. "
             "Rank is measured on all 2048 clean held-out rows before transfer, "
             "without BN recalibration. OracleSymmetry uses privileged DGP "
             "knowledge; no general tabular or causal-identification claim follows."
