@@ -1,6 +1,7 @@
 # Recipe spec card: byol
 
 **Status:** `deviating`
+<!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
 > §6 for benchmark and reporting work.
@@ -10,10 +11,18 @@ Selected from [BACKLOG.md §5.1](../BACKLOG.md). `xty2.recipes.byol` implements
 `tests/smoke/test_byol.py` implements the §6.3 Tier 1 study, with arm and
 diagnostic invariants in `tests/invariants/test_byol_study.py`. Tier 2 is
 registered in `xty2.evaluation.benchmarks.byol`, with its nightly adapter and
-protocol/result invariants. The complete ten-seed, forty-fit run is
-`deviating`: the paired EMA superiority gate fails, while the pretraining-cost
-and encoder-rank gates pass. See §6.1 and the
-[review and complete evidence](../experiments/2026-09-16-byol-tier2.md).
+protocol/result invariants.
+
+The 2026-09-16 ten-seed run is `deviating` and is retained in §6.1 with the
+protocol that produced it. The 2026-09-17 audit
+([report](../experiments/2026-09-17-byol-audit.md)) found no source-mechanism
+error and established instead that the instrument carrying the EMA claim could
+not carry it. Three amendments follow from that audit — §5 row 7 re-derives the
+target decay against this card's own horizon, §5 row 4 restores the source's
+frozen-backbone evaluation, and §6.4 moves the attribution onto pre-transfer
+statistics — and §6.2 re-runs them on a seed stream disjoint from every seed the
+audit saw. See also the
+[2026-09-16 review and evidence](../experiments/2026-09-16-byol-tier2.md).
 
 ## 1. Provenance
 
@@ -40,10 +49,14 @@ Pinned source anchors, all relative to that commit: `byol_experiment.py`
 - **Published claim:** useful image representations can be learned by predicting
   target embeddings without negative pairs. The target update and predictor
   are empirically studied, not a general non-collapse theorem.
-- **Local claim to test:** scheduled EMA improves downstream outcome NLL over
-  the zero-decay control, retains nonconstant encoder features, and costs no
-  more than 0.05 nat/row against training without pretraining. These are
-  prospective hypotheses; an EMA advantage is not assumed.
+- **Local claim to test** (amended 2026-09-17, §6.4): a slowly moving target
+  holds the representation further from the objective's degenerate optimum than
+  a target that copies the online parameters — measured before transfer, by view
+  alignment and encoder effective rank — while retaining nonconstant features and
+  costing no more than 0.05 nat/row against training without pretraining. These
+  are prospective hypotheses; an EMA advantage is not assumed. The withdrawn
+  claim, that scheduled EMA improves *downstream* outcome NLL over the zero-decay
+  control, is retained as an informational statistic and in §6.1's 2026-09-16 row.
 - **Not claimed:** ImageNet reproduction, better causal identification,
   universal prevention of collapse, a usable general tabular augmentation
   policy, or an advantage at equal total compute.
@@ -102,8 +115,12 @@ Every name below exists; the four added for this card are §5.1's.
 Use two ordinary gradient stages, `UniformSampler(128)`, `Weighted`,
 `WarmupCosine` with an explicit final multiplier of 0, `Ramp`, `Constant` and
 explicit `DataSpec` preprocessing and MCAR missingness. Pretraining trains only encoder/projector/predictor and
-reads neither outcomes nor treatment values. Fine-tuning trains only the
-online encoder and XTY heads, with a fresh Adam optimiser and no teacher.
+reads neither outcomes nor treatment values. The downstream stage transfers the
+online encoder and holds it **frozen**, declaring only the XTY heads trainable,
+with a fresh Adam optimiser and no teacher (§5 row 4, as amended: this is the
+source's linear-evaluation posture, §3.3). An encoder that moved during
+`joint_fit` would be a different protocol, so §6.2 checks the transferred
+backbone is bit-identical after the stage rather than trusting the declaration.
 Preserve all row identifiers, supervision masks, weights and split fields in
 both views. No synthetic rows, bank, pseudo-label artifact or new executor.
 
@@ -138,13 +155,15 @@ gradients:
   marginal_nll_grad_path:
     joint_fit.missing_treatment_marginal_nll: both   # deviation 4
 teacher:
-  # `schedules.target_ema` with base_ema 0.996 and max_steps 1000, evaluated at
-  # the zero-based pretraining step. The scalar bound here is the decay at the
-  # last applied step k=999; the curve itself is the `decay_schedule=` field of
-  # the plan's teacher line, `1 - (1 - 0.996) * 0.5 * (1 + cos(pi * min(k/1000, 1)))`.
+  # `schedules.target_ema` with max_steps 1000, evaluated at the zero-based
+  # pretraining step. The base is 0.68722, deviation 7's re-derivation of
+  # `_EMA_PRESETS` against this horizon, not the inherited 0.996. The scalar
+  # bound here is the decay at the last applied step k=999; the curve itself is
+  # the `decay_schedule=` field of the plan's teacher line,
+  # `1 - (1 - 0.68722) * 0.5 * (1 + cos(pi * min(k/1000, 1)))`.
   # See the indexing note below for why the k=1000 endpoint is not this number.
   ema_decay:
-    pretrain: 0.9999999901304037
+    pretrain: 0.9999992282469186
   ema_applies_to_buffers:
     pretrain: false                               # `_update_fn` returns a separately forwarded target_state
   teacher_in_train_mode:
@@ -198,7 +217,7 @@ optimisation:
   labelled_unlabelled_ratio: n/a                  # UniformSampler enforces no quota
   total_steps_or_epochs:
     pretrain: 1000                                # deviation 3: optimiser steps, not the source's 1000 epochs
-    joint_fit: 3000                               # deviation 4
+    joint_fit: 3000                               # deviation 4; heads only, frozen encoder
 architecture:
   widths_depths:  # deviation 1 for the encoder; `configs/byol.py` sizes for both heads
     mlp_encoder: [256, 256, 256, 256]
@@ -263,10 +282,11 @@ horizon against the stage's `steps` rather than trusting the two to agree.
 |---|---|---|---|---|---|
 | 1 | `judgement` | | Four-layer 256-wide unnormalised tabular backbone replaces ResNet-50. Preserve source projector/predictor widths and two-layer topology. | Local XTY experiment. | Changes representation scale and capacity; inspect norm and BN regime before interpreting failure. |
 | 2 | `judgement` | | Independent symmetric OracleSymmetry views replace asymmetric image augmentation distributions. | Analytically valid transformations on this fixture. | Privileged DGP knowledge limits transfer; cannot establish general tabular usefulness. |
-| 3 | `judgement` | | Batch 128, 1000 steps and 10 warmup steps replace batch 4096, 1000 epochs and 10 warmup epochs. Retain the selected source preset's LR scaling, decay, LARS and EMA base. | Bounded single-process experiment; warmup retains its 1% horizon fraction. | The number of EMA time constants and optimiser trajectory differ substantially; 0.996 is a tested hypothesis here, not an inherited guarantee. |
-| 4 | `judgement` | | Shared train scaling, 40 MCAR labels and 3000-step XTY fine-tuning replace image linear evaluation. Omit the reference's detached online monitoring classifier. | Measure downstream missing-treatment prediction. The source classifier never trains the backbone. | No image accuracy or causal identification claim follows. |
+| 3 | `judgement` | | Batch 128, 1000 steps and 10 warmup steps replace batch 4096, 1000 epochs and 10 warmup epochs. Retain the selected source preset's LR scaling, decay and LARS. **Amended 2026-09-17:** the EMA base is no longer among the values this row inherits; row 7 derives it. | Bounded single-process experiment; warmup retains its 1% horizon fraction. | The optimiser trajectory still differs substantially. The row's original claim that 0.996 was "a tested hypothesis here" understated the size of the change: see row 7. |
+| 4 | `judgement` | | Shared train scaling, 40 MCAR labels and a 3000-step XTY head fit replace image linear evaluation. Omit the reference's detached online monitoring classifier. **Amended 2026-09-17:** the transferred encoder is frozen for that fit, where the original row fine-tuned it. | Measure downstream missing-treatment prediction. The source classifier never trains the backbone, and paper §3.3 evaluates a frozen one; the original row departed from both without saying so. | No image accuracy or causal identification claim follows. Freezing narrows this row toward the source: see §6.4's note on what the fine-tuned variant measured. |
 | 5 | `judgement` | | Initialise target as an exact online copy, following Appendix A, rather than the code's independent RNG draws. | Select the paper's initialisation and make the EMA ablation paired. The code comments report no significant difference. | Changes early targets; must be recorded and checked, not conflated with decay. |
 | 6 | `judgement` | | Explicit PyTorch Linear initialisation and single-device PyTorch BN replace Haiku defaults and cross-replica BN. | Fixed local backend. We would retain this adaptation with an unlimited framework. Hidden BN keeps source epsilon and old-statistic decay 0.9; no final BN. | Initial norms and running-variance estimators can alter dynamics. Both arms share them; source numerical equivalence is not claimed. |
+| 7 | `judgement` | | Target decay base 0.68722 replaces the inherited `_EMA_PRESETS[1000] = 0.996`. Derived, not tuned: `configs/byol.py` keys every preset to an epoch budget and passes `target_ema` a horizon of `num_epochs * train_images_per_epoch // batch_size`, so the base is a function of run length. Preserving the one invariant the curve has — the EMA time constant as a fraction of the pretraining horizon, `1 - base_local = (1 - base_source) * steps_source / steps_local` — and selecting the source row this card's own budget reaches (1000 steps of batch 128 over 1024 rows is 125 epochs, so `_EMA_PRESETS[100] = 0.99` over 31278 steps) gives `1 - 0.01 * 31278 / 1000`. | Row 3 shortened the horizon by a factor of 313 while keeping a base the source ties to the long horizon. Measured consequence at 0.996: integrated tracking `sum(1 - tau)` of **2.00** over the whole run against 156-626 in every source preset, and a target that ends 0.86 in parameter norm behind the online network on all ten replicates of the 2026-09-16 run. That is a frozen early snapshot, not a slowly moving average. | Restores the source's tracking regime (local integrated tracking 156.5 against the 100-epoch row's 156.4). The selected 1000-epoch row is unreachable here at any base — the same rule sends it to -0.251, outside the `[0, 1)` an EMA update requires — which is why the row is reselected rather than rescaled. The `source_ema` arm of §6.2 keeps 0.996 so the change is measured rather than assumed. |
 
 ### 5.1 Framework additions made for this card
 
@@ -288,25 +308,30 @@ generic SSL engine, checkpoint system or new card-key category. If further work
 discovers a missing mechanic, amend and review this card first; if a mechanic is
 omitted, add typed debt and reconcile `DESIGN.md` §11.4.
 
-### Tier 2 outcome
+### Tier 2 outcome, 2026-09-16 (superseded protocol, retained)
 
 On 2026-09-16, commit `49df876e8ad9` produced a `deviating` result: Project-local BYOL mechanism study, not ImageNet reproduction. All four arms share actual common initial tensors, fitted scales, masks and batch streams; pretraining arms share actual view draws. EMA changes only target parameter decay; target BN owns its state. Contrasts are formed within each of the ten predeclared seeds. Rank is measured on all 2048 clean held-out rows before transfer, without BN recalibration. OracleSymmetry uses privileged DGP knowledge; no general tabular or causal-identification claim follows. Within noise of the target: ema_outcome_nll_gain was 0.00386575 +/- 0.00407 against mean - stderr > 0, inside its target by 0.00387 — less than its own standard error, so the run does not distinguish it from a miss.
 
 ## 6. Reproduction target
 
-This is a project-local mechanism study. All bounds below were predeclared
-before the first Tier 2 run and are unchanged. They are not paper numbers or
+This is a project-local mechanism study. The 2026-09-17 amendment changes which
+statistics are scored and adds two; every threshold is still the statistic's own
+zero or the unchanged 0.05 and 1.1 declared before the first run, and none was
+read off a measurement. The statistics were chosen on the 2026-09-17 audit, which
+saw bases 620000-620500; §6.2's stream is disjoint from those. That disclosure is
+the point, and it is the discipline `simsiam.md` §6.4 already applies: the
+statistics are chosen, the thresholds are not. These are not paper numbers or
 values copied from SimSiam results.
 
 ```yaml
 reproduction:
   dataset: common.two_cluster_population with low=SEPARATED; six features; K=2; OracleSymmetry views
-  variant: scheduled EMA versus zero-decay target, no predictor, and no pretraining
-  split: 1024 train, 40 observed treatments; 2048 fully observed held-out rows
-  metric: ema_outcome_nll_gain; pretraining_outcome_nll_cost; encoder_effective_rank
+  variant: scheduled EMA versus zero-decay target, the inherited 1000-epoch EMA base, no predictor, and no pretraining
+  split: 1024 train, 40 observed treatments; 2048 fully observed held-out rows; frozen-encoder transfer
+  metric: ema_alignment_gap; ema_rank_gap; pretraining_outcome_nll_cost; encoder_effective_rank
   published: none - project-local tabular adaptation
   published_source: n/a
-  tolerance: all three one-standard-error bounds in section 6.4
+  tolerance: all four one-standard-error bounds in section 6.4
   seeds: 10
   report: mean_and_stderr
 ```
@@ -316,6 +341,10 @@ reproduction:
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
 | 2026-09-16 | `49df876e8ad9` | ema_outcome_nll_gain<br>pretraining_outcome_nll_cost<br>encoder_effective_rank | 0.00386575 +/- 0.00407<br>-0.00357281 +/- 0.00355 nat/row<br>3.24223 +/- 0.115 | no |
+
+The 2026-09-16 row is the protocol §5 rows 3 and 4 and §6.4 have since amended:
+base_ema 0.996, a fine-tuned encoder, and the superiority gate on downstream NLL.
+It is retained, not superseded; §6.4's note says what its instrument measured.
 
 ### 6.2 Fixed DGP and paired execution
 
@@ -327,7 +356,8 @@ including `low=SEPARATED`; do not transcribe the generator or transforms.
 Assert analytic treatment probabilities and conditional outcome means are
 unchanged by the views before any fit. Oracle information is evaluation-only.
 
-Tier 2 replicate i=0..9 uses base=620000+100*i; training seed base+1,
+Tier 2 replicate i=0..9 uses base=630000+100*i, disjoint from the 620000-620900
+stream of the 2026-09-16 run and of the 2026-09-17 audit; training seed base+1,
 held-out seed base+2, model seed base+6, execution seed base+10000.
 Training row offsets start at 0; held-out offsets start at 10000.
 Fit preprocessing once and share the actual 40-label mask across arms, using
@@ -336,12 +366,15 @@ treatment values must never reach either fit stage.
 
 | Arm | Change from full | Interpretation |
 |---|---|---|
-| full | none | scheduled EMA and learned predictor |
-| zero-decay | tau=0 at every update | target copies the updated online parameters; same stop-gradient and independently forwarded target BN |
+| full | none | scheduled EMA at §5 row 7's base, and a learned predictor |
+| source-ema | base_ema 0.996 | deviation 7's own control: the inherited 1000-epoch row at this horizon. Informational, never a gate |
+| zero-decay | tau=0 at every update | target copies the updated online parameters; same stop-gradient and independently forwarded target BN. Note this makes the target bit-identical to the online network at every forward, so the arm is the teacher-free update rule, not the paper's Table 5(a) collapse |
 | no-predictor | route online X_PROJ directly to loss; remove predictor from trainables | predictor mechanism diagnostic, retaining EMA |
-| no-pretraining | omit pretrain and inheritance edge | effect of the additional pretraining phase; not compute-matched |
+| no-pretraining | omit pretrain and inheritance edge | effect of the additional pretraining phase; not compute-matched. With the encoder frozen this arm is a random-feature probe |
 
-Each pretraining arm gets 1000 steps. Every arm gets 3000 downstream steps.
+Each pretraining arm gets 1000 steps. Every arm gets 3000 downstream steps, over
+the XTY heads alone: the transferred encoder is frozen (§5 row 4, as amended) and
+§6.2's checks require it bit-identical after the stage.
 The no-pretraining arm uses the existing STREAM_STRIDE offset to match stage
 index 1's downstream stream. Copy common initial tensors and downstream head
 states or use isolated RNG streams; equal global seeds alone are insufficient.
@@ -462,34 +495,121 @@ smoke tests were running. This is not a claim that the full smoke suite passed.
 
 ### 6.4 Metrics, tolerances and interpretation
 
-For each replicate let N_arm be mean held-out factual outcome NLL on the
-common training-standardised outcome scale. Define:
+Attribution is carried by two statistics read from the **terminal pretraining
+checkpoint**, in eval mode on frozen training BN buffers, over §6.2's fixed
+held-out view batches — before any transfer. Downstream NLL is a budget, not an
+attribution instrument. That division is `simsiam.md` §6.4's, adopted here for
+the reason its own audit gives, and the 2026-09-17 note below records why this
+card had to arrive at it a second time rather than inheriting it.
 
-1. `ema_outcome_nll_gain = N_zero_decay - N_full`; require mean - SE > 0.
-2. `pretraining_outcome_nll_cost = N_full - N_no_pretraining`; require
-   mean + SE < 0.05 nat/row. This is a declared local non-inferiority budget.
-3. `encoder_effective_rank`: centre the full arm's [2048,256] pre-fine-tuning
-   encoder matrix by column; take singular values s and probabilities
-   p_j=s_j^2/sum(s^2); report exp(-sum(p_j*log(p_j))) with 0*log(0)=0.
-   If sum(s^2)<=1e-12, return 0. Require mean - SE > 1.1. This excludes
-   constant and essentially rank-one solutions without requiring 256
-   independent factors from the fixture's limited invariant information.
+**View alignment** `A` is the mean of the two directional inner products between
+the online prediction of one view and the **target** projection of the other,
+each side normalised by `sqrt(max(sum(v^2), 1e-12))`, averaged over rows, both
+directions and all held-out batch pairs. Above that floor it is the cosine; the
+floor is the source's own (§3.1), which is why `A` is written from
+`squared_norm_floor_normalize` rather than from `cosine_similarity`. `A = 1` is
+the objective at its minimum. An arm sitting closer to that optimum than the full
+arm has stopped telling rows apart — the paper's non-collapse statement,
+measured. `A` differs from SimSiam's identically named statistic in reading a
+teacher projection, so the two cards' `A` values are not comparable.
 
-Compute each paired difference within seed, then sample SE=sd/sqrt(10),
-ddof=1. Report every arm and replicate, including failures; do not pool rows
-as independent replicates. All three criteria must pass for the local
-`reproduced` status under FIDELITY §3; a nominal pass within its uncertainty
-is `deviating`. These are repository evidence gates, not a multiple-testing
-controlled statistical claim.
+**Encoder effective rank** `R`: centre the arm's [2048, 256] pre-transfer encoder
+matrix by column; take singular values s and probabilities `p_j = s_j^2/sum(s^2)`;
+report `exp(-sum(p_j*log(p_j)))` with `0*log(0) = 0`. If `sum(s^2) <= 1e-12`,
+return 0.
 
-Report no-predictor differences, treatment NLL, treatment-effect RMSE,
-normalised feature spread, rank of every arm, feature norms, directional
-residuals and target-online lag as diagnostics. Rank alone does not show
-useful learning; the paired outcome criterion supplies that test. Do not
-require zero-decay or no-predictor collapse: neither is guaranteed here.
-If EMA adds no measurable benefit, audit source fidelity and record the
-negative result. Any changed fixture, threshold, optimiser or seed stream
-requires a prospective amendment with the failed protocol retained.
+For each replicate let `N_arm` be mean held-out factual outcome NLL on the common
+training-standardised outcome scale. Per replicate define:
+
+| Required metric | Definition | Acceptance over ten replicates |
+|---|---|---|
+| ema_alignment_gap | A_zero_decay - A_full | mean - stderr > 0.0 |
+| ema_rank_gap | R_full - R_zero_decay | mean - stderr > 0.0 |
+| pretraining_outcome_nll_cost | N_full - N_no_pretrain | mean + stderr < 0.05 nat/row |
+| encoder_effective_rank | R_full | mean - stderr > 1.1 |
+
+The first two thresholds are each statistic's own zero: they are paired contrasts,
+so no level had to be chosen and none was read off a measurement. The last two are
+unchanged from the pre-2026-09-16 declaration. Compute each paired difference
+within seed, then sample SE = sd/sqrt(10), ddof=1. Report every arm and replicate,
+including failures; do not pool rows as independent replicates. All four criteria
+must pass for the local `reproduced` status under FIDELITY §3; a nominal pass
+within its uncertainty is `deviating`. These are repository evidence gates, not a
+multiple-testing controlled statistical claim.
+
+`R` is a collapse guard and not a quality ordering. The untrained encoder scores
+about 22 on this fixture and concentrating onto its invariant subspace is what a
+working representation should do, so a *higher* `R` is not a better arm — which is
+why `ema_rank_gap` is paired against a specific ablation and why the no-predictor
+arm's rank is reported without a bound.
+
+Report `ema_outcome_nll_gain = N_zero_decay - N_full`, the three `source_ema`
+contrasts, no-predictor differences, treatment NLL, treatment-effect RMSE,
+normalised feature spread, rank of every arm, feature norms, directional residuals
+and target-online lag as diagnostics. If full and controls are indistinguishable
+on both attribution axes, the claim has not reproduced even if downstream NLL is
+good. Do not require zero-decay or no-predictor collapse: neither is guaranteed
+here, and §6.2's arm table says why zero-decay in particular is not the paper's
+collapse control. If EMA adds no measurable benefit, audit source fidelity and
+record the negative result. Any changed fixture, threshold, optimiser or seed
+stream requires a prospective amendment with the failed protocol retained.
+
+#### Audit finding, 2026-09-17: why downstream NLL no longer carries the claim
+
+This is the post-mortem of `ema_outcome_nll_gain`, the superiority gate the table
+above replaces. It is retained because the replacement is only as good as the
+reason for it.
+
+The 2026-09-16 run returned 0.00386575 +/- 0.00407, a lower one-standard-error
+bound of -0.000209, and `deviating`. An equation-by-equation re-audit against the
+pinned source found no mechanism error, and Tier 0's oracles already covered every
+mechanic it checked. Three measurements explain the result instead.
+
+**The instrument had almost no dynamic range, because the encoder was fine-tuned.**
+On this fixture, predicting the training mean scores about 1.376 nat and the Bayes
+-optimal conditional mean about 1.049, so the endpoint spans about 0.327 nat. The
+recorded run's four arms all landed within 0.004 nat of each other and reached the
+same downstream training loss to three decimals - 0.4797, 0.4800, 0.4802, 0.4798 -
+despite pre-transfer encoder effective ranks of 3.24, 2.94, 6.68 and **22.02**. A
+protocol under which a random rank-22 encoder and a pretrained rank-3 one converge
+to the same place is not measuring the representation. The audit's six-seed probe,
+which reproduces the recorded endpoint bit-for-bit on all twelve (seed, arm)
+points and varies only the downstream protocol, puts a number on it: the whole-of-
+pretraining contrast `N_no_pretrain - N_full` is +0.0373 +/- 0.0095 with a frozen
+encoder and +0.0009 +/- 0.0051 with the fine-tuned one. The fine-tune moves the
+encoder 1.17 of its own initial norm - 6.8 times further than pretraining moved it -
+collapses every arm's rank to about 1.5 within 100 steps whatever it started from,
+and leaves the pretrained and random encoders 0.97 apart at the end. §5 row 4 is
+amended for that reason, and the frozen protocol is also simply better here: its
+worst checkpoint beats the fine-tuned protocol's best, which peaks near step 300
+and is 0.087 nat worse by the reported step 3000.
+
+**The gate was a coin flip at the declared seed count.** The observed effect-to-
+spread ratio is 0.300, at which `mean - stderr > 0` has 49.3% power at ten
+replicates; 87% would need about fifty. Two of the other three declared gates
+could not realistically fail: the cost budget passed with the measured effect
+fourteen times inside its tolerance, and the rank guard asks for 1.1 where an
+untrained encoder scores 22.
+
+**The mechanism was separating the arms all along, on the statistics above.**
+Recomputed from the recorded run with no re-fit, `A_zero_decay - A_full` is
++0.009726 +/- 0.001119 on 10 of 10 seeds (t = 8.69) and `R_full - R_zero_decay` is
++0.304 +/- 0.125 on 8 of 10 (t = 2.44). Both clear the bounds the table now
+declares. The instrument had to change, and the honest risk is that these two were
+chosen after seeing that: the guard is that their thresholds are each statistic's
+own zero rather than a level, and that §6.2 re-runs on a disjoint stream.
+
+Two further findings belong here because they bound what any downstream gate could
+have shown. The zero-decay target is bit-identical to the online network at every
+forward - `target_online_lag` is exactly 0.0 on all ten recorded seeds and its
+target BN statistics equal the online ones - so that arm is the teacher-free
+update rule, whose published gap to BYOL is small, and not the paper's Table 5(a)
+tau=0 row (0.3% against 72.5% top-1 at 300 epochs, batch 4096), which is a
+catastrophic collapse that does not occur in this regime. And the EMA itself had
+almost nothing to do: §5 row 7 records the integrated tracking of 2.00 against the
+source's 156-626. Neither is repaired by changing the instrument, which is why
+rows 4 and 7 are amended alongside it and why the frozen-protocol probe did not,
+on its own, resolve the EMA contrast either.
 
 ## 7. Unknowns
 
@@ -499,7 +619,9 @@ requires a prospective amendment with the failed protocol retained.
 | Numerical normalisation at zero | Pinned helper's squared-norm floor 1e-12 and literal squared distance | Source code resolves equation's undefined zero case |
 | PyTorch equivalent of unpinned Haiku Linear defaults | Explicit torch Linear defaults; no numerical equivalence claim | Backend judgement §5.6, not an assumed source initialiser |
 | Appropriate tabular widths, view policy and short-horizon EMA base | Fixed §4 settings and §6 fixture; no post-hoc tuning | Prospective local choices; departures §5.1–§5.4 |
-| Whether moving targets help this low-dimensional fixture | The ten-seed run does not clear the declared one-SE superiority gate | Mean gain 0.003866 ± 0.004075 SE; this does not establish either superiority or equivalence |
+| Whether moving targets help this low-dimensional fixture **downstream** | Unresolved, and the 2026-09-16 protocol could not resolve it | Mean gain 0.003866 ± 0.004075 SE at 49.3% gate power; §6.4's 2026-09-17 note. Neither superiority nor equivalence is established |
+| Which source preset row a 1000-step horizon should take its EMA base from | `_EMA_PRESETS[100]`, the largest row the local 125-epoch budget reaches, translated by the time-constant/horizon invariant | §5 row 7. The selected 1000-epoch row is unreachable at this horizon at any base; the 40-epoch row would give 0.62467 and the 300-epoch row 0.06165, so the choice of row is a disclosed judgement, not a derivation |
+| Whether the local endpoint can carry any representation-quality claim under a fine-tuned encoder | No; it is a budget only | Measured 40-fold attenuation against the frozen protocol, §6.4's 2026-09-17 note |
 
 ## 8. Review
 
@@ -511,8 +633,12 @@ requires a prospective amendment with the failed protocol retained.
 | Recipe implemented, Tier 0 passing (status → `implemented`) | Claude Code | 2026-09-15 |
 | Source audit and Tier 1 implementation; all declared smoke seeds pass | Codex; LARS finite-value validation corrected, paired execution and diagnostics added | 2026-09-16 |
 | Source re-audit and complete Tier 2 execution (status → `deviating`) | Codex; all forty fits complete; two of three unchanged gates pass; strict upper-bound reporting and saved-result verification added | 2026-09-16 |
+| Deviation audit of the `deviating` result; §5 rows 3, 4 amended, row 7 added, §6.4 instrument replaced, §6.2 stream moved | Claude Code, at the repository owner's request; no source-mechanism error found; the fine-tuned endpoint, the gate's power and the zero-decay arm's identity measured | 2026-09-17 |
 
-Four amendments were made at review, none of them to the method.
+Four amendments were made at the 2026-09-15 review, none of them to the method.
+The 2026-09-17 amendments are described in §6.4's audit note and §5 rows 3, 4 and
+7; one of them, row 7, *is* a change to the method, which is why it carries its
+own row and its own `source_ema` control arm.
 
 The first two answer PR #57's review comments. A `CosineEMADecay` faithful to
 `schedules.target_ema` reaches exactly 1 at its horizon, and `TeacherSpec`

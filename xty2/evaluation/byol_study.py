@@ -55,9 +55,23 @@ from xty2.training.loading import build_population
 from xty2.training.loss_mixer import LossMixer
 from xty2.training.teacher import EMATeacher
 
-ARMS = ("full", "zero_decay", "no_predictor", "no_pretrain")
+ARMS = ("full", "source_ema", "zero_decay", "no_predictor", "no_pretrain")
 PRETRAIN_STEPS = 100
 FIT_STEPS = 200
+# `_EMA_PRESETS[1000]`, the row card §5 row 3 originally inherited. `source_ema`
+# is the informational control that isolates deviation 7's re-derivation from
+# everything else the 2026-09-17 protocol changed; it is not a scored arm.
+INHERITED_EMA_BASE = 0.996
+# Literal decays for the executed-update oracle. Written out rather than read
+# from the recipe: an oracle that recomputes the recipe's own expression shares
+# its call path and cannot catch it being wrong (CLAUDE.md, Evidence).
+ORACLE_EMA_BASE = {
+    "full": 0.68722,
+    "source_ema": 0.996,
+    "no_predictor": 0.68722,
+    "no_pretrain": 0.68722,
+    "zero_decay": 0.0,
+}
 
 
 def require_equal(left: Mapping[str, Tensor], right: Mapping[str, Tensor]) -> None:
@@ -99,7 +113,10 @@ def arm_recipe(
             pretrain.teacher,
             decay=Constant(0.0)
             if arm == "zero_decay"
-            else CosineEMADecay(base=BASE_TARGET_EMA, steps=pretrain_steps),
+            else CosineEMADecay(
+                base=INHERITED_EMA_BASE if arm == "source_ema" else BASE_TARGET_EMA,
+                steps=pretrain_steps,
+            ),
         ),
         optimiser=replace(
             pretrain.optimiser,
@@ -205,6 +222,7 @@ def diagnostics(
                 () if arm == "no_predictor" else ("byol_predictor",)
             )
             residuals = []
+            alignments = []
             norms = []
             for i in range(0, len(views), 2):
                 directional = []
@@ -214,20 +232,18 @@ def diagnostics(
                         b, schema=schema, only=("mlp_encoder", "byol_projector")
                     )[Port.X_PROJ]
                     assert isinstance(p, Tensor) and isinstance(t, Tensor)
-                    directional.append(
-                        float(
-                            (
-                                squared_norm_floor_normalize(p, 1e-12)
-                                - squared_norm_floor_normalize(t, 1e-12)
-                            )
-                            .square()
-                            .sum(-1)
-                            .mean()
-                        )
-                    )
+                    unit_p = squared_norm_floor_normalize(p, 1e-12)
+                    unit_t = squared_norm_floor_normalize(t, 1e-12)
+                    directional.append(float((unit_p - unit_t).square().sum(-1).mean()))
+                    # Card §6.4's `A`. Read off the same two vectors as the
+                    # distance, under the source's squared-norm floor rather
+                    # than `cosine_similarity`'s floor on the norm, because
+                    # §3.1 makes that floor the objective's own.
+                    alignments.append(float((unit_p * unit_t).sum(-1).mean()))
                     norms.append(float(p.norm(dim=1).mean()))
                 residuals.append(sum(directional))
             metrics["predictor_residual"] = math.fsum(residuals) / len(residuals)
+            metrics["view_alignment"] = math.fsum(alignments) / len(alignments)
             metrics["prediction_norm"] = math.fsum(norms) / len(norms)
         require_equal(before, snapshot(graph))
         if teacher is not None and target_before is not None:
@@ -344,11 +360,12 @@ def study(
             ]
             if int(tracked) != 2 * (step + 1):
                 raise RuntimeError("BYOL target must forward each view exactly once")
+            base = ORACLE_EMA_BASE[arm]
             tau = (
                 0.0
                 if arm == "zero_decay"
                 else 1
-                - (1 - 0.996) * (1 + math.cos(math.pi * step / pretrain_steps)) / 2
+                - (1 - base) * (1 + math.cos(math.pi * step / pretrain_steps)) / 2
             )
             original_update(teacher, student, step)
             online = dict(student.named_parameters())
@@ -557,6 +574,17 @@ def study(
                 },
                 snapshot(run.graph),
             )
+        # Deviation 4, as amended: `joint_fit` declares no encoder, so the
+        # transferred backbone must be bit-identical after the stage. This is
+        # the linear-evaluation posture, executed rather than declared.
+        require_equal(
+            {
+                k: v
+                for k, v in transitions["joint_fit"].items()
+                if k.startswith("_components.mlp_encoder.")
+            },
+            snapshot(run.graph),
+        )
         run.graph.eval()
         with torch.no_grad():
             values = run.graph.evaluate(
@@ -589,19 +617,39 @@ def study(
 
 def paired_metrics(metrics: Mapping[str, float]) -> dict[str, float]:
     """Form contrasts within seed before the runner computes sampling error."""
+
+    def alignment_gap(arm: str) -> float:
+        return metrics[f"{arm}_view_alignment"] - metrics["full_view_alignment"]
+
+    def rank_gap(arm: str) -> float:
+        return (
+            metrics["full_encoder_effective_rank"]
+            - metrics[f"{arm}_encoder_effective_rank"]
+        )
+
     return {
-        "ema_outcome_nll_gain": (
-            metrics["zero_decay_outcome_nll"] - metrics["full_outcome_nll"]
-        ),
+        # Card §6.4's two scored attribution contrasts. An arm sitting closer
+        # to the objective's degenerate optimum than the full arm is the
+        # paper's own mechanism statement, measured before transfer.
+        "ema_alignment_gap": alignment_gap("zero_decay"),
+        "ema_rank_gap": rank_gap("zero_decay"),
+        # Retained as the §6.4 budget and the withdrawn superiority statistic.
         "pretraining_outcome_nll_cost": (
             metrics["full_outcome_nll"] - metrics["no_pretrain_outcome_nll"]
         ),
         "encoder_effective_rank": metrics["full_encoder_effective_rank"],
+        "ema_outcome_nll_gain": (
+            metrics["zero_decay_outcome_nll"] - metrics["full_outcome_nll"]
+        ),
+        # Predictor diagnostics, and deviation 7's own control.
+        "predictor_alignment_gap": alignment_gap("no_predictor"),
         "predictor_outcome_nll_gain": (
             metrics["no_predictor_outcome_nll"] - metrics["full_outcome_nll"]
         ),
-        "predictor_encoder_rank_gain": (
-            metrics["full_encoder_effective_rank"]
-            - metrics["no_predictor_encoder_effective_rank"]
+        "predictor_encoder_rank_gain": rank_gap("no_predictor"),
+        "source_ema_alignment_gap": alignment_gap("source_ema"),
+        "source_ema_rank_gap": rank_gap("source_ema"),
+        "source_ema_outcome_nll_gain": (
+            metrics["source_ema_outcome_nll"] - metrics["full_outcome_nll"]
         ),
     }

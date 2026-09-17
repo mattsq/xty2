@@ -68,8 +68,28 @@ PRETRAIN_LR = 0.2 * BATCH_SIZE / 256
 PRETRAIN_WEIGHT_DECAY = 1.5e-6
 LARS_ETA = 1e-3
 LARS_MOMENTUM = 0.9
-# `_EMA_PRESETS[1000]`, the decay `schedules.target_ema` starts from.
-BASE_TARGET_EMA = 0.996
+# Deviation 7. `configs/byol.py` keys every preset to the epoch budget and hands
+# `target_ema` a horizon of `num_epochs * train_images_per_epoch // batch_size`,
+# so `base_target_ema` is a function of run length rather than a constant: the
+# source itself uses 0.97 at 40 epochs and 0.996 at 1000. Deviation 3 shortens
+# the horizon to PRETRAIN_STEPS, which is 125 epochs of this fixture, so the row
+# that budget reaches is `_EMA_PRESETS[100]` and its base is translated to the
+# local horizon by the one invariant the curve has: the EMA time constant as a
+# fraction of the pretraining horizon,
+#
+#     1 - base_local = (1 - base_source) * steps_source / steps_local
+#
+# Inheriting `_EMA_PRESETS[1000] = 0.996` at this horizon is not a smaller
+# version of the source's regime; it is a different one. Under the rule above
+# the selected 1000-epoch row translates to a base of -0.251, outside the
+# `[0, 1)` every EMA update requires, so that row is unreachable here at any
+# base — which is the §5 row 7 finding rather than a licence to clamp it.
+SOURCE_IMAGES_PER_EPOCH = 1281167
+SOURCE_BATCH_SIZE = 4096
+SOURCE_EMA_EPOCHS = 100
+SOURCE_EMA_BASE = 0.99
+SOURCE_EMA_STEPS = SOURCE_EMA_EPOCHS * SOURCE_IMAGES_PER_EPOCH // SOURCE_BATCH_SIZE
+BASE_TARGET_EMA = 1.0 - (1.0 - SOURCE_EMA_BASE) * SOURCE_EMA_STEPS / PRETRAIN_STEPS
 
 ONLINE_A = Realisation(view="byol_a")
 ONLINE_B = Realisation(view="byol_b")
@@ -256,7 +276,11 @@ def byol(
                         reduction="population",
                     ),
                 ),
-                trainable=("mlp_encoder", "tarnet_head", "categorical_propensity"),
+                # Deviation 4, as amended: the source evaluates a *frozen*
+                # backbone (paper §3.3, "linear evaluation"), so the encoder
+                # transfers and is held fixed. Only the XTY heads this
+                # repository adds are fitted here.
+                trainable=("tarnet_head", "categorical_propensity"),
                 rows="all",
                 initialise_from="pretrain",
                 optimiser=ADAM,
