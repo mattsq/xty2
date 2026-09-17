@@ -34,9 +34,9 @@ framework would otherwise supply silently:
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, ClassVar, Final, Literal, get_args
+from typing import Any, ClassVar, Final, Literal, get_args, overload
 
 import torch
 from torch import Tensor
@@ -45,9 +45,13 @@ from xty2.core.card_keys import REQUIRED, is_required
 from xty2.core.errors import CompileError
 from xty2.core.schedules import Schedule, as_schedule
 
-OptimiserName = Literal["adam", "adamw", "sgd"]
-"""The optimisers v1 builds. A fourth is a new branch of `build`, not a new
-mechanism — and it arrives with the recipe that needs it (`DESIGN.md` §11)."""
+OptimiserName = Literal["adam", "adamw", "lars", "sgd"]
+"""The optimisers v1 builds. A fifth is a new branch of `build`, not a new
+mechanism — and it arrives with the recipe that needs it (`DESIGN.md` §11).
+`lars` arrives with BYOL, whose pinned `utils/optimizers.lars` is the
+optimiser its learning rate, weight decay and trust coefficient are all
+stated against; running it under SGD would be a different update rule with
+the card's numbers on it."""
 
 OPTIMISER_NAMES: Final[tuple[OptimiserName, ...]] = get_args(OptimiserName)
 
@@ -287,6 +291,11 @@ class OptimiserSpec:
         nesterov: SGD only, and only with momentum.
         betas: The Adam family only.
         eps: The Adam family only.
+        eta: LARS only, and required there: the trust coefficient that scales
+            every adapted update by `eta * ||parameter|| / ||update||`. It has
+            no default because it is a number BYOL's config states
+            (`optimizer_config.eta`), and a framework default for it would be
+            exactly the silent difference §9.1 exists to prevent.
     """
 
     name: OptimiserName = REQUIRED
@@ -298,6 +307,7 @@ class OptimiserSpec:
     nesterov: bool = False
     betas: tuple[float, float] = (0.9, 0.999)
     eps: float = 1e-8
+    eta: float | None = None
 
     CARD_KEYS: ClassVar[Mapping[str, str]] = {
         "description": "optimisation.optimiser",
@@ -357,6 +367,34 @@ class OptimiserSpec:
         and nothing downstream — plan, log or loss curve — would say so.
         """
         adam = self.name in ("adam", "adamw")
+        if self.name == "lars":
+            if self.eta is None:
+                raise CompileError(
+                    "OptimiserSpec(name='lars') was given no eta. The trust "
+                    "coefficient is part of the optimiser's identity and binds "
+                    "'optimisation.optimiser' with the rest of it, so it has no "
+                    "default (DESIGN.md §9.1)."
+                )
+            _require_finite("OptimiserSpec.eta", self.eta)
+            if self.eta <= 0:
+                raise CompileError(
+                    f"OptimiserSpec.eta must be positive, got {self.eta!r}. A "
+                    "non-positive trust coefficient scales every adapted update "
+                    "to zero or flips its sign."
+                )
+            if self.nesterov:
+                raise CompileError(
+                    "LARS takes no Nesterov momentum. The pinned "
+                    "`utils/optimizers.scale_by_lars` accumulates "
+                    "`mu = momentum * mu + update` and steps `-lr * mu`; a "
+                    "look-ahead there is a different optimiser."
+                )
+        elif self.eta is not None:
+            raise CompileError(
+                f"optimiser {self.name!r} takes no eta, but this spec sets "
+                f"eta={self.eta!r}. The trust coefficient is LARS's, and the run "
+                "would silently ignore it."
+            )
         if adam and (self.momentum != 0.0 or self.nesterov):
             raise CompileError(
                 f"optimiser {self.name!r} takes no momentum, but this spec sets "
@@ -392,6 +430,16 @@ class OptimiserSpec:
         """
         if self.name in ("adam", "adamw"):
             return f"{self.name}(betas={self.betas!r}, eps={self.eps!r})"
+        if self.name == "lars":
+            # The adaptation exclusion is part of the identity rather than of
+            # `weight_decay`: BYOL's `exclude_bias_and_norm` filters the trust
+            # ratio as well as the decay, and the two filters are separately
+            # stated in the source even where they coincide.
+            return (
+                f"lars(momentum={float(self.momentum)!r}, "
+                f"eta={float(self.eta or 0.0)!r}, "
+                "adaptation on parameters of rank two or more)"
+            )
         return (
             f"{self.name}(momentum={float(self.momentum)!r}, "
             f"nesterov={self.nesterov!r})"
@@ -484,6 +532,13 @@ class OptimiserSpec:
             )
         if rest:
             groups.append({"params": rest, "weight_decay": 0.0})
+        if self.name == "lars":
+            return LARS(
+                groups,
+                lr=float(self.lr),
+                momentum=float(self.momentum),
+                eta=float(self.eta or 0.0),
+            )
         if self.name == "sgd":
             return torch.optim.SGD(
                 groups,
@@ -493,6 +548,127 @@ class OptimiserSpec:
             )
         family = torch.optim.AdamW if self.name == "adamw" else torch.optim.Adam
         return family(groups, lr=float(self.lr), betas=self.betas, eps=float(self.eps))
+
+
+# ---------------------------------------------------------------------------
+# The one optimiser torch does not ship
+# ---------------------------------------------------------------------------
+
+
+class LARS(torch.optim.Optimizer):
+    """BYOL's pinned `utils/optimizers.lars`, in the order that reference applies it.
+
+    `optax.chain(add_weight_decay(...), scale_by_lars(...), scale(-lr))` is
+    three transformations over one gradient, and the order is the method:
+
+    1. `update = grad + weight_decay * parameter`, for the parameters the decay
+       filter admits;
+    2. `update *= eta * ||parameter|| / ||update||`, for the parameters the
+       adaptation filter admits and only where both norms are positive —
+       otherwise the multiplier is exactly 1, which is the source's `jnp.where`
+       and not a clamp or an epsilon;
+    3. `mu = momentum * mu + update`, a plain accumulation rather than the
+       convex `momentum * mu + (1 - momentum) * update` some LARS write-ups use;
+    4. `parameter -= lr * mu`.
+
+    Two of those are the ones a reimplementation usually gets wrong, so they are
+    stated here rather than assumed: the trust ratio is computed from the update
+    **after** the decay has been added, and a parameter the adaptation filter
+    excludes still receives the momentum step — it is left unscaled, not left
+    alone.
+
+    The filters follow `optimizers.exclude_bias_and_norm`, which rejects a
+    parameter named `b` or living under a module whose name contains `norm`. In
+    torch that set is exactly the parameters of rank below two: every bias and
+    every norm scale and shift is one-dimensional, and every weight matrix is
+    not. The **decay** filter reaches this class as the per-group
+    `weight_decay` that `OptimiserSpec.build` has already resolved from the
+    card's `WeightDecay`, so a card that decays biases gets what it declared;
+    the **adaptation** filter is LARS's own and is applied here, because it is
+    part of the update rule rather than of the decay policy.
+
+    Args:
+        params: Parameters or parameter groups, as torch takes them.
+        lr: The base rate. The executor writes the scheduled rate into the
+            groups before each step, exactly as it does for the torch
+            optimisers.
+        momentum: The accumulation coefficient.
+        eta: The trust coefficient.
+    """
+
+    def __init__(
+        self,
+        params: Iterable[Tensor] | Iterable[dict[str, Any]],
+        *,
+        lr: float,
+        momentum: float,
+        eta: float,
+    ) -> None:
+        for name, value in (("lr", lr), ("momentum", momentum), ("eta", eta)):
+            _require_finite(f"LARS {name}", value)
+        if lr < 0.0:
+            raise CompileError(f"LARS lr must be non-negative, got {lr!r}")
+        if momentum < 0.0:
+            raise CompileError(f"LARS momentum must be non-negative, got {momentum!r}")
+        if eta <= 0.0:
+            raise CompileError(f"LARS eta must be positive, got {eta!r}")
+        defaults: dict[str, Any] = {
+            "lr": float(lr),
+            "momentum": float(momentum),
+            "eta": float(eta),
+            "weight_decay": 0.0,
+        }
+        super().__init__(params, defaults)
+
+    @overload
+    def step(self, closure: None = None) -> None: ...
+
+    @overload
+    def step(self, closure: Callable[[], float]) -> float: ...
+
+    @torch.no_grad()
+    def step(self, closure: Callable[[], float] | None = None) -> float | None:
+        """One LARS update over every group, in the four steps above."""
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+        for group in self.param_groups:
+            lr = float(group["lr"])
+            momentum = float(group["momentum"])
+            eta = float(group["eta"])
+            weight_decay = float(group["weight_decay"])
+            for parameter in group["params"]:
+                if parameter.grad is None:
+                    continue
+                update = parameter.grad
+                if weight_decay != 0.0:
+                    update = update.add(parameter, alpha=weight_decay)
+                if adapts_under_lars(parameter):
+                    parameter_norm = torch.linalg.vector_norm(parameter)
+                    update_norm = torch.linalg.vector_norm(update)
+                    if float(parameter_norm) > 0.0 and float(update_norm) > 0.0:
+                        update = update * (eta * parameter_norm / update_norm)
+                state = self.state[parameter]
+                buffer = state.get("momentum_buffer")
+                if buffer is None:
+                    buffer = torch.zeros_like(parameter)
+                    state["momentum_buffer"] = buffer
+                buffer.mul_(momentum).add_(update)
+                parameter.add_(buffer, alpha=-lr)
+        return loss
+
+
+def adapts_under_lars(parameter: Tensor) -> bool:
+    """Does the trust ratio reach this parameter?
+
+    `optimizers.exclude_bias_and_norm` in torch's vocabulary: biases and norm
+    scales are one-dimensional and weight matrices are not. Exported so that a
+    card stating one exclusion for both filters — as BYOL's does, because the
+    source passes the same filter twice — can assert that its `WeightDecay`
+    reach and this one actually coincide, rather than assuming it.
+    """
+    return parameter.ndim >= 2
 
 
 def _require_set(owner: str, field: str, value: object, key: str) -> None:
@@ -525,11 +701,13 @@ def _parameter_component(name: str) -> str:
 
 
 __all__ = [
+    "LARS",
     "OPTIMISER_NAMES",
     "ClipMode",
     "GradientClipping",
     "OptimiserName",
     "OptimiserSpec",
     "WeightDecay",
+    "adapts_under_lars",
     "gradient_norm",
 ]

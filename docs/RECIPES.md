@@ -15,6 +15,7 @@ its evidence. The status line inside each card is authoritative.
 | [`uda.md`](recipes/uda.md) | `uda` | temperature-sharpened consistency, confidence masking, and training signal annealing |
 | [`scarf.md`](recipes/scarf.md) | `scarf` | corruption-based contrastive pretraining |
 | [`simsiam.md`](recipes/simsiam.md) | `simsiam` | stop-gradient and predictor ablations for non-contrastive representation pretraining |
+| [`byol.md`](recipes/byol.md) | `byol` | moving-target representation pretraining with paired EMA attribution |
 | [`vicreg.md`](recipes/vicreg.md) | `vicreg` | variance-preserving and covariance-regularised representation pretraining |
 | [`barlow_twins.md`](recipes/barlow_twins.md) | `barlow_twins` | cross-correlation alignment and redundancy reduction with paired off-diagonal attribution |
 | [`doublematch.md`](recipes/doublematch.md) | `doublematch` | FixMatch plus representation consistency |
