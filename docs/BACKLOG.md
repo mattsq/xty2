@@ -323,7 +323,7 @@ VIME and SubTab test mask prediction, empirical-marginal replacement, subset
 views, and reconstruction outputs. Reuse TrainingPopulation for fitted
 statistics; add a semantic port only when a card consumes it.
 
-VIME is drafted at [`recipes/vime.md`](recipes/vime.md). Its per-feature mask
+VIME is reviewed at [`recipes/vime.md`](recipes/vime.md). Its per-feature mask
 logits port names TabTransformer-RTD (Huang et al. 2020, arXiv:2012.06678,
 replaced token detection) as the second consumer: one binary "was this column
 replaced?" logit per row and column.
