@@ -16,7 +16,7 @@
 | Paper | [VIME: Extending the Success of Self- and Semi-supervised Learning to Tabular Domain](https://proceedings.neurips.cc/paper/2020/hash/7d97667a3e056acab9aaf653807b4a03-Abstract.html) |
 | Authors, year | Jinsung Yoon, Yao Zhang, James Jordon, Mihaela van der Schaar; 2020 (NeurIPS 2020) |
 | DOI / arXiv | No arXiv version. NeurIPS 2020 proceedings, paper file `7d97667a3e056acab9aaf653807b4a03-Paper.pdf`. |
-| Version used | The NeurIPS 2020 camera-ready PDF (11 pages). Section 4.1 defines the self-supervised method (Eqs. 3–6); section 5 states the min-max preprocessing. The supplementary material (hyperparameter sensitivity, implementation details) was not read for this draft; §7 records what that leaves open. |
+| Version used | The NeurIPS 2020 camera-ready PDF (11 pages). Section 4.1 defines the self-supervised method (Eqs. 3–6); section 5 states the min-max preprocessing. The supplementary material, especially §§3, 5–6 and 8, was also checked. It reports pretext-task diagnostics, validation-based architecture and hyperparameter selection, and a mask-estimation ablation. The fixed defaults below come from the linked reference script, not a universal recommendation of the paper. |
 | Reference implementation | [jsyoon0823/VIME](https://github.com/jsyoon0823/VIME) @ `996c58cf4c570061b30c38ecf2a754a9af85aafd` (2020-10-26), linked from the paper's section 5. Files: `vime_self.py`, `vime_utils.py`, `main_vime.py`, `supervised_models.py`, `data_loader.py`. Keras 2.3.1 on TensorFlow 1.15 (`requirements`). |
 | Reference impl. runnable? | not attempted. It pins TensorFlow 1.15, which does not install on this repository's Python. The code was read, not run; §7 names each value taken from it. |
 
@@ -124,7 +124,7 @@ leaves the encoder out of `trainable`, and fits the reviewed causal heads.
 |---|---|---|---|
 | `x` | the clean row (target only) | `X_RAW` | the source node under the `identity` realisation |
 | `m`, `x̄`, `g_m` | Bernoulli mask, marginal draws, pretext generator | `X_RAW @ vime_corrupted` | `ViewSpec("vime_corrupted")` over `BernoulliMarginalCorruption(p=0.3)` (new, §5.1) |
-| `p̂_{X_j}` | empirical training marginal of column `j` | — | the `TrainingPopulation`'s column `j`, drawn i.i.d. per corrupted cell (§7) |
+| `p̂_{X_j}` | empirical marginal of column `j` in `D_u` | — | the training assignment's column `j`, drawn i.i.d. per corrupted cell (deviation 7) |
 | `x̃` | the corrupted row | `X_RAW @ vime_corrupted` | the only input `e` sees in `pretrain` |
 | `e` | encoder | `X_RAW -> X_REPR` | `MLPEncoder`, widths `[d]`, ReLU, no normalisation, Glorot-uniform (new option, §5.1) |
 | `s_m` | mask vector estimator | `X_REPR -> FEATURE_MASK_LOGITS` | `MaskEstimatorHead` (new, §5.1): one affine layer to `d` logits |
@@ -270,6 +270,7 @@ data:
 | 4 | `judgement` | — | `joint_fit` is SCARF's stage unchanged (batch 128, 3,000 steps, Adam at 0.001), apart from the frozen encoder. The reference MLP uses batch 100 and up to 100 epochs with early stopping (patience 50) on a 10% validation split. | Adopting SCARF's §6.1 protocol unchanged lets §6 import its module and compare against its arms on the same stream. Adam at 0.001 agrees with the reference downstream optimiser. Early stopping is the `early-stopping` ledger item, and a fixed budget is what we would choose here even if it existed (`scarf.md` §5.4 makes the same call). | Downstream numbers are a property of this stage, not of VIME. Only the paired ratio in §6 is interpreted. |
 | 5 | `judgement` | — | `FeatureReconstruction` and `MaskEstimationBCE` refuse schemas with categorical or ordinal features, rather than switching Eq. 6 to cross-entropy for them. | The §6 fixture is all-continuous, so the categorical branch cannot affect any result this card reports. The proposal's first experiment also asks for an all-continuous fixture. Refusing is honest; a silent squared error on class codes would not be. | None on §6. A card on a mixed schema must implement the categorical branch first. |
 | 6 | `judgement` | — | Corruption is restricted to columns the schema marks `mutable`, and `d` in Eqs. 5–6 still counts every feature. | `FeatureSpec.mutable=False` is absolute in xty2 (`DESIGN.md` §5). An immutable column is then never masked, so its `m_j` is always 0 and its reconstruction is always an identity copy, which is what Eqs. 5–6 give when the mask never selects it. | None on §6: every fixture column is mutable. |
+| 7 | `judgement` | — | Pretrain on `X` from every training row and draw donors from that same training assignment, including rows with observed `t`. The paper defines its marginal over the separate unlabeled set `D_u`. | Here "unlabeled" means unused `t` and `y` in the pretext task; the 40 observed-treatment rows still supply covariates. This matches the project's split contract and keeps donor statistics train-only. | The donor empirical marginal and pretraining sample differ slightly from a literal `D_u` partition. No validation or held-out rows enter either. |
 
 ### 5.1 Framework additions made for this card
 
@@ -287,7 +288,11 @@ data:
 
 A mechanism target. It asks whether the published pretext task learns
 conditional structure where the fixture has some, and not where it has none.
-It does not ask for a downstream gain.
+It does not ask for a downstream gain. Reconstruction and mask-estimation
+metrics inspect the fitted pretext heads immediately after `pretrain`, before
+they are discarded. They are diagnostics of the pretext model, not predictions
+from the frozen downstream encoder alone; the untrained-encoder arm has no
+trained reconstruction head and contributes only to the downstream comparison.
 
 ```yaml
 reproduction:
@@ -323,9 +328,9 @@ predicts the training column mean on the same cells.
   `0.36 / (0.45² + 0.36) = 0.64`. Inferring `c` from the visible cells
   raises that bound. `0.95` asks only that the pretext task learned some of
   the dependence. It is a prospective bound and has not been measured.
-- **Independent-block ratio >= 0.98.** Anything clearly below 1 on `x4, x5`
-  means the original value reached the encoder: a leakage failure, not a
-  learning success.
+- **Independent-block ratio >= 0.98.** An average materially below 1 on `x4, x5`
+  warrants a leakage and evaluation-protocol audit. Finite test draws can
+  also yield a ratio below 1 by chance; this gate alone does not prove leakage.
 - **Outcome NLL guardrail.** A frozen encoder of width 6 is a bottleneck,
   and a frozen random ReLU layer may lose information. The guardrail asks
   only that VIME pretraining does not make the frozen-encoder fit worse than
@@ -333,7 +338,11 @@ predicts the training column mean on the same cells.
 
 Ablations run in the same study and are reported, not gated: the fixed
 single-draw corruption of the reference code (deviation 2); `α = 0` (mask
-estimation alone); and `l_m` at weight 0 (reconstruction alone).
+estimation alone); and `l_m` at weight 0 (reconstruction alone). For each
+pretraining arm retain its diagnostic heads only long enough to score the
+held-out pretext metrics, and exclude those heads from `joint_fit`. Use the
+same fixed held-out corruption draw for all pretext arms in a replicate.
+The frozen random encoder arm is evaluated only on downstream NLL.
 
 ### 6.2 Result ledger
 
@@ -347,13 +356,14 @@ estimation alone); and `l_m` at weight 0 (reconstruction alone).
 |---|---|---|
 | Whether `x̄_j` is drawn with replacement from the marginal, or by permuting the column. | I.i.d. draws with replacement from the training population's column, per `(row, feature)` cell. | Eq. 3 defines `x̄_j` as a sample from `p̂_{X_j}`. `pretext_generator` permutes each column over the whole table, which is without-replacement sampling over one pass. The two agree in distribution per cell. |
 | Whether the mask label is the drawn `m` or the cells that actually changed. | `1[x != x̃]`, computed from `X_RAW` at both realisations. | `pretext_generator` returns `m_new = 1 * (x != x_tilde)`, and that is what `vime_self.py` trains on. Eq. 5 writes `m`. On a continuous fixture they differ only when a donor equals the row's own value (probability about `1/1024` per masked cell), so the reference code's definition is kept and no new batch field is needed to export `m`. |
-| `p_m` and `α`. | `p_m = 0.3`, `α = 2.0`. | `main_vime.py` argparse defaults. The supplementary sensitivity analysis was not read for this draft (§1); a reviewer with it should confirm these are also its recommended values. |
-| Architecture of `e`, `s_m`, `s_r`. | One ReLU layer of width `d`; one sigmoid affine layer each. | `vime_self.py`. The paper names none. |
+| `p_m` and `α`. | `p_m = 0.3`, `α = 2.0`. | `main_vime.py` argparse defaults. Supplement §6 reports sensitivity ranges and validation-based selection, not a universal recommended pair. These values are the reference script's defaults; tuning is deliberately omitted from this fixed-fixture protocol. |
+| Architecture of `e`, `s_m`, `s_r`. | One ReLU layer of width `d`; one sigmoid affine layer each. | `vime_self.py`. Supplement §5 describes validation-based selection of widths `{d/3, d/2, d, 2d, 3d}` and depths `{1, 2, 3, 4, 5}` for the experiments; this card uses the fixed released script. |
 | Optimiser and its constants. | RMSprop, `lr = 0.001`, `rho = 0.9`, `eps = 1e-7`, no momentum. | `vime_self.py` `optimizer='rmsprop'` with Keras 2.3.1 defaults. |
 | Whether BCE is computed on probabilities or logits. | On logits (`binary_cross_entropy_with_logits`), with the sigmoid folded in. | Keras clips probabilities to `[1e-7, 1 − 1e-7]` before the log. The two agree except where the sigmoid saturates beyond that clip, where Keras's gradient vanishes and ours does not. |
 | Initialisation. | Glorot-uniform kernels, zero biases. | Keras `Dense` defaults in the reference code. |
 | Pretraining length in steps. | 80 steps. | 10 epochs (`main_vime.py`) × 1,024 rows / 128. The paper's datasets are far larger, so 10 epochs there is many more steps. 80 steps may be too few to learn the dependence on this fixture. That is the faithful value, and §6 measures it rather than assuming it. |
 | Whether the downstream encoder is frozen or fine-tuned for VIME-self. | Frozen. | `main_vime.py` fits the MLP on `vime_self_encoder.predict(x_train)`. The paper's text says only that `e` "is the only part we will utilize". |
+| Pretext diagnostics after the heads are discarded. | Score immediately after pretraining and before constructing the downstream stage; keep diagnostic outputs out of `joint_fit`. | Supplement §3 reports mask AUROC and reconstruction MSE. Neither metric can be computed from the retained encoder alone. |
 
 ## 8. Review
 
