@@ -1,6 +1,6 @@
 # Recipe spec card: vime
 
-**Status:** `draft`
+**Status:** `reviewed`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
@@ -369,5 +369,5 @@ The frozen random encoder arm is evaluated only on downstream NLL.
 
 | | Who | Date |
 |---|---|---|
-| Card reviewed (status → `reviewed`) | | |
+| Card reviewed (status → `reviewed`) | Codex | 2026-09-26 |
 | Plan diffed against §3.2 and §4 | | |
