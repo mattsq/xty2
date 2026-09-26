@@ -1,6 +1,6 @@
 # Recipe spec card: vime
 
-**Status:** `implemented`
+**Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
@@ -284,6 +284,10 @@ data:
 | `minmax` in `Standardisation`, fitted on the training assignment with row-id provenance | fidelity-bearing, reversible | `vime` | — | Section 5, and the sigmoid `s_r` assumes targets in `[0, 1]`. |
 | `glorot_uniform, bias=0` initialisation option for `MLPEncoder` and the new heads | fidelity-bearing, reversible | `vime` | — | Keras `Dense` default. The paper names none, so the reference code is the source. |
 
+### Tier 2 outcome
+
+On 2026-09-26, commit `68a342575676` produced a `deviating` result: This project-local mechanism target asks whether VIME-self's published pretext task (Eqs. 3-6, the reference script's p_m, alpha, widths, optimiser and ten epochs) learns conditional structure where the fixture has some and none where it has none, and whether the frozen pretrained encoder leaves the causal outcome fit no worse than a frozen untrained one. Pretext ratios read the diagnostic heads immediately after pretraining. The fixed-draw, mask-only and reconstruction-only arms are ablations, reported and not gated. No number from Yoon et al. is reproduced. Failed target(s): dependent_block_reconstruction_ratio was 1.12883 +/- 0.0469 against mean + stderr < 0.95.
+
 ## 6. Reproduction target
 
 A mechanism target. It asks whether the published pretext task learns
@@ -344,11 +348,62 @@ held-out pretext metrics, and exclude those heads from `joint_fit`. Use the
 same fixed held-out corruption draw for all pretext arms in a replicate.
 The frozen random encoder arm is evaluated only on downstream NLL.
 
+#### Audit finding, 2026-09-26: the dependent-block bound cannot pass for Eq. 6
+
+The bounds above are unchanged, and the recorded result stays `deviating`.
+This note records why the dependent-block bound and the independent-block
+canary do not test the mechanism they name. A reviewer then decides on the
+replacement instead of a rerun inheriting the same instrument. The
+[audit](../experiments/2026-09-26-vime-tier2-audit.md) carries the evidence.
+
+The `0.64` bound in the first bullet above assumes a predictor that knows
+which cell was masked. Eq. 6's `s_r` does not know this. It reads `x̃` and is
+scored on every cell, and 70% of the cells are visible copies. The minimiser
+of Eq. 6 is therefore the posterior mean `E[x_j | x̃]`, a mixture of copying
+`x̃_j` and imputing it. On the corrupted cells alone, this predictor is worse
+than the column mean:
+
+- **Independent block, closed form.** A replacement drawn from the column's
+  own marginal cannot be detected, so `E[x_j | x̃] = (1 − p_m) x̃_j + p_m μ_j`.
+  Its corrupted-cell ratio is `1 + (1 − p_m)² = 1.49` at `p_m = 0.3`. The
+  `>= 0.98` canary therefore passes for the Bayes-optimal model and for the
+  identity copy (ratio 2) alike. It cannot detect leakage.
+- **Dependent block, exact.** Computed from the fixture's generating process
+  on this section's own held-out draw, the Bayes-optimal ratio is
+  `1.247 ± 0.007` over the ten replicates. No model trained on the published
+  objective can meet `< 0.95`. Its mask AUROC is `0.588 ± 0.002`.
+
+The implementation was audited before the bound. An independent
+plain-PyTorch transcription of `vime_self.py` shows the same pattern as the
+xty2 recipe across step budgets. It separates two further effects that the
+recorded run combines:
+
+- **Budget.** At the faithful 80 steps, terminal `l_m` is `0.664`, above the
+  `0.611` entropy of a Bernoulli(0.3) label. The mask head has not yet learned
+  the base rate, and the pretext ratios mostly reflect the initialisation (the
+  per-seed spread is wide).
+- **Width.** At the reference width `d = 6`, even 16,000 steps leave mask AUROC
+  at `0.50` in both implementations. At width 64 the plain transcription
+  reaches `0.57`, near the Bayes value. On this fixture, detecting a corrupted
+  cell needs more capacity than one ReLU layer of width 6.
+
+Proposed amendments, for review and not implemented here:
+
+1. Replace the dependent-block bound and the independent canary with a
+   measurement that Eq. 6 can pass or fail. One option is the held-out Eq. 6
+   loss as a fraction of the way from the identity copy to the Bayes-optimal
+   predictor, both computed on the same draw. The Bayes-optimal predictor is
+   analytic on this fixture.
+2. Decide whether the question is about the reference script's fixed width
+   and ten epochs, or about the method under the supplement §5 selection
+   ranges. If the latter, record the chosen width and step budget as §5
+   deviations before any rerun.
+
 ### 6.2 Result ledger
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
-| | | | | |
+| 2026-09-26 | `68a342575676` | dependent_block_reconstruction_ratio<br>independent_block_reconstruction_ratio<br>held_out_outcome_NLL_ratio | 1.12883 +/- 0.0469<br>1.23213 +/- 0.0942<br>1.00376 +/- 0.00858 | no |
 
 ## 7. Unknowns
 
