@@ -71,7 +71,7 @@ Keep the initial controller as an **experiment driver around compiled runs**, no
 
 Suggested sequence:
 
-1. Draft a fixed-task masked-feature recipe card, using `docs/recipes/_TEMPLATE.md`, and review it before implementing any new recipe mechanic. Reuse existing reconstruction ports/views where possible. Reviewed as [`recipes/vime.md`](../recipes/vime.md) (VIME-self, Yoon et al. 2020), status `reviewed`.
+1. Draft a fixed-task masked-feature recipe card, using `docs/recipes/_TEMPLATE.md`, and review it before implementing any new recipe mechanic. Reuse existing reconstruction ports/views where possible. Reviewed as [`recipes/vime.md`](../recipes/vime.md) (VIME-self, Yoon et al. 2020), status `implemented`.
 2. Pilot the controller in a bounded experiment that selects among precompiled fixed task configurations or drives explicitly supplied batches. If the executor cannot interleave selection and model updates without breaking its provenance guarantees, record that limit and keep the pilot external; do not represent the pilot as a normal compiled recipe.
 3. If transfer justifies integration, propose a controller/executor contract under `DESIGN.md` §11.2: declared candidate space; train-only data access; RNG and split provenance; checkpoint/optimizer/lookback state; scoring budget; plan digest; logs; restart semantics. Add an architectural primitive only with a reviewed consumer and invariants.
 4. Separate the controller's research result from reproduction status of existing SCARF/BYOL/VICReg cards. A dynamically mixed training run is a new method with its own card and evidence.

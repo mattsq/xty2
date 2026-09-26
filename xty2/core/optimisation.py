@@ -45,8 +45,8 @@ from xty2.core.card_keys import REQUIRED, is_required
 from xty2.core.errors import CompileError
 from xty2.core.schedules import Schedule, as_schedule
 
-OptimiserName = Literal["adam", "adamw", "sgd"]
-"""The optimisers v1 builds. A fourth is a new branch of `build`, not a new
+OptimiserName = Literal["adam", "adamw", "sgd", "rmsprop"]
+"""The optimisers v1 builds. Another is a new branch of `build`, not a new
 mechanism — and it arrives with the recipe that needs it (`DESIGN.md` §11)."""
 
 OPTIMISER_NAMES: Final[tuple[OptimiserName, ...]] = get_args(OptimiserName)
@@ -275,18 +275,22 @@ class OptimiserSpec:
     """What a gradient stage optimises with (`DESIGN.md` §7, `FIDELITY.md` §2).
 
     Attributes:
-        name: `adam`, `adamw` or `sgd`.
+        name: `adam`, `adamw`, `sgd` or `rmsprop`.
         lr: The base learning rate. `lr_schedule` multiplies it.
         weight_decay: The coefficient and its reach.
         lr_schedule: A **multiplier** on `lr`, as a function of the global
             step. `Constant(1.0)` is "no schedule", written explicitly;
             `Ramp(0.0, 1.0, steps=n)` is linear warmup.
         clipping: Where the gradient is cut before the step.
-        momentum: SGD only. Rejected on the Adam family, where it is not a
-            knob and would silently do nothing.
+        momentum: SGD and RMSprop. Rejected on the Adam family, where it is
+            not a knob and would silently do nothing.
         nesterov: SGD only, and only with momentum.
         betas: The Adam family only.
-        eps: The Adam family only.
+        eps: The Adam family and RMSprop. Keras's RMSprop default is `1e-7`
+            and torch's `1e-8`, so a recipe states it.
+        rho: RMSprop only: the squared-gradient moving-average decay, which
+            torch calls `alpha`. Keras's default is `0.9` and torch's `0.99`.
+        centered: RMSprop only.
     """
 
     name: OptimiserName = REQUIRED
@@ -298,6 +302,8 @@ class OptimiserSpec:
     nesterov: bool = False
     betas: tuple[float, float] = (0.9, 0.999)
     eps: float = 1e-8
+    rho: float = 0.99
+    centered: bool = False
 
     CARD_KEYS: ClassVar[Mapping[str, str]] = {
         "description": "optimisation.optimiser",
@@ -328,7 +334,7 @@ class OptimiserSpec:
         if self.name not in OPTIMISER_NAMES:
             raise CompileError(
                 f"unknown optimiser {self.name!r}; v1 builds "
-                f"{list(OPTIMISER_NAMES)!r}. A fifth is a new branch of "
+                f"{list(OPTIMISER_NAMES)!r}. Another is a new branch of "
                 "OptimiserSpec.build and arrives with the recipe that needs it."
             )
         _require_finite("OptimiserSpec.lr", self.lr)
@@ -357,6 +363,30 @@ class OptimiserSpec:
         and nothing downstream — plan, log or loss curve — would say so.
         """
         adam = self.name in ("adam", "adamw")
+        rmsprop = self.name == "rmsprop"
+        if not rmsprop and (self.rho != 0.99 or self.centered):
+            raise CompileError(
+                f"optimiser {self.name!r} takes no rho or centered, but this "
+                f"spec sets rho={self.rho!r}, centered={self.centered!r}. The "
+                "run would silently ignore them."
+            )
+        if rmsprop and self.nesterov:
+            raise CompileError(
+                "optimiser 'rmsprop' has no Nesterov variant in torch; this "
+                "spec sets nesterov=True, which the run would silently ignore."
+            )
+        if rmsprop:
+            _require_finite("OptimiserSpec.rho", self.rho)
+            if not 0.0 <= float(self.rho) < 1.0:
+                raise CompileError(
+                    f"OptimiserSpec.rho is a moving-average decay and must be "
+                    f"in [0, 1), got {self.rho!r}"
+                )
+            _require_finite("OptimiserSpec.eps", self.eps)
+            if float(self.eps) <= 0.0:
+                raise CompileError(
+                    f"OptimiserSpec.eps must be positive, got {self.eps!r}"
+                )
         if adam and (self.momentum != 0.0 or self.nesterov):
             raise CompileError(
                 f"optimiser {self.name!r} takes no momentum, but this spec sets "
@@ -392,6 +422,12 @@ class OptimiserSpec:
         """
         if self.name in ("adam", "adamw"):
             return f"{self.name}(betas={self.betas!r}, eps={self.eps!r})"
+        if self.name == "rmsprop":
+            centered = "true" if self.centered else "false"
+            return (
+                f"rmsprop(rho={float(self.rho)!r}, eps={float(self.eps)!r}, "
+                f"momentum={float(self.momentum)!r}, centered={centered})"
+            )
         return (
             f"{self.name}(momentum={float(self.momentum)!r}, "
             f"nesterov={self.nesterov!r})"
@@ -490,6 +526,18 @@ class OptimiserSpec:
                 lr=float(self.lr),
                 momentum=float(self.momentum),
                 nesterov=self.nesterov,
+            )
+        if self.name == "rmsprop":
+            # Keras 2.3.1 and torch share the update
+            # `p -= lr * g / (sqrt(v) + eps)`, with `v` starting at zero; only
+            # the constants' names and defaults differ (`vime.md` §5.1).
+            return torch.optim.RMSprop(
+                groups,
+                lr=float(self.lr),
+                alpha=float(self.rho),
+                eps=float(self.eps),
+                momentum=float(self.momentum),
+                centered=self.centered,
             )
         family = torch.optim.AdamW if self.name == "adamw" else torch.optim.Adam
         return family(groups, lr=float(self.lr), betas=self.betas, eps=float(self.eps))

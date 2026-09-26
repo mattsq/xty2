@@ -11,6 +11,8 @@ from xty2.core.errors import GraphError
 
 CFRNET_INITIALISATION = "normal std=0.1/sqrt(fan_in), bias=0"
 TORCH_LINEAR_INITIALISATION = "torch Linear default Kaiming-uniform"
+GLOROT_UNIFORM_INITIALISATION = "glorot_uniform, bias=0"
+"""Keras `Dense`'s default kernel and bias initialisers (`vime.md` §7)."""
 
 
 def validate_widths(widths: object, *, owner: str) -> tuple[int, ...]:
@@ -84,4 +86,17 @@ def initialise_cfrnet(module: nn.Module) -> None:
                 nn.init.zeros_(child.bias)
 
 
-__all__ = ["CFRNET_INITIALISATION", "TORCH_LINEAR_INITIALISATION"]
+def initialise_glorot_uniform(module: nn.Module) -> None:
+    """Glorot-uniform kernels and zero biases, as Keras `Dense` defaults them."""
+    for child in module.modules():
+        if isinstance(child, nn.Linear):
+            nn.init.xavier_uniform_(child.weight)
+            if child.bias is not None:
+                nn.init.zeros_(child.bias)
+
+
+__all__ = [
+    "CFRNET_INITIALISATION",
+    "GLOROT_UNIFORM_INITIALISATION",
+    "TORCH_LINEAR_INITIALISATION",
+]

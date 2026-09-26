@@ -143,27 +143,34 @@ def check_fitted_on(
 def _fit(train: XTYBatch, spec: DataSpec) -> dict[str, Tensor]:
     """Fit the declared statistics on the training rows, and only those."""
     statistics: dict[str, Tensor] = {}
-    if spec.preprocess.features == "zscore":
-        location = train.x.mean(dim=0)
-        scale = train.x.std(dim=0, unbiased=False)
-        _require_positive(scale, "feature")
-        statistics["x_location"] = location
-        statistics["x_scale"] = scale
-    if spec.preprocess.outcome == "zscore":
-        location = train.y.mean(dim=0)
-        scale = train.y.std(dim=0, unbiased=False)
-        _require_positive(scale, "outcome")
-        statistics["y_location"] = location
-        statistics["y_scale"] = scale
+    # Both fitted maps are `(v - location) / scale`, so they share the keys
+    # every consumer of the statistics already applies: `minmax` is the column
+    # minimum and range, as scikit-learn's `MinMaxScaler` fits them.
+    for block, values, mode in (
+        ("x", train.x, spec.preprocess.features),
+        ("y", train.y, spec.preprocess.outcome),
+    ):
+        if mode == "none":
+            continue
+        what = "feature" if block == "x" else "outcome"
+        if mode == "zscore":
+            location = values.mean(dim=0)
+            scale = values.std(dim=0, unbiased=False)
+        else:
+            location = values.amin(dim=0)
+            scale = values.amax(dim=0) - location
+        _require_positive(scale, what, mode)
+        statistics[f"{block}_location"] = location
+        statistics[f"{block}_scale"] = scale
     return statistics
 
 
-def _require_positive(scale: Tensor, what: str) -> None:
+def _require_positive(scale: Tensor, what: str, mode: str) -> None:
     if not bool(torch.isfinite(scale).all()) or float(scale.min()) <= 0.0:
         raise TrainingError(
-            f"the declared {what} standardisation has a degenerate scale "
-            f"{scale.tolist()!r}: a constant column cannot be z-scored. Declare "
-            f"'none' for {what} standardisation, or drop the column."
+            f"the declared {what} standardisation {mode!r} has a degenerate "
+            f"scale {scale.tolist()!r}: a constant column cannot be scaled. "
+            f"Declare 'none' for {what} standardisation, or drop the column."
         )
 
 
