@@ -154,12 +154,12 @@ uv venv
 uv pip install torch --index-url https://download.pytorch.org/whl/cpu
 uv pip install -e ".[dev]"
 
-uv run pytest  # Tier 0 + Tier 1
-uv run pytest tests/smoke -n 4 --dist loadfile  # parallel fits on a 4-core machine
-uv run pytest tests/benchmarks/test_tarnet.py  # explicit Tier 2 run
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy --strict
+uv run --no-sync pytest  # Tier 0 + Tier 1
+uv run --no-sync pytest tests/smoke -n 4 --dist loadfile  # 4-core machine
+uv run --no-sync pytest tests/benchmarks/test_tarnet.py  # explicit Tier 2 run
+uv run --no-sync ruff check .
+uv run --no-sync ruff format --check .
+uv run --no-sync mypy --strict
 ```
 
 Tier 0 is `tests/invariants/`, Tier 1 is `tests/smoke/`, and Tier 2 is
@@ -170,3 +170,5 @@ process because their small tensor operations are slower with thread fan-out.
 With `-n`, `--dist loadfile` keeps each recipe's module-scoped fit on one worker.
 Choose a worker count that fits your CPU and memory; do not parallelise Tier 2
 benchmarks that already run multiple worker processes internally.
+`--no-sync` preserves the CPU-only PyTorch wheel installed above; a normal
+`uv run` can replace it with the much larger default PyPI build.
