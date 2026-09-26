@@ -67,15 +67,21 @@ build and is not a standing instruction to reopen old packets.
 ## Commands
 
 ```bash
-uv venv && uv pip install -e ".[dev]"
-uv run pytest tests/invariants tests/smoke
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy --strict
+uv venv
+uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+uv pip install -e ".[dev]"
+uv run --no-sync pytest tests/invariants
+uv run --no-sync pytest tests/smoke -n 4 --dist loadfile
+uv run --no-sync ruff check .
+uv run --no-sync ruff format --check .
+uv run --no-sync mypy --strict
 ```
 
 Run these verbatim. A path argument to `mypy --strict` narrows it below the
 `files` list in `pyproject.toml`, which is what CI runs.
+`--no-sync` retains the CPU-only torch wheel; `loadfile` keeps each recipe's
+shared fit on one worker. Reduce `-n` if the machine has fewer than four cores
+or too little memory for four PyTorch processes.
 
 Tier 2 lives in `tests/benchmarks/` and runs nightly. Test tiers are assigned by
 directory; do not add markers manually.
