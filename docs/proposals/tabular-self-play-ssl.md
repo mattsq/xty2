@@ -175,5 +175,13 @@ The follow-up is recorded in
 It adds a validation split, a no-pretraining reference, clean secondary
 endpoints and trace summaries. Validation tuning showed that the pilot's
 64-update learner had barely learned the pretext task, selected 256 updates,
-and chose one fixed task policy per fixture. The confirmation on fresh seeds
-and the test split follows that document's frozen decision rule.
+and chose one fixed task policy per fixture. The confirmation on ten fresh
+seeds and the test split did **not** support the adaptive arm under the
+frozen decision rule: alignment was indistinguishable from uniform and
+shuffled selection, and worse than the tuned policy on the dependent
+fixture. Its traces show that the reward favoured the dependent columns and
+avoided the noise columns that a current-loss reward prefers, without
+collapse. By the go/no-go rule in §7 this does not justify framework
+integration. Candidate follow-ups, each needing its own registered protocol,
+are an endpoint that does not favour raw-feature retention (for example a
+fine-tuned or wider encoder), a longer learner budget, and a real dataset.
