@@ -1,8 +1,13 @@
-# VIME Tier 2 run and target audit
+# VIME Tier 2 runs and fixture audit
 
-This is a dated diagnostic record. It is not normative. It changes no bound,
-no §4 value and no ledger row. The card's §6 audit note carries the proposed
-amendments for review.
+This is a dated diagnostic record. It is not normative; the card is. It covers
+two Tier 2 runs on the same day:
+
+1. **First run:** the original fixture. `deviating`, and the audit below shows
+   no model trained on Eq. 6 could have passed it.
+2. **Second run:** the amended fixture that the repository owner directed
+   (see "The fixture change"). `reproduced`.
+
 
 `CLAUDE.md` says to treat a negative result as an implementation failure until
 the method has been audited equation by equation. The first Tier 2 replicate
@@ -13,7 +18,7 @@ missed the dependent-block bound. The audit asked two questions in order:
 
 The answers are yes and no.
 
-## The recorded run
+## The first run
 
 - **Source:** committed source `68a342575676`, tree
   `5b015c9d553b9cfd0f6f7c1cf6db9505f8d28cd2`, run in a clean detached worktree
@@ -107,26 +112,90 @@ Three consequences follow:
   sits below the Bayes value. That is consistent with an under-trained head
   copying less than the posterior mean does, not with it having learned more.
 - The `>= 0.98` canary passes for the Bayes-optimal model (1.49) and for a pure
-  copy (2.0). It cannot detect leakage.
+  copy (2.0), so it is loose. It still does its job: on an independent column a
+  model can fall below 1 only with information about the clean value, which is
+  leakage. An earlier version of this record said it "cannot detect leakage";
+  that was wrong.
 - The width 64 run lands near the Bayes values on every metric, which is the
   behaviour a faithful implementation should show when capacity and budget
   allow.
 
-## What would make §6 informative
+## The fixture change
 
-These are proposals for review. The card's §6 audit note records them, and
-nothing here implements them.
+The repository owner's position is that a fixture on which the method's own
+optimum fails the bound is a fixture defect, not a model defect. The two
+proposals the first version of this record made were resolved that way:
 
-1. **Change the reference point from the column mean to the Bayes-optimal
-   predictor.** Both endpoints are computable on this fixture: the identity
-   copy and the analytic posterior mean. A normalised held-out Eq. 6 loss
-   between them measures how much of the learnable structure the pretext task
-   captured. It rewards detection and imputation together, as Eq. 6 does.
-2. **Decide what the width and budget are for.** The reference script's rule,
-   width `d` and ten epochs, gives 6 units and 80 steps here. With them, the
-   encoder does not learn corruption detection at any budget, and does not
-   learn the base rate at 80 steps. If the question is "the reference script
-   on this fixture", the recorded result already answers it. If the question
-   is "the method", supplement §5's validation ranges (widths up to `3d`,
-   depths up to 5) and a step budget become §5 deviations to review before a
-   rerun.
+- **Reference point.** The Bayes-optimal Eq. 6 predictor is now part of the
+  benchmark (`bayes_pretext`), reported beside the model on every draw, and
+  the bound is placed against it.
+- **Width and budget.** The reference script's width `d` and ten epochs are
+  kept. What changes is the fixture they run on.
+
+A pilot on the disjoint seed stream `700,000 + 100 i` varied the two fixture
+properties that the audit had implicated:
+
+- the within-cluster noise of `x0..x3`, which decides how visible a
+  replaced cell is;
+- the size of the unlabelled pool, which decides how many steps ten epochs is.
+
+Three pilot seeds per cell, model at width 6 and ten epochs:
+
+| Noise | Rows (steps) | Model dependent ratio | Bayes dependent ratio |
+|---|---|---|---|
+| 0.6 | 1,024 (80) | 1.04 | 1.29 |
+| 0.6 | 16,384 (1,280) | 0.96 | 1.26 |
+| 0.3 | 16,384 (1,280) | 0.70 | 0.73 |
+| 0.2 | 1,024 (80) | 0.99 | 0.53 |
+| 0.2 | 4,096 (320) | 0.91 | 0.52 |
+| 0.2 | 16,384 (1,280) | 0.54 | 0.49 |
+
+Neither change alone is enough:
+
+- At noise 0.6 there is nothing learnable. The optimum itself is above 1.
+- At 80 steps the model cannot learn what is there.
+
+The card's §6.1 now declares noise 0.2 and 16,384 training rows. The paper's
+own datasets are of that size or larger, so ten epochs over them is the
+paper's regime. An eight-seed pilot of the full replicate on that fixture gave
+a dependent ratio of `0.565 ± 0.013` (maximum `0.632`), an independent ratio
+of `1.036 ± 0.005` (minimum `1.020`) and an outcome ratio of `0.974 ± 0.013`.
+The bound `< 0.75` was then declared as the midpoint between the column mean
+(1.0) and the optimum (about 0.49), before the Tier 2 stream (`190,000 +
+100 i`) was run.
+
+## The second run
+
+- **Source:** committed source `46d3e4c7dc53`, tree
+  `dbe7b13f5ed73cd1b3df3f1eeb63ec55b03dc05c`, run the same way. That commit was
+  amended to add the evidence, so its hash is not reachable; the landed
+  commit's `xty2/` subtree is the one that ran.
+- **Plan:** it differs from the first run's in exactly two lines, the
+  pretraining steps (80 → 1,280) and the split protocol's fixture name.
+- **Evidence:** [result](results/vime-46d3e4c/vime.json),
+  [plan](results/vime-46d3e4c/plan.txt),
+  [environment](results/vime-46d3e4c/environment.json).
+
+| Metric (10 seeds) | Mean ± stderr | Bound | Outcome |
+|---|---|---|---|
+| dependent-block ratio | 0.579 ± 0.009 | < 0.75 | passes; every seed 0.54–0.62 |
+| independent-block ratio | 1.067 ± 0.007 | >= 0.98 | passes; every seed above 1.04 |
+| held-out outcome NLL ratio | 0.985 ± 0.010 | <= 1.05 | passes |
+| Bayes-optimal dependent ratio | 0.507 ± 0.011 | informational | — |
+| mask-estimation AUROC | 0.525 ± 0.007 | informational | Bayes 0.698 |
+| held-out treatment NLL ratio | 0.92 ± 0.18 | informational | ranges 0.39–1.86 |
+
+The model reaches 0.579 against an optimum of 0.507, so it captures about
+85% of the learnable reduction on the dependent block. On the independent
+block it stays near the mean, so it detects nothing there.
+
+The ablations:
+
+- **Fixed single draw:** 0.581. It does not separate from fresh draws, so
+  deviation 2 does not matter on this metric.
+- **Reconstruction only:** 0.573. The dependent block is learned through
+  `l_r`; `l_m` adds nothing measurable here.
+- **Mask estimation only:** AUROC 0.536. At width 6 mask estimation stays
+  weak, with or without `l_r`.
+
+The treatment ratio is too noisy to support a direction.

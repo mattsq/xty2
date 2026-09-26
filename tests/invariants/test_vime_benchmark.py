@@ -28,13 +28,13 @@ from xty2.evaluation.benchmarks.common import (
 )
 from xty2.evaluation.reporting import card_status, load_reproduction_spec
 from xty2.recipes import vime
-from xty2.recipes.vime import MASK_PROBABILITY
+from xty2.recipes.vime import DATA_POLICY, MASK_PROBABILITY
 from xty2.training import build_population
 from xty2.views import BernoulliMarginalCorruption
 
 ROOT = Path(__file__).parents[2]
 CARD = ROOT / "docs/recipes/vime.md"
-RESULT = ROOT / "docs/experiments/results/vime-68a3425/vime.json"
+RESULT = ROOT / "docs/experiments/results/vime-46d3e4c/vime.json"
 
 
 def test_the_benchmark_binds_every_section6_scalar_by_value() -> None:
@@ -43,21 +43,44 @@ def test_the_benchmark_binds_every_section6_scalar_by_value() -> None:
     assert spec.seed_count == 10
 
 
-def test_the_fixture_and_seed_stream_are_scarfs_imported_not_retyped() -> None:
-    """Card §6.1: "import its benchmark module's fixture and seed streams"."""
+def test_the_fixture_is_the_shared_generator_with_its_declared_changes() -> None:
+    """Card §6.1: the fixmatch generator, noise 0.2, 16,384 rows, own stream."""
     imported = vars(benchmark)
-    assert imported["fixture"] is scarf_benchmark.fixture
+    assert imported["two_cluster_population"] is two_cluster_population
     assert imported["held_out_nll"] is scarf_benchmark.held_out_nll
     assert imported["unpretrained"] is scarf_benchmark.unpretrained
-    world = scarf_benchmark.fixture(3)
-    assert world.base == 90_000 + 300
+    world = benchmark.fixture(3)
+    assert world.base == 190_000 + 300
     assert world.initial_state_seed == world.base + 6
     assert world.run_seed == world.base + 10_000
-    expected = two_cluster_population(1_024, seed=world.base + 1, row_offset=0)
+    expected = two_cluster_population(
+        16_384, seed=world.base + 1, row_offset=0, noise=0.2
+    )
     assert torch.equal(world.train.batch.x, expected.batch.x)
-    held_out = two_cluster_population(2_048, seed=world.base + 2, row_offset=10_000)
+    assert torch.equal(world.train.batch.t, expected.batch.t)
+    held_out = two_cluster_population(
+        2_048, seed=world.base + 2, row_offset=100_000, noise=0.2
+    )
     assert torch.equal(world.test.batch.x, held_out.batch.x)
-    assert torch.equal(world.test.batch.row_id, held_out.batch.row_id)
+    assert int(world.train.batch.row_id.max()) < int(world.test.batch.row_id.min())
+    # The noise shrinks only the signal columns' deviations from their centres:
+    # the same seed at the default noise differs there and nowhere else.
+    default = two_cluster_population(16_384, seed=world.base + 1, row_offset=0)
+    assert not torch.equal(world.train.batch.x[:, :4], default.batch.x[:, :4])
+    assert torch.equal(world.train.batch.x[:, 4:], default.batch.x[:, 4:])
+    centred = world.train.batch.x[:, :4].abs() - 0.45
+    assert float(centred.std()) == pytest.approx(0.2, rel=0.05)
+
+
+def test_the_bayes_reference_sits_where_section_6_1_puts_it() -> None:
+    """The dependent-block optimum near 0.49, the independent one near 1.49."""
+    world = benchmark.fixture(0)
+    population = build_population(world.data, DATA_POLICY, seed=0)
+    corrupted, clean = benchmark._held_out_corruption(world, population)
+    optimum = benchmark.bayes_pretext(corrupted, clean, population)
+    assert 0.40 < optimum["dependent_ratio"] < 0.60
+    assert 1.30 < optimum["independent_ratio"] < 1.70
+    assert 0.65 < optimum["mask_auroc"] < 0.75
 
 
 def test_auroc_matches_the_pairwise_definition_with_ties() -> None:
@@ -179,7 +202,7 @@ def test_the_recorded_evidence_recomputes_and_still_describes_the_card() -> None
     spec = load_reproduction_spec(CARD, recipe="vime")
     assert result["spec_digest"] == spec.digest
     assert result["replicates"] == spec.seed_count == 10
-    assert card_status(CARD.read_text()) == result["status"] == "deviating"
+    assert card_status(CARD.read_text()) == result["status"] == "reproduced"
     decided = []
     for metric in result["metrics"]:
         values = metric["values"]
@@ -201,7 +224,7 @@ def test_the_recorded_evidence_recomputes_and_still_describes_the_card() -> None
         m["name"]: m["passed"] for m in result["metrics"] if m["passed"] is not None
     }
     assert required == {
-        "dependent_block_reconstruction_ratio": False,
+        "dependent_block_reconstruction_ratio": True,
         "independent_block_reconstruction_ratio": True,
         "held_out_outcome_NLL_ratio": True,
     }

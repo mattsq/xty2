@@ -1,6 +1,6 @@
 # Recipe spec card: vime
 
-**Status:** `deviating`
+**Status:** `reproduced`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
@@ -212,7 +212,7 @@ optimisation:
     joint_fit: 128                                # deviation 4: SCARF's stage, adopted unchanged
   labelled_unlabelled_ratio: n/a                  # UniformSampler enforces no quota; pretrain reads no labels
   total_steps_or_epochs:
-    pretrain: 80                                  # optimiser steps = 10 epochs (main_vime.py) x 1024 rows / 128; deviation 3
+    pretrain: 1280                                # optimiser steps = 10 epochs (main_vime.py) x 16384 rows / 128; deviation 3
     joint_fit: 3000                               # deviation 4
 
 architecture:
@@ -256,7 +256,7 @@ data:
   standardisation: x: minmax fitted on 'train'    # section 5: "Min-max scaler to normalize the data between 0 and 1"
   outcome_scaling: y: zscore fitted on 'train'    # project-local, SCARF section 6.1 unchanged
   treatment_encoding: n/a                         # XTYBatch contract supplies integer classes 0..K-1
-  split_protocol: scarf.md section 6.1 fixture unchanged; training rows are assignment 'train'
+  split_protocol: vime.md section 6.1 fixture; training rows are assignment 'train'
   missingness_mechanism: treatment MCAR to a budget of 40 labelled rows, keyed by row_id  # scarf.md section 6.1
 ```
 
@@ -266,7 +266,7 @@ data:
 |---|---|---|---|---|---|
 | 1 | `judgement` | — | Fit the reviewed xty2 causal stack (outcome NLL, treatment NLL, exact marginalisation over missing `t`) on the frozen encoder, instead of the reference two-layer softmax MLP (`supervised_models.py:82–142`). | The project-local question is whether the representation helps the treatment-scarce XTY problem, as for `scarf.md` §5.1. The encoder stays frozen, which is what `main_vime.py` does. | No published number applies. The §6 comparison is internal and paired. |
 | 2 | `judgement` | — | Draw a fresh mask and fresh marginal replacements for every batch at every step, rather than corrupting the table once before `model.fit` as the reference code does. | Eq. 4 is an expectation over `m ~ p_m` and `x̃ ~ g_m(x, m)` for each `x`. A single fixed draw is a finite-sample approximation of it that the paper does not describe. Fresh draws are also what an xty2 view does by construction. The fixed-draw variant is an ablation in §6, not the default. | Fresh draws give the encoder more distinct corruptions per row over 10 epochs (10 instead of 1). The direction on the §6 metric is not predicted. |
-| 3 | `judgement` | — | 10 epochs are expressed as 80 optimiser steps drawn by `UniformSampler(batch_size=128)`: each step is a fresh without-replacement batch, not one pass of a shuffled epoch. | The paper does not name epoch semantics; Keras `fit` supplies them. The step count matches `main_vime.py` exactly on 1,024 rows. Every card here fixes a step budget, and both §6 arms share the stream. | Rows are visited 10 times in expectation instead of exactly 10 times. Expected to be small; not measured. |
+| 3 | `judgement` | — | 10 epochs are expressed as 1,280 optimiser steps drawn by `UniformSampler(batch_size=128)`: each step is a fresh without-replacement batch, not one pass of a shuffled epoch. | The paper does not name epoch semantics; Keras `fit` supplies them. The step count matches `main_vime.py` exactly on the §6.1 fixture's 16,384 rows. Every card here fixes a step budget, and both §6 arms share the stream. | Rows are visited 10 times in expectation instead of exactly 10 times. Expected to be small; not measured. |
 | 4 | `judgement` | — | `joint_fit` is SCARF's stage unchanged (batch 128, 3,000 steps, Adam at 0.001), apart from the frozen encoder. The reference MLP uses batch 100 and up to 100 epochs with early stopping (patience 50) on a 10% validation split. | Adopting SCARF's §6.1 protocol unchanged lets §6 import its module and compare against its arms on the same stream. Adam at 0.001 agrees with the reference downstream optimiser. Early stopping is the `early-stopping` ledger item, and a fixed budget is what we would choose here even if it existed (`scarf.md` §5.4 makes the same call). | Downstream numbers are a property of this stage, not of VIME. Only the paired ratio in §6 is interpreted. |
 | 5 | `judgement` | — | `FeatureReconstruction` and `MaskEstimationBCE` refuse schemas with categorical or ordinal features, rather than switching Eq. 6 to cross-entropy for them. | The §6 fixture is all-continuous, so the categorical branch cannot affect any result this card reports. The proposal's first experiment also asks for an all-continuous fixture. Refusing is honest; a silent squared error on class codes would not be. | None on §6. A card on a mixed schema must implement the categorical branch first. |
 | 6 | `judgement` | — | Corruption is restricted to columns the schema marks `mutable`, and `d` in Eqs. 5–6 still counts every feature. | `FeatureSpec.mutable=False` is absolute in xty2 (`DESIGN.md` §5). An immutable column is then never masked, so its `m_j` is always 0 and its reconstruction is always an identity copy, which is what Eqs. 5–6 give when the mask never selects it. | None on §6: every fixture column is mutable. |
@@ -284,10 +284,6 @@ data:
 | `minmax` in `Standardisation`, fitted on the training assignment with row-id provenance | fidelity-bearing, reversible | `vime` | — | Section 5, and the sigmoid `s_r` assumes targets in `[0, 1]`. |
 | `glorot_uniform, bias=0` initialisation option for `MLPEncoder` and the new heads | fidelity-bearing, reversible | `vime` | — | Keras `Dense` default. The paper names none, so the reference code is the source. |
 
-### Tier 2 outcome
-
-On 2026-09-26, commit `68a342575676` produced a `deviating` result: This project-local mechanism target asks whether VIME-self's published pretext task (Eqs. 3-6, the reference script's p_m, alpha, widths, optimiser and ten epochs) learns conditional structure where the fixture has some and none where it has none, and whether the frozen pretrained encoder leaves the causal outcome fit no worse than a frozen untrained one. Pretext ratios read the diagnostic heads immediately after pretraining. The fixed-draw, mask-only and reconstruction-only arms are ablations, reported and not gated. No number from Yoon et al. is reproduced. Failed target(s): dependent_block_reconstruction_ratio was 1.12883 +/- 0.0469 against mean + stderr < 0.95.
-
 ## 6. Reproduction target
 
 A mechanism target. It asks whether the published pretext task learns
@@ -300,45 +296,76 @@ trained reconstruction head and contributes only to the downstream comparison.
 
 ```yaml
 reproduction:
-  dataset: scarf.md section 6.1 fixture (fixmatch.md 6.1 generator, 6 features, K=2), imported unchanged
+  dataset: fixmatch.md 6.1 two-cluster generator (6 features, K=2) with within-cluster noise 0.2, specified in 6.1
   variant: paired VIME pretraining against an untrained encoder with the same initialisation, both frozen under the identical joint_fit stage, same seeds and same batches
-  split: 1024 train rows with 40 observed treatments, 2048 held-out rows with every treatment observed
-  metric: held-out reconstruction MSE on corrupted cells of the dependent block x0..x3, as a ratio to imputing the training column mean; the same ratio on the independent block x4..x5 as a leakage canary; held-out outcome NLL ratio as an adaptation guardrail; mask-estimation AUROC and treatment NLL ratio are informational
+  split: 16384 train rows with 40 observed treatments, 2048 held-out rows with every treatment observed
+  metric: held-out reconstruction MSE on corrupted cells of the dependent block x0..x3, as a ratio to imputing the training column mean; the same ratio on the independent block x4..x5 as a leakage canary; held-out outcome NLL ratio as an adaptation guardrail; mask-estimation AUROC, treatment NLL ratio and the Bayes-optimal Eq. 6 predictor's ratios are informational
   published: none - no published number applies to this adaptation
   published_source: n/a
-  tolerance: dependent-block ratio < 0.95 in mean; independent-block ratio >= 0.98 in mean; held-out outcome NLL within 1.05x of the untrained-encoder arm
+  tolerance: dependent-block ratio < 0.75 in mean; independent-block ratio >= 0.98 in mean; held-out outcome NLL within 1.05x of the untrained-encoder arm
   seeds: 10
   report: mean_and_stderr
 ```
 
 ### 6.1 Fixed DGP
 
-Adopt `scarf.md` §6.1 unchanged, and import its benchmark module's fixture
-and seed streams (`xty2/evaluation/benchmarks/scarf.py`) rather than
-transcribing them. Feature min-max scaling replaces SCARF's z-score and is
-fitted on the complete training population. Held-out rows take the same
+`fixmatch.md` §6.1's two-cluster generator
+(`xty2/evaluation/benchmarks/common.py::two_cluster_population`), imported
+rather than transcribed, with two declared changes:
+
+- **Within-cluster noise 0.2 instead of 0.6** on the signal columns `x0..x3`
+  (`noise=0.2`). The cluster centres stay at `±0.45`, the assignment stays
+  0.02/0.98, and the outcome equation is unchanged.
+- **16,384 training rows instead of 1,024.** Ten epochs at batch 128 is then
+  1,280 optimiser steps (§4, deviation 3). VIME is a method for abundant
+  unlabelled data; the paper's datasets hold tens of thousands of rows, so a
+  larger pool is the paper's regime rather than a concession. The label budget
+  stays at 40 observed treatments.
+
+2,048 held-out rows, every treatment observed, `row_id` from 100,000.
+Replicate `i` draws from seed base `190,000 + 100 i`: `+1` training rows, `+2`
+held-out rows, `+6` initial state, `+7` the held-out corruption draw, `+8`
+the fixed-draw ablation's table, `+10,000` the program. Feature min-max
+scaling is fitted on the training population, and held-out rows take the same
 fitted transform, never a refitted one.
 
 The fixture suits this question because it contains both kinds of column.
-`x0..x3` share the cluster indicator `c`, so a masked cell there is
+`x0..x3` share the cluster indicator `c`, so a corrupted cell there is
 predictable from the visible cells of the same block. `x4, x5` are
 independent noise, so no function of the visible cells can beat the column
 mean for them. The corrupted-cell MSE is measured on held-out rows under one
 fixed evaluation draw of the corruption per replicate, and the baseline
 predicts the training column mean on the same cells.
 
-- **Dependent-block ratio < 0.95.** With `c` known exactly, the
-  best achievable ratio for one masked cell of `x0..x3` is
-  `0.36 / (0.45² + 0.36) = 0.64`. Inferring `c` from the visible cells
-  raises that bound. `0.95` asks only that the pretext task learned some of
-  the dependence. It is a prospective bound and has not been measured.
-- **Independent-block ratio >= 0.98.** An average materially below 1 on `x4, x5`
-  warrants a leakage and evaluation-protocol audit. Finite test draws can
-  also yield a ratio below 1 by chance; this gate alone does not prove leakage.
+The reference point for every bound is the Bayes-optimal Eq. 6 predictor, not
+a predictor that is told which cells were masked. Eq. 6 scores `s_r` on every
+cell, and 70% of the cells are visible copies, so its minimiser is the
+posterior mean `E[x_j | x̃]`: a copy weighted by how likely the cell is clean,
+plus an imputation weighted by how likely it was replaced. It is exact on this
+fixture (`bayes_pretext` in the benchmark) and is reported beside the model
+on the same draw.
+
+- **Dependent-block ratio < 0.75.** The column-mean baseline scores 1 and the
+  Bayes-optimal predictor about 0.49, so `0.75` is the midpoint: the pretext
+  task must capture at least half of the learnable reduction. An encoder that
+  learned nothing sits at or above 1. Set from an eight-seed pilot on the
+  disjoint stream `700,000 + 100 i` (mean `0.565 ± 0.013`, maximum `0.632`),
+  before the Tier 2 stream was run.
+- **Independent-block ratio >= 0.98.** Here the replacement comes from the
+  column's own marginal and cannot be detected, so the Bayes-optimal ratio is
+  `1 + (1 − p_m)² = 1.49`. A model can approach 1 by predicting the mean, but
+  can fall below it only with information about the clean value. That is
+  leakage, which is what the canary exists to catch. Finite test draws can
+  also yield a small dip by chance, so a miss warrants an audit rather than
+  proving leakage. Pilot minimum `1.020`.
 - **Outcome NLL guardrail.** A frozen encoder of width 6 is a bottleneck,
   and a frozen random ReLU layer may lose information. The guardrail asks
   only that VIME pretraining does not make the frozen-encoder fit worse than
-  the frozen-random one by more than 5%.
+  the frozen-random one by more than 5%. Pilot `0.974 ± 0.013`.
+
+Mask-estimation AUROC is informational. At the reference width `d = 6` the
+encoder learns little corruption detection on either fixture (pilot `0.52`,
+Bayes about `0.70`), and §7 keeps the reference width rather than tuning it.
 
 Ablations run in the same study and are reported, not gated: the fixed
 single-draw corruption of the reference code (deviation 2); `α = 0` (mask
@@ -348,75 +375,38 @@ held-out pretext metrics, and exclude those heads from `joint_fit`. Use the
 same fixed held-out corruption draw for all pretext arms in a replicate.
 The frozen random encoder arm is evaluated only on downstream NLL.
 
-#### Audit finding, 2026-09-26: the dependent-block bound cannot pass for Eq. 6
+#### History: the first fixture could not pass, 2026-09-26
 
-The bounds above are unchanged, and the recorded result stays `deviating`.
-This note records why the dependent-block bound and the independent-block
-canary do not test the mechanism they name. A reviewer then decides on the
-replacement instead of a rerun inheriting the same instrument. The
-[audit](../experiments/2026-09-26-vime-tier2-audit.md) carries the evidence.
-
-The `0.64` bound in the first bullet above assumes a predictor that knows
-which cell was masked. Eq. 6's `s_r` does not know this. It reads `x̃` and is
-scored on every cell, and 70% of the cells are visible copies. The minimiser
-of Eq. 6 is therefore the posterior mean `E[x_j | x̃]`, a mixture of copying
-`x̃_j` and imputing it. On the corrupted cells alone, this predictor is worse
-than the column mean:
-
-- **Independent block, closed form.** A replacement drawn from the column's
-  own marginal cannot be detected, so `E[x_j | x̃] = (1 − p_m) x̃_j + p_m μ_j`.
-  Its corrupted-cell ratio is `1 + (1 − p_m)² = 1.49` at `p_m = 0.3`. The
-  `>= 0.98` canary therefore passes for the Bayes-optimal model and for the
-  identity copy (ratio 2) alike. It cannot detect leakage.
-- **Dependent block, exact.** Computed from the fixture's generating process
-  on this section's own held-out draw, the Bayes-optimal ratio is
-  `1.247 ± 0.007` over the ten replicates. No model trained on the published
-  objective can meet `< 0.95`. Its mask AUROC is `0.588 ± 0.002`.
-
-The implementation was audited before the bound. An independent
-plain-PyTorch transcription of `vime_self.py` shows the same pattern as the
-xty2 recipe across step budgets. It separates two further effects that the
-recorded run combines:
-
-- **Budget.** At the faithful 80 steps, terminal `l_m` is `0.664`, above the
-  `0.611` entropy of a Bernoulli(0.3) label. The mask head has not yet learned
-  the base rate, and the pretext ratios mostly reflect the initialisation (the
-  per-seed spread is wide).
-- **Width.** At the reference width `d = 6`, even 16,000 steps leave mask AUROC
-  at `0.50` in both implementations. At width 64 the plain transcription
-  reaches `0.57`, near the Bayes value. On this fixture, detecting a corrupted
-  cell needs more capacity than one ReLU layer of width 6.
-
-Proposed amendments, for review and not implemented here:
-
-1. Replace the dependent-block bound and the independent canary with a
-   measurement that Eq. 6 can pass or fail. One option is the held-out Eq. 6
-   loss as a fraction of the way from the identity copy to the Bayes-optimal
-   predictor, both computed on the same draw. The Bayes-optimal predictor is
-   analytic on this fixture.
-2. Decide whether the question is about the reference script's fixed width
-   and ten epochs, or about the method under the supplement §5 selection
-   ranges. If the latter, record the chosen width and step budget as §5
-   deviations before any rerun.
+The first Tier 2 run (ledger row 1) used `scarf.md` §6.1's fixture unchanged:
+noise 0.6, 1,024 training rows, 80 pretraining steps and a `< 0.95` bound. It
+failed that bound on every seed (`1.129 ± 0.047`). An audit found the
+implementation faithful and the fixture impossible. On that draw, the
+Bayes-optimal Eq. 6 predictor itself scored `1.247 ± 0.007`, because with
+noise 0.6 a replaced cell is barely distinguishable from a kept one. The
+earlier `0.64` estimate had assumed a predictor told which cells were
+masked. Eighty steps also left `l_m` above the base-rate entropy. The
+repository owner directed that the fixture be changed rather than the method.
+The [audit](../experiments/2026-09-26-vime-tier2-audit.md) records both runs.
 
 ### 6.2 Result ledger
 
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
 | 2026-09-26 | `68a342575676` | dependent_block_reconstruction_ratio<br>independent_block_reconstruction_ratio<br>held_out_outcome_NLL_ratio | 1.12883 +/- 0.0469<br>1.23213 +/- 0.0942<br>1.00376 +/- 0.00858 | no |
+| 2026-09-26 | `46d3e4c7dc53` | dependent_block_reconstruction_ratio<br>independent_block_reconstruction_ratio<br>held_out_outcome_NLL_ratio | 0.578528 +/- 0.00906<br>1.06701 +/- 0.00692<br>0.984481 +/- 0.0096 | yes |
 
 ## 7. Unknowns
 
 | Unspecified in paper | Our choice | Basis |
 |---|---|---|
 | Whether `x̄_j` is drawn with replacement from the marginal, or by permuting the column. | I.i.d. draws with replacement from the training population's column, per `(row, feature)` cell. | Eq. 3 defines `x̄_j` as a sample from `p̂_{X_j}`. `pretext_generator` permutes each column over the whole table, which is without-replacement sampling over one pass. The two agree in distribution per cell. |
-| Whether the mask label is the drawn `m` or the cells that actually changed. | `1[x != x̃]`, computed from `X_RAW` at both realisations. | `pretext_generator` returns `m_new = 1 * (x != x_tilde)`, and that is what `vime_self.py` trains on. Eq. 5 writes `m`. On a continuous fixture they differ only when a donor equals the row's own value (probability about `1/1024` per masked cell), so the reference code's definition is kept and no new batch field is needed to export `m`. |
+| Whether the mask label is the drawn `m` or the cells that actually changed. | `1[x != x̃]`, computed from `X_RAW` at both realisations. | `pretext_generator` returns `m_new = 1 * (x != x_tilde)`, and that is what `vime_self.py` trains on. Eq. 5 writes `m`. On a continuous fixture they differ only when a donor equals the row's own value (probability `1/N` per masked cell, about `6e-5` on the §6.1 fixture), so the reference code's definition is kept and no new batch field is needed to export `m`. |
 | `p_m` and `α`. | `p_m = 0.3`, `α = 2.0`. | `main_vime.py` argparse defaults. Supplement §6 reports sensitivity ranges and validation-based selection, not a universal recommended pair. These values are the reference script's defaults; tuning is deliberately omitted from this fixed-fixture protocol. |
 | Architecture of `e`, `s_m`, `s_r`. | One ReLU layer of width `d`; one sigmoid affine layer each. | `vime_self.py`. Supplement §5 describes validation-based selection of widths `{d/3, d/2, d, 2d, 3d}` and depths `{1, 2, 3, 4, 5}` for the experiments; this card uses the fixed released script. |
 | Optimiser and its constants. | RMSprop, `lr = 0.001`, `rho = 0.9`, `eps = 1e-7`, no momentum. | `vime_self.py` `optimizer='rmsprop'` with Keras 2.3.1 defaults. |
 | Whether BCE is computed on probabilities or logits. | On logits (`binary_cross_entropy_with_logits`), with the sigmoid folded in. | Keras clips probabilities to `[1e-7, 1 − 1e-7]` before the log. The two agree except where the sigmoid saturates beyond that clip, where Keras's gradient vanishes and ours does not. |
 | Initialisation. | Glorot-uniform kernels, zero biases. | Keras `Dense` defaults in the reference code. |
-| Pretraining length in steps. | 80 steps. | 10 epochs (`main_vime.py`) × 1,024 rows / 128. The paper's datasets are far larger, so 10 epochs there is many more steps. 80 steps may be too few to learn the dependence on this fixture. That is the faithful value, and §6 measures it rather than assuming it. |
+| Pretraining length in steps. | 1,280 steps. | 10 epochs (`main_vime.py`) × 16,384 rows / 128. The epoch count is the reference script's, so the step count follows the pool size. On the first fixture's 1,024 rows it was 80, which left `l_m` above the base-rate entropy (§6.1 history); §6.1 sizes the pool as the paper's datasets are sized. |
 | Whether the downstream encoder is frozen or fine-tuned for VIME-self. | Frozen. | `main_vime.py` fits the MLP on `vime_self_encoder.predict(x_train)`. The paper's text says only that `e` "is the only part we will utilize". |
 | Pretext diagnostics after the heads are discarded. | Score immediately after pretraining and before constructing the downstream stage; keep diagnostic outputs out of `joint_fit`. | Supplement §3 reports mask AUROC and reconstruction MSE. Neither metric can be computed from the retained encoder alone. |
 
@@ -427,3 +417,4 @@ Proposed amendments, for review and not implemented here:
 | Card reviewed (status → `reviewed`) | Codex | 2026-09-26 |
 | Plan diffed against §3.2 and §4 | Codex | 2026-09-26 |
 | Implementation audited through a two-stage fit | Codex | 2026-09-26 |
+| §6.1 fixture, §6 bound and §4 pretraining budget amended after the first fixture proved unpassable | Repository owner directed the change; implemented and piloted on a disjoint seed stream before the Tier 2 rerun | 2026-09-26 |

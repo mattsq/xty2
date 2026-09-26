@@ -228,6 +228,9 @@ The alternative — holding the centres' *radius* fixed — crowds the simplex a
 SIGNAL_COLUMNS = 4
 """Columns 0-3 carry the cluster signal; 4-5 are outcome-only covariates."""
 
+CLUSTER_NOISE = 0.6
+"""Within-cluster standard deviation of each signal column in `fixmatch.md` §6.1."""
+
 _HADAMARD_4 = (
     (1.0, 1.0, 1.0, 1.0),
     (1.0, -1.0, 1.0, -1.0),
@@ -376,6 +379,7 @@ def cluster_population(
     effects: Sequence[float] | None = None,
     groups: Sequence[int] | None = None,
     within: float = 1.0,
+    noise: float = CLUSTER_NOISE,
 ) -> ClusterPopulation:
     """The `K`-cluster generalisation of `fixmatch.md` §6.1's DGP.
 
@@ -409,6 +413,10 @@ def cluster_population(
             `BACKLOG.md` §15.9 both put dose-response outside v1, and a
             multiplier that rose with `t` would be one wearing a categorical
             costume. A card at `K > 2` states a non-monotone tuple.
+        noise: The within-cluster standard deviation of the signal columns.
+            The default is `fixmatch.md` §6.1's 0.6. A smaller value makes
+            the signal columns more predictable from one another without
+            changing any draw, which is what `vime.md` §6.1 needs from them.
 
     Every treatment is observed. The label budget is the *recipe's* declaration
     (`data.missingness_mechanism`), so a benchmark that masked rows here would
@@ -440,6 +448,8 @@ def cluster_population(
         )
     if not 0.0 < low < 1.0:
         raise ValueError(f"low is a probability mass in (0, 1), got {low}")
+    if not noise > 0.0:
+        raise ValueError(f"noise is a standard deviation, got {noise}")
 
     generator = torch.Generator().manual_seed(seed)
     u_c = torch.rand(rows, generator=generator)
@@ -451,7 +461,7 @@ def cluster_population(
     x = epsilon_x.clone()
     x[:, :SIGNAL_COLUMNS] = (
         cluster_centres(classes, groups=groups, within=within)[cluster]
-        + 0.6 * epsilon_x[:, :SIGNAL_COLUMNS]
+        + noise * epsilon_x[:, :SIGNAL_COLUMNS]
     )
     assignment = torch.full((rows, classes), low / (classes - 1))
     assignment[torch.arange(rows), cluster] = 1.0 - low
@@ -478,6 +488,7 @@ def two_cluster_population(
     seed: int,
     row_offset: int,
     low: float = SEPARATED,
+    noise: float = CLUSTER_NOISE,
 ) -> ClusterPopulation:
     """The DGP of `fixmatch.md` §6.1, which `scarf.md` §6.1 adopts unchanged.
 
@@ -500,7 +511,7 @@ def two_cluster_population(
     would be applying a policy twice.
     """
     return cluster_population(
-        rows, seed=seed, row_offset=row_offset, low=low, classes=2
+        rows, seed=seed, row_offset=row_offset, low=low, classes=2, noise=noise
     )
 
 

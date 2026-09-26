@@ -1,10 +1,11 @@
 """VIME-self's paired mechanism benchmark from card section 6.
 
-Card section 6.1 adopts SCARF's fixture and seed streams unchanged, so this
-module imports them (`xty2.evaluation.benchmarks.scarf`) rather than retyping
-them: the populations, the initial-state seed and the program seed are SCARF's
-for the same replicate index. Min-max feature scaling is the recipe's own
-`DataSpec` declaration, applied by the loader and carried to held-out rows
+Card section 6.1 declares its own fixture: `fixmatch.md` §6.1's two-cluster
+generator with within-cluster noise 0.2 instead of 0.6, a 16,384-row training
+pool, and its own seed stream. The 2026-09-26 audit found that on the SCARF
+fixture the Bayes-optimal Eq. 6 predictor misses the card's bound, so the
+fixture, not the method, was changed. Min-max feature scaling is the recipe's
+own `DataSpec` declaration, applied by the loader and carried to held-out rows
 through the fitted `TrainingPopulation`, never refitted here.
 
 Two kinds of measurement, and the card keeps them apart:
@@ -21,6 +22,7 @@ Two kinds of measurement, and the card keeps them apart:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -39,15 +41,18 @@ from xty2.core import (
     compile,
 )
 from xty2.evaluation.benchmarks.common import (
+    CLUSTER_SIGNAL,
     SIGNAL_COLUMNS,
     column,
     configure_worker,
+    continuous_schema,
     on_the_training_scale,
     parallel_replicates,
+    training_dataset,
+    two_cluster_population,
 )
 from xty2.evaluation.benchmarks.scarf import (
     Fixture,
-    fixture,
     held_out_nll,
     unpretrained,
 )
@@ -60,6 +65,19 @@ from xty2.recipes import vime
 from xty2.recipes.vime import MASK_PROBABILITY
 from xty2.training import STREAM_STRIDE, run_program
 from xty2.views import BernoulliMarginalCorruption
+
+TRAIN_ROWS = 16_384
+"""Card §6.1: the unlabelled pool. Ten epochs over it is `VIME_PRETRAIN_STEPS`."""
+
+TEST_ROWS = 2_048
+TEST_ROW_OFFSET = 100_000
+"""Held-out `row_id`s start here, clear of every training row."""
+
+CLUSTER_NOISE = 0.2
+"""Card §6.1: within-cluster standard deviation of `x0..x3`."""
+
+BASE_SEED = 190_000
+"""Card §6.1: replicate `i` draws from `BASE_SEED + 100 * i`."""
 
 EVALUATION_CORRUPTION_OFFSET = 7
 """Replicate `base + 7` seeds the one held-out corruption draw (card §6.1)."""
@@ -75,8 +93,8 @@ INDEPENDENT_BLOCK = tuple(range(SIGNAL_COLUMNS, 6))
 
 PROTOCOL: dict[str, str] = {
     "dataset": (
-        "scarf.md section 6.1 fixture (fixmatch.md 6.1 generator, 6 "
-        "features, K=2), imported unchanged"
+        "fixmatch.md 6.1 two-cluster generator (6 features, K=2) with "
+        "within-cluster noise 0.2, specified in 6.1"
     ),
     "variant": (
         "paired VIME pretraining against an untrained encoder with the "
@@ -84,7 +102,7 @@ PROTOCOL: dict[str, str] = {
         "stage, same seeds and same batches"
     ),
     "split": (
-        "1024 train rows with 40 observed treatments, 2048 held-out "
+        "16384 train rows with 40 observed treatments, 2048 held-out "
         "rows with every treatment observed"
     ),
     "metric": (
@@ -92,12 +110,12 @@ PROTOCOL: dict[str, str] = {
         "dependent block x0..x3, as a ratio to imputing the training "
         "column mean; the same ratio on the independent block x4..x5 as "
         "a leakage canary; held-out outcome NLL ratio as an adaptation "
-        "guardrail; mask-estimation AUROC and treatment NLL ratio are "
-        "informational"
+        "guardrail; mask-estimation AUROC, treatment NLL ratio and the "
+        "Bayes-optimal Eq. 6 predictor's ratios are informational"
     ),
     "published": "none - no published number applies to this adaptation",
     "tolerance": (
-        "dependent-block ratio < 0.95 in mean; independent-block ratio "
+        "dependent-block ratio < 0.75 in mean; independent-block ratio "
         ">= 0.98 in mean; held-out outcome NLL within 1.05x of the "
         "untrained-encoder arm"
     ),
@@ -132,7 +150,7 @@ def run(
             "dependent_block_reconstruction_ratio",
             column(rows, "dependent_ratio"),
             "<",
-            0.95,
+            0.75,
         ),
         MetricResult.lower_bound(
             "independent_block_reconstruction_ratio",
@@ -153,6 +171,9 @@ def run(
         ("pretrained_outcome_NLL", "pretrained_outcome_nll", "nat/row"),
         ("untrained_outcome_NLL", "untrained_outcome_nll", "nat/row"),
         ("held_out_corrupted_cell_rate", "corrupted_rate", ""),
+        ("bayes_dependent_block_ratio", "bayes_dependent_ratio", ""),
+        ("bayes_independent_block_ratio", "bayes_independent_ratio", ""),
+        ("bayes_mask_AUROC", "bayes_mask_auroc", ""),
         ("terminal_mask_estimation_BCE", "terminal_mask_bce", ""),
         ("terminal_feature_reconstruction", "terminal_reconstruction", ""),
         ("fixed_draw_dependent_block_ratio", "fixed_draw_dependent_ratio", ""),
@@ -189,7 +210,9 @@ def run(
             "structure where the fixture has some and none where it has none, "
             "and whether the frozen pretrained encoder leaves the causal "
             "outcome fit no worse than a frozen untrained one. Pretext ratios "
-            "read the diagnostic heads immediately after pretraining. The "
+            "read the diagnostic heads immediately after pretraining; the "
+            "Bayes-optimal Eq. 6 ratios on the same draw are the reference "
+            "the dependent-block bound is set against. The "
             "fixed-draw, mask-only and reconstruction-only arms are ablations, "
             "reported and not gated. No number from Yoon et al. is reproduced."
         ),
@@ -251,14 +274,43 @@ class FixedDrawMarginalCorruption:
         return f"FixedDrawMarginalCorruption(p={float(self.p)!r}, seed={self.seed})"
 
 
-def replicate(index: int) -> dict[str, float]:
-    """One paired replicate: four pretext arms and two downstream arms."""
-    configure_worker()
-    world = fixture(index)
+def fixture(index: int, *, base_seed: int = BASE_SEED) -> Fixture:
+    """Replicate `index` of card §6.1's fixture.
 
+    The seed offsets within a replicate (`+1` training rows, `+2` held-out
+    rows, `+6` initial state, `+10_000` program) are SCARF's pattern, kept by
+    reusing its `Fixture`. `base_seed` exists for the pilot stream, which must
+    not overlap the Tier 2 stream it set bounds for.
+    """
+    base = base_seed + 100 * index
+    schema = continuous_schema(6)
+    train = two_cluster_population(
+        TRAIN_ROWS, seed=base + 1, row_offset=0, noise=CLUSTER_NOISE
+    )
+    test = two_cluster_population(
+        TEST_ROWS, seed=base + 2, row_offset=TEST_ROW_OFFSET, noise=CLUSTER_NOISE
+    )
+    return Fixture(
+        base=base,
+        schema=schema,
+        train=train,
+        test=test,
+        data=training_dataset(schema, train.batch),
+    )
+
+
+def replicate(index: int) -> dict[str, float]:
+    """One paired replicate of the Tier 2 stream."""
+    configure_worker()
+    return measure(fixture(index))
+
+
+def measure(world: Fixture) -> dict[str, float]:
+    """Four pretext arms and two downstream arms on one fixture draw."""
     vime_pretext, population = _pretext(world, _vime(world))
     corrupted_test, clean_test = _held_out_corruption(world, population)
     scored = _score(vime_pretext, corrupted_test, clean_test, population)
+    optimum = bayes_pretext(corrupted_test, clean_test, population)
     fixed = _score(
         _pretext_checked(world, _fixed_draw(_vime(world), world), population),
         corrupted_test,
@@ -323,6 +375,9 @@ def replicate(index: int) -> dict[str, float]:
         "independent_ratio": scored["independent_ratio"],
         "mask_auroc": scored["mask_auroc"],
         "corrupted_rate": scored["corrupted_rate"],
+        "bayes_dependent_ratio": optimum["dependent_ratio"],
+        "bayes_independent_ratio": optimum["independent_ratio"],
+        "bayes_mask_auroc": optimum["mask_auroc"],
         "outcome_ratio": pretrained["outcome_nll"] / untrained["outcome_nll"],
         "treatment_ratio": pretrained["treatment_nll"] / untrained["treatment_nll"],
         "pretrained_treatment_nll": pretrained["treatment_nll"],
@@ -415,6 +470,73 @@ def _held_out_corruption(
         population=population,
     )
     return corrupted, clean
+
+
+def bayes_pretext(
+    corrupted: XTYBatch,
+    clean: XTYBatch,
+    population: TrainingPopulation,
+) -> dict[str, float]:
+    """The Bayes-optimal Eq. 6 and Eq. 5 predictors on one held-out draw.
+
+    Eq. 6 is scored on every cell, so its minimiser is the posterior mean
+    `E[x_j | x~]`: a copy of `x~_j` weighted by how likely the cell is clean,
+    plus an imputation weighted by how likely it is corrupted. On this
+    fixture it is exact. Given the cluster, each cell is independently kept
+    (`N(centre, noise^2)`, weight `1 - p_m`) or replaced by the column's
+    marginal (weight `p_m`); an independent column's replacement is drawn from
+    its own marginal and cannot be detected, so there `E[x_j | x~] =
+    (1 - p_m) x~_j + p_m mu_j`. The marginal is the generating one, not the
+    training table's, which differs from it only by sampling error.
+
+    Oracle knowledge of the DGP, used only as a reference point for the
+    card's bound; no arm reads it.
+    """
+    location = population.statistics["x_location"].double()
+    scale = population.statistics["x_scale"].double()
+    observed = corrupted.x.double() * scale + location
+    truth = clean.x.double() * scale + location
+    changed = clean.x != corrupted.x
+    p = float(MASK_PROBABILITY)
+    signal = observed[:, : len(DEPENDENT_BLOCK)]
+    centres = (-CLUSTER_SIGNAL, CLUSTER_SIGNAL)
+
+    def density(value: Tensor, centre: float) -> Tensor:
+        z = (value - centre) / CLUSTER_NOISE
+        return torch.exp(-0.5 * z.square()) / (CLUSTER_NOISE * math.sqrt(2 * math.pi))
+
+    marginal = 0.5 * (density(signal, centres[0]) + density(signal, centres[1]))
+    log_likelihood, kept = [], []
+    for centre in centres:
+        keep = (1 - p) * density(signal, centre)
+        cell = keep + p * marginal
+        log_likelihood.append(cell.log().sum(dim=1))
+        kept.append(keep / cell)
+    posterior = torch.softmax(torch.stack(log_likelihood, dim=1), dim=1)
+    signal_mean = torch.zeros_like(signal)
+    signal_changed = torch.zeros_like(signal)
+    for index, centre in enumerate(centres):
+        weight = posterior[:, index : index + 1]
+        signal_mean += weight * (kept[index] * signal + (1 - kept[index]) * centre)
+        signal_changed += weight * (1 - kept[index])
+    # The independent columns are standard normal in the generator: mean 0.
+    noise_columns = observed[:, len(DEPENDENT_BLOCK) :]
+    prediction = torch.cat([signal_mean, (1 - p) * noise_columns], dim=1)
+    changed_score = torch.cat(
+        [signal_changed, torch.full_like(noise_columns, p)], dim=1
+    )
+    column_mean = (population.rows.x.double().mean(dim=0) * scale + location).expand_as(
+        truth
+    )
+    return {
+        "dependent_ratio": _block_ratio(
+            prediction, column_mean, truth, changed, DEPENDENT_BLOCK
+        ),
+        "independent_ratio": _block_ratio(
+            prediction, column_mean, truth, changed, INDEPENDENT_BLOCK
+        ),
+        "mask_auroc": auroc(changed_score.flatten(), changed.flatten()),
+    }
 
 
 def _score(

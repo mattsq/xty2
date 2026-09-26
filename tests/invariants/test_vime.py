@@ -162,7 +162,7 @@ def test_the_recipe_plans_two_stages_and_the_passes_each_needs() -> None:
     assert [stage.name for stage in run.stages] == ["pretrain", "joint_fit"]
 
     pretrain = run.stage("pretrain")
-    assert pretrain.steps == 80
+    assert pretrain.steps == 1_280 == 10 * 16_384 // 128
     assert pretrain.trainable == ("mlp_encoder", "mask_estimator", "feature_estimator")
     passes = {
         str(forward.realisation): forward.components for forward in pretrain.passes

@@ -61,8 +61,8 @@ ALPHA = 2.0
 VIME_PRETRAIN_BATCH_SIZE = 128
 """Card §4: `main_vime.py` `vime_self_parameters['batch_size'] = 128`."""
 
-VIME_PRETRAIN_STEPS = 80
-"""Card §4 and deviation 3: 10 epochs (`main_vime.py`) x 1,024 rows / 128."""
+VIME_PRETRAIN_STEPS = 1_280
+"""Card §4 and deviation 3: 10 epochs (`main_vime.py`) x 16,384 rows / 128."""
 
 RMSPROP = OptimiserSpec(
     name="rmsprop",
@@ -83,7 +83,7 @@ defaults differ (`alpha=0.99`, `eps=1e-8`; card §5.1).
 
 DATA_POLICY = DataSpec(
     split=SplitSpec(
-        protocol="scarf.md section 6.1 fixture unchanged",
+        protocol="vime.md section 6.1 fixture",
         train="train",
     ),
     # Section 5: "We use Min-max scaler to normalize the data between 0 and 1",
