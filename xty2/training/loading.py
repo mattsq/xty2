@@ -145,7 +145,8 @@ def _fit(train: XTYBatch, spec: DataSpec) -> dict[str, Tensor]:
     statistics: dict[str, Tensor] = {}
     # Both fitted maps are `(v - location) / scale`, so they share the keys
     # every consumer of the statistics already applies: `minmax` is the column
-    # minimum and range, as scikit-learn's `MinMaxScaler` fits them.
+    # minimum and range, as scikit-learn's `MinMaxScaler` fits them. A
+    # constant column uses scale 1, so its training values map to zero.
     for block, values, mode in (
         ("x", train.x, spec.preprocess.features),
         ("y", train.y, spec.preprocess.outcome),
@@ -159,6 +160,14 @@ def _fit(train: XTYBatch, spec: DataSpec) -> dict[str, Tensor]:
         else:
             location = values.amin(dim=0)
             scale = values.amax(dim=0) - location
+            if not bool(torch.isfinite(location).all()) or not bool(
+                torch.isfinite(scale).all()
+            ):
+                raise TrainingError(
+                    f"the declared {what} standardisation 'minmax' needs "
+                    "finite training values"
+                )
+            scale = torch.where(scale == 0, torch.ones_like(scale), scale)
         _require_positive(scale, what, mode)
         statistics[f"{block}_location"] = location
         statistics[f"{block}_scale"] = scale

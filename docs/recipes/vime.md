@@ -370,4 +370,5 @@ The frozen random encoder arm is evaluated only on downstream NLL.
 | | Who | Date |
 |---|---|---|
 | Card reviewed (status → `reviewed`) | Codex | 2026-09-26 |
-| Plan diffed against §3.2 and §4 | | |
+| Plan diffed against §3.2 and §4 | Codex | 2026-09-26 |
+| Implementation audited through a two-stage fit | Codex | 2026-09-26 |

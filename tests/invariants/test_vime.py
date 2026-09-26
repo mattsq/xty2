@@ -46,7 +46,7 @@ from xty2.core import (
     XTYBatch,
     compile,
 )
-from xty2.core.errors import GraphError, TrainingError
+from xty2.core.errors import GraphError
 from xty2.evaluation.benchmarks.common import on_the_training_scale
 from xty2.objectives import FeatureReconstruction, MaskEstimationBCE
 from xty2.recipes import vime
@@ -879,9 +879,11 @@ def test_held_out_rows_take_the_fitted_map_and_are_not_refitted() -> None:
     assert float(scaled.x.max()) > 1.0 or float(scaled.x.min()) < 0.0
 
 
-def test_a_constant_column_cannot_be_min_max_scaled() -> None:
+def test_a_constant_column_maps_to_zero_without_division_by_zero() -> None:
     batch = _batch(20)
     constant = batch.x.clone()
     constant[:, 3] = 1.0
-    with pytest.raises(TrainingError, match="minmax"):
-        _minmax_population(replace(batch, x=constant))
+    population = _minmax_population(replace(batch, x=constant))
+    assert population.statistics["x_scale"][3] == 1.0
+    assert torch.equal(population.rows.x[:, 3], torch.zeros(20))
+    assert bool(torch.isfinite(population.rows.x).all())
