@@ -103,3 +103,67 @@ Potential intermediate variants: generate symbolic columns from real training `X
 - Specify a genuine fixed-policy tuning budget and a downstream test split that the controller and hyperparameter search never see.
 
 **Go/no-go:** advance to a framework integration proposal only if the adaptive arm improves paired downstream transfer at matched compute and the reward/task trace rules out leakage, scale selection, and representation collapse. Otherwise retain the experiment and its failure mode as evidence about the proposed reward on tabular objectives.
+
+## 8. Bounded real-`X` pilot (experimental implementation)
+
+`experiments/tabular_self_play.py` is an external, explicitly seeded driver,
+not a recipe or Tier 2 reproduction. Run
+`python -m experiments.tabular_self_play --output /tmp/self-play.json`.
+It uses six continuous columns standardized from 1,024 training rows only;
+512 disjoint test rows are never passed to the controller. Three fixed DGPs
+cover dependent, interacting and independent columns. Seeds are
+`310000 + 100*i`, initially three paired replicates. The downstream task is
+binary classification, evaluated by test BCE after a frozen L2-regularized
+logistic linear readout
+trained on the first 64 training labels. The labels never enter pretraining.
+
+The 24 fixed tasks cross six single-column targets with full, sparse, jittered
+and marginally replaced contexts. The target is zeroed and its visibility
+flag cleared in every case, after context corruption. One shared encoder and
+reconstruction head minimize target-column standardized MSE. AdamW performs
+64 learner updates, batch size 64. Every eight steps after an eight-step
+uniform warm-up, all 24 candidates receive fresh, separate probe batches.
+The primary reward takes the absolute Eq. 2 alignment with checkpoint
+`floor(step/2)` and bias-corrected AdamW moments. Logits update with a
+standardized reward, 0.2 EMA weight, and a 0.2 uniform probability mixture.
+The comparator also computes and discards the same probes, so each arm has
+the same number of gradient calls. Separate update-only cost is reported.
+The source's transformer generator, mutation archive and policy-gradient
+update are not used.
+
+Arms: uniform; a fixed dependent-column heuristic (explicitly *not* a tuned
+baseline); adaptive alignment; adaptive current loss; and a reward shuffled
+between candidates at each probe. The output stores each seed, cost, selection
+count, candidate probability, signed alignment, gradient norm, and the exact
+reward permutation assigned to candidates in the shuffled arm. This is a
+mechanism and feasibility pilot. A claim of improved transfer needs the
+predeclared multi-seed study and genuinely tuned fixed-task policy in §4,
+plus a tuning split and a held-out test evaluation after the design is frozen.
+The present script's test readout is diagnostic and should not be used to
+select hyperparameters or candidate tasks.
+
+### First diagnostic run (2026-09-26)
+
+With the defaults above (three paired seeds per fixture), the mean test BCE
+from the corrected logistic readout
+was as follows. Lower is better. Every arm used 64 learner gradients and 168
+candidate probe gradients per seed; the fixed arms discarded probe results.
+
+| Fixture | Uniform | Fixed heuristic | Alignment | Current loss | Shuffled |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Dependent | 0.3270 | 0.3134 | 0.3447 | 0.3363 | 0.3304 |
+| Interaction | 0.4904 | 0.4640 | 0.4892 | 0.4942 | 0.4903 |
+| Independent | 0.4215 | 0.4196 | 0.4267 | 0.4283 | 0.4241 |
+
+Paired alignment-minus-uniform differences by seed were `(+0.0047,
+-0.0004, +0.0489)`, `(-0.0015, +0.0027, -0.0048)` and `(-0.0068,
+-0.0013, +0.0238)`, respectively. The initial table mistakenly scored
+ridge fitted 0/1 values as logits and has been superseded by this rerun.
+This short pilot does not support
+integration: alignment gave no convincing downstream gain, and the fixed
+heuristic was stronger on the two structured fixtures. The three-seed
+diagnostic is too small and its readout too provisional to establish a
+negative result about the proposed reward. Next work should tune a fixed
+task distribution using a separate validation split, add a clean transfer
+endpoint, and inspect reward/selection traces before committing to a larger
+predeclared study.
