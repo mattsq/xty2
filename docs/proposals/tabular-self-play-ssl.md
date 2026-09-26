@@ -113,7 +113,8 @@ It uses six continuous columns standardized from 1,024 training rows only;
 512 disjoint test rows are never passed to the controller. Three fixed DGPs
 cover dependent, interacting and independent columns. Seeds are
 `310000 + 100*i`, initially three paired replicates. The downstream task is
-binary classification, evaluated by test BCE after a frozen linear readout
+binary classification, evaluated by test BCE after a frozen L2-regularized
+logistic linear readout
 trained on the first 64 training labels. The labels never enter pretraining.
 
 The 24 fixed tasks cross six single-column targets with full, sparse, jittered
@@ -133,7 +134,8 @@ update are not used.
 Arms: uniform; a fixed dependent-column heuristic (explicitly *not* a tuned
 baseline); adaptive alignment; adaptive current loss; and a reward shuffled
 between candidates at each probe. The output stores each seed, cost, selection
-count, candidate probability, signed alignment and gradient norm. This is a
+count, candidate probability, signed alignment, gradient norm, and the exact
+reward permutation assigned to candidates in the shuffled arm. This is a
 mechanism and feasibility pilot. A claim of improved transfer needs the
 predeclared multi-seed study and genuinely tuned fixed-task policy in §4,
 plus a tuning split and a held-out test evaluation after the design is frozen.
@@ -143,18 +145,21 @@ select hyperparameters or candidate tasks.
 ### First diagnostic run (2026-09-26)
 
 With the defaults above (three paired seeds per fixture), the mean test BCE
+from the corrected logistic readout
 was as follows. Lower is better. Every arm used 64 learner gradients and 168
 candidate probe gradients per seed; the fixed arms discarded probe results.
 
 | Fixture | Uniform | Fixed heuristic | Alignment | Current loss | Shuffled |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Dependent | 0.6067 | 0.6042 | 0.6106 | 0.6099 | 0.6075 |
-| Interaction | 0.6175 | 0.6119 | 0.6188 | 0.6190 | 0.6186 |
-| Independent | 0.6205 | 0.6239 | 0.6264 | 0.6253 | 0.6212 |
+| Dependent | 0.3270 | 0.3134 | 0.3447 | 0.3363 | 0.3304 |
+| Interaction | 0.4904 | 0.4640 | 0.4892 | 0.4942 | 0.4903 |
+| Independent | 0.4215 | 0.4196 | 0.4267 | 0.4283 | 0.4241 |
 
-Paired alignment-minus-uniform differences by seed were `(+0.0004,
--0.0010, +0.0124)`, `(+0.0007, +0.0014, +0.0020)` and `(-0.0006,
-+0.0004, +0.0179)`, respectively. This short pilot does not support
+Paired alignment-minus-uniform differences by seed were `(+0.0047,
+-0.0004, +0.0489)`, `(-0.0015, +0.0027, -0.0048)` and `(-0.0068,
+-0.0013, +0.0238)`, respectively. The initial table mistakenly scored
+ridge fitted 0/1 values as logits and has been superseded by this rerun.
+This short pilot does not support
 integration: alignment gave no convincing downstream gain, and the fixed
 heuristic was stronger on the two structured fixtures. The three-seed
 diagnostic is too small and its readout too provisional to establish a

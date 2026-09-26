@@ -166,7 +166,7 @@ def readout(
     y_test: Tensor,
     cfg: Config,
 ) -> float:
-    """Identical frozen linear probe and restricted labels for each arm."""
+    """Identical frozen logistic probe and restricted labels for each arm."""
     model.eval()
     with torch.no_grad():
         visible = torch.ones_like(x_train)
@@ -176,11 +176,26 @@ def readout(
             (train_z[: cfg.labeled_rows], torch.ones(cfg.labeled_rows, 1)), dim=1
         )
         test_z = torch.cat((test_z, torch.ones(len(x_test), 1)), dim=1)
-        eye = 0.1 * torch.eye(train_z.shape[1])
-        weights = torch.linalg.solve(
-            train_z.T @ train_z + eye, train_z.T @ y_train[: cfg.labeled_rows]
-        )
+        weights = fit_logistic_probe(train_z, y_train[: cfg.labeled_rows])
         return float(F.binary_cross_entropy_with_logits(test_z @ weights, y_test))
+
+
+def fit_logistic_probe(z: Tensor, labels: Tensor) -> Tensor:
+    """Fit L2-regularized Bernoulli likelihood with a free intercept.
+
+    The last column of ``z`` is the intercept. Newton steps are deterministic,
+    and all arms see the same frozen features and 64 training labels.
+    """
+    penalty = 0.1 * torch.eye(z.shape[1], dtype=z.dtype)
+    penalty[-1, -1] = 0
+    weights = torch.zeros(z.shape[1], dtype=z.dtype)
+    for _ in range(20):
+        probabilities = torch.sigmoid(z @ weights)
+        gradient = z.T @ (probabilities - labels) + penalty @ weights
+        curvature = probabilities * (1 - probabilities)
+        hessian = z.T @ (curvature[:, None] * z) + penalty
+        weights -= torch.linalg.solve(hessian, gradient)
+    return weights
 
 
 def run_arm(kind: str, seed: int, arm: str, cfg: Config) -> dict[str, object]:
@@ -214,6 +229,7 @@ def run_arm(kind: str, seed: int, arm: str, cfg: Config) -> dict[str, object]:
                 norms.append(math.sqrt(sum(float(g.square().sum()) for g in grads)))
                 probes += 1
             values = torch.tensor(rewards)
+            permutation = torch.arange(len(TASKS))
             if arm == "shuffled":
                 permutation = torch.randperm(len(TASKS), generator=gen)
                 values = values[permutation]
@@ -224,6 +240,8 @@ def run_arm(kind: str, seed: int, arm: str, cfg: Config) -> dict[str, object]:
                 {
                     "step": step,
                     "rewards": rewards,
+                    "reward_permutation": permutation.tolist(),
+                    "assigned_rewards": values.tolist(),
                     "signed": signs,
                     "gradient_norms": norms,
                     "probabilities": probabilities(logits, arm).tolist(),
