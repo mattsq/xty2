@@ -16,7 +16,7 @@ the plan does not describe.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import torch
@@ -25,11 +25,12 @@ from torch.nn import functional as F
 from xty2.core import (
     CategoricalTreatment,
     CompiledRun,
+    Dataset,
     GaussianOutcome,
     Port,
     Program,
     Recipe,
-    XTYBatch,
+    Schema,
     compile,
 )
 from xty2.evaluation.benchmarks.common import (
@@ -51,9 +52,15 @@ from xty2.recipes import scarf
 from xty2.recipes.scarf import PRETRAIN_STEPS
 from xty2.training import STREAM_STRIDE, ProgramResult, run_program
 
-_TRAIN_ROWS = 1_024
-_TEST_ROWS = 2_048
-_BASE_SEED = 90_000
+TRAIN_ROWS = 1_024
+TEST_ROWS = 2_048
+BASE_SEED = 90_000
+INITIAL_STATE_OFFSET = 6
+"""Replicate `base + 6` seeds torch before each arm's recipe is built."""
+
+RUN_SEED_OFFSET = 10_000
+"""Replicate `base + 10_000` is the paired program seed."""
+
 _CONTRASTIVE = "info_nce_contrastive"
 
 
@@ -147,20 +154,51 @@ def run(
     )
 
 
+@dataclass(frozen=True)
+class Fixture:
+    """One replicate of card section 6.1's world, shared by every card adopting it."""
+
+    base: int
+    schema: Schema
+    train: ClusterPopulation
+    test: ClusterPopulation
+    data: Dataset
+
+    @property
+    def initial_state_seed(self) -> int:
+        return self.base + INITIAL_STATE_OFFSET
+
+    @property
+    def run_seed(self) -> int:
+        return self.base + RUN_SEED_OFFSET
+
+
+def fixture(index: int) -> Fixture:
+    """Replicate `index` of section 6.1: its populations and its seed base."""
+    base = BASE_SEED + 100 * index
+    schema = continuous_schema(6)
+    train = two_cluster_population(TRAIN_ROWS, seed=base + 1, row_offset=0)
+    test = two_cluster_population(TEST_ROWS, seed=base + 2, row_offset=10_000)
+    return Fixture(
+        base=base,
+        schema=schema,
+        train=train,
+        test=test,
+        data=training_dataset(schema, train.batch),
+    )
+
+
 def _replicate(index: int) -> dict[str, float]:
     configure_worker()
-    base = _BASE_SEED + 100 * index
-    schema = continuous_schema(6)
-    train = two_cluster_population(_TRAIN_ROWS, seed=base + 1, row_offset=0)
-    test = two_cluster_population(_TEST_ROWS, seed=base + 2, row_offset=10_000)
-    data = training_dataset(schema, train.batch)
+    world = fixture(index)
+    schema, test, data = world.schema, world.test, world.data
 
     # Both arms start from bit-identical parameters: the pairing is the whole
     # measurement, so a difference in initialisation would be a second variable.
-    torch.manual_seed(base + 6)
+    torch.manual_seed(world.initial_state_seed)
     pretrained_recipe = scarf(schema)
-    torch.manual_seed(base + 6)
-    ablated_recipe = _unpretrained(scarf(schema))
+    torch.manual_seed(world.initial_state_seed)
+    ablated_recipe = unpretrained(scarf(schema))
     for name, value in pretrained_recipe.system.state_dict().items():
         if not torch.equal(value, ablated_recipe.system.state_dict()[name]):
             raise RuntimeError(f"scarf paired initial state differs at {name!r}")
@@ -170,17 +208,20 @@ def _replicate(index: int) -> dict[str, float]:
     full = run_program(
         pretrained_run,
         {"pretrain": data, "joint_fit": data},
-        seed=base + 10_000,
+        seed=world.run_seed,
     )
     # The ablation's single stage is index 0, so its seed is offset by one
     # stride to give its fit the same stochastic stream as the paired arm's.
     bare = run_program(
-        ablated_run, {"joint_fit": data}, seed=base + 10_000 + STREAM_STRIDE
+        ablated_run, {"joint_fit": data}, seed=world.run_seed + STREAM_STRIDE
     )
 
-    pretrained = _evaluate(pretrained_run, full, test, train.batch)
-    unpretrained = _evaluate(ablated_run, bare, test, train.batch)
-    if unpretrained["treatment_nll"] <= 0.0 or unpretrained["outcome_nll"] <= 0.0:
+    pretrained = held_out_nll(pretrained_run, full, test)
+    unpretrained_arm = held_out_nll(ablated_run, bare, test)
+    if (
+        unpretrained_arm["treatment_nll"] <= 0.0
+        or unpretrained_arm["outcome_nll"] <= 0.0
+    ):
         raise RuntimeError(
             "the unpretrained arm produced a non-positive NLL, so the paired "
             "ratio the card declares is undefined"
@@ -188,19 +229,19 @@ def _replicate(index: int) -> dict[str, float]:
     alignment, uniformity = _terminal_alignment(full)
     return {
         "treatment_ratio": (
-            pretrained["treatment_nll"] / unpretrained["treatment_nll"]
+            pretrained["treatment_nll"] / unpretrained_arm["treatment_nll"]
         ),
-        "outcome_ratio": pretrained["outcome_nll"] / unpretrained["outcome_nll"],
+        "outcome_ratio": pretrained["outcome_nll"] / unpretrained_arm["outcome_nll"],
         "alignment_gap": alignment - uniformity,
         "alignment": alignment,
         "uniformity": uniformity,
         "pretrained_nll": pretrained["treatment_nll"],
-        "unpretrained_nll": unpretrained["treatment_nll"],
+        "unpretrained_nll": unpretrained_arm["treatment_nll"],
         "frequency_nll": pretrained["frequency_nll"],
     }
 
 
-def _unpretrained(recipe: Recipe) -> Recipe:
+def unpretrained(recipe: Recipe) -> Recipe:
     """The ablation: the same fitting stage, from the recipe's initialisation.
 
     `initialise_from` is what the pretraining delivers, so dropping the stage
@@ -212,11 +253,10 @@ def _unpretrained(recipe: Recipe) -> Recipe:
     return replace(recipe, program=Program((replace(fit, initialise_from=None),)))
 
 
-def _evaluate(
+def held_out_nll(
     run: CompiledRun,
     result: ProgramResult,
     test: ClusterPopulation,
-    train: XTYBatch,
 ) -> dict[str, float]:
     """Held-out NLLs, on the outcome scale the run itself fitted."""
     population = result.stage("joint_fit").population
@@ -238,7 +278,7 @@ def _evaluate(
         if not isinstance(propensity, CategoricalTreatment) or not isinstance(
             outcome, GaussianOutcome
         ):
-            raise TypeError("scarf benchmark expected its declared causal heads")
+            raise TypeError("the benchmark expected the declared causal heads")
         treatment_nll = float(F.nll_loss(propensity.log_probs, scaled.t))
         outcome_nll = float(-outcome.log_prob(scaled.y, scaled.t).mean())
         # The baseline is the *labelled* training rows' marginal, which is what
@@ -250,7 +290,6 @@ def _evaluate(
         frequencies /= frequencies.sum()
         baseline = frequencies.log().expand(scaled.batch_size, -1)
         frequency_nll = float(F.nll_loss(baseline, scaled.t))
-    del train
     return {
         "treatment_nll": treatment_nll,
         "outcome_nll": outcome_nll,

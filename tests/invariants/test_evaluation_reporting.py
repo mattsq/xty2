@@ -302,6 +302,23 @@ def test_a_target_cleared_by_more_than_one_stderr_passes() -> None:
     assert clear.passed is True
 
 
+def test_a_strict_upper_bound_needs_more_than_one_stderr_of_margin() -> None:
+    """`<` mirrors `>`: a card writing a strict bound gets a strict margin.
+
+    `vime.md` §6 declares "dependent-block ratio < 0.95". Scored as `<=`, a
+    deterministic `0.95 +/- 0` would pass a bound the card says it must not.
+    """
+    assert MetricResult("ratio", (0.8, 0.9), "<", 0.95).passed is True
+    assert MetricResult("ratio", (0.9, 0.98), "<", 0.95).passed is False
+    assert MetricResult("ratio", (0.95, 0.95), "<", 0.95).passed is False
+    assert MetricResult("ratio", (0.94, 0.94), "<", 0.95).passed is True
+    assert MetricResult("ratio", (0.8, 0.9), "<", 0.95).criterion == (
+        "mean + stderr < 0.95"
+    )
+    with pytest.raises(ValueError, match="finite target"):
+        MetricResult("ratio", (0.8, 0.9), "<", None)
+
+
 def test_a_deterministic_guardrail_is_untouched_by_the_rule() -> None:
     """`1 +/- 0` is a check, not a statistic, and the rule must not bite it.
 

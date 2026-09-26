@@ -33,7 +33,7 @@ def test_pretext_heads_train_and_the_encoder_is_frozen_in_joint_fit() -> None:
         result = run_program(run, {"pretrain": dataset, "joint_fit": dataset}, seed=123)
         pretrained = result.stage("pretrain")
         downstream = result.stage("joint_fit")
-        assert pretrained.steps == 80
+        assert pretrained.steps == 1_280
         assert downstream.steps == 4
         assert {term.name for term in pretrained.records[0].terms} == {
             "mask_estimation_bce",
