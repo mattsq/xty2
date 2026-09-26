@@ -1,0 +1,74 @@
+{
+  "config": {
+    "steps": 256,
+    "batch_size": 64,
+    "probe_every": 8,
+    "warmup": 8,
+    "seed_count": 3,
+    "train_rows": 1024,
+    "validation_rows": 512,
+    "test_rows": 512,
+    "labeled_rows": 64,
+    "endpoint": "validation",
+    "fixed_probes": true
+  },
+  "budget_bce": {
+    "64": 0.41458144783973694,
+    "256": 0.3266410807768504,
+    "1024": 0.32740932206312817
+  },
+  "policy_bce": {
+    "dependent": {
+      "uniform": 0.21982649564743043,
+      "fixed_dependent": 0.2113637000322342,
+      "context:full": 0.21278158724308013,
+      "context:sparse": 0.21275482475757598,
+      "context:jitter": 0.21567985117435456,
+      "context:replace": 0.21628862619400024,
+      "target:0": 0.3238630712032318,
+      "target:1": 0.3193393647670746,
+      "target:2": 0.2625433266162872,
+      "target:3": 0.25821898877620697,
+      "target:4": 0.40900174975395204,
+      "target:5": 0.36269896626472475
+    },
+    "interaction": {
+      "uniform": 0.3374388575553894,
+      "fixed_dependent": 0.33233497142791746,
+      "context:full": 0.31853102445602416,
+      "context:sparse": 0.3579476475715637,
+      "context:jitter": 0.3232918918132782,
+      "context:replace": 0.34890557527542115,
+      "target:0": 0.31848631501197816,
+      "target:1": 0.3353432536125183,
+      "target:2": 0.35340376496315,
+      "target:3": 0.3612862408161163,
+      "target:4": 0.4952982008457184,
+      "target:5": 0.4638909876346588
+    },
+    "independent": {
+      "uniform": 0.42265788912773133,
+      "fixed_dependent": 0.4290990591049194,
+      "context:full": 0.4333206832408905,
+      "context:sparse": 0.3903627634048462,
+      "context:jitter": 0.43281684517860414,
+      "context:replace": 0.38169596791267396,
+      "target:0": 0.4564365684986115,
+      "target:1": 0.432011091709137,
+      "target:2": 0.3642573833465576,
+      "target:3": 0.38536818623542785,
+      "target:4": 0.39237828850746154,
+      "target:5": 0.3802065908908844
+    }
+  },
+  "none_bce": {
+    "dependent": 0.3935553550720215,
+    "interaction": 0.5133531212806701,
+    "independent": 0.395792555809021
+  },
+  "selected": {
+    "dependent": "fixed_dependent",
+    "interaction": "target:0",
+    "independent": "target:2"
+  }
+}

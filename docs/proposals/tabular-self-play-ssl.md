@@ -167,3 +167,13 @@ negative result about the proposed reward. Next work should tune a fixed
 task distribution using a separate validation split, add a clean transfer
 endpoint, and inspect reward/selection traces before committing to a larger
 predeclared study.
+
+### Validation tuning and confirmation
+
+The follow-up is recorded in
+[`experiments/2026-09-26-tabular-self-play-protocol.md`](../experiments/2026-09-26-tabular-self-play-protocol.md).
+It adds a validation split, a no-pretraining reference, clean secondary
+endpoints and trace summaries. Validation tuning showed that the pilot's
+64-update learner had barely learned the pretext task, selected 256 updates,
+and chose one fixed task policy per fixture. The confirmation on fresh seeds
+and the test split follows that document's frozen decision rule.

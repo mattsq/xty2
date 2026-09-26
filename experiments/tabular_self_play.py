@@ -450,9 +450,13 @@ def condense(trace: Sequence[Mapping[str, list[float]]]) -> list[dict[str, objec
 
 
 def paired(
-    rows: Sequence[Mapping[str, object]], kind: str, arm: str, metric: str = "bce"
+    rows: Sequence[Mapping[str, object]],
+    kind: str,
+    arm: str,
+    metric: str = "bce",
+    baseline: str = "uniform",
 ) -> list[float]:
-    """Per-seed metric of ``arm`` minus uniform, in seed order."""
+    """Per-seed metric of ``arm`` minus ``baseline``, in seed order."""
 
     def values(name: str) -> dict[int, float]:
         return {
@@ -461,8 +465,48 @@ def paired(
             if r["fixture"] == kind and r["arm"] == name
         }
 
-    arm_values, base = values(arm), values("uniform")
+    arm_values, base = values(arm), values(baseline)
     return [arm_values[s] - base[s] for s in sorted(base)]
+
+
+# Two-sided 97.5% Student t quantile for the ten confirmation seeds (df=9).
+T_975_DF9 = 2.2622
+
+
+def interval(differences: Sequence[float]) -> dict[str, float]:
+    """Mean paired difference and its 95% t interval over the ten seeds."""
+    if len(differences) != len(CONFIRMATION_SEEDS):
+        raise ValueError("the interval is declared for the ten confirmation seeds")
+    values = np.asarray(differences, dtype=np.float64)
+    half = T_975_DF9 * values.std(ddof=1) / math.sqrt(len(values))
+    mean = float(values.mean())
+    return {"mean": mean, "low": mean - half, "high": mean + half}
+
+
+def analyse(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    """The protocol's predeclared paired contrasts on test BCE."""
+    contrasts = {
+        kind: {
+            f"{arm}-{baseline}": interval(paired(rows, kind, arm, baseline=baseline))
+            for arm, baseline in (
+                ("alignment", "uniform"),
+                ("alignment", "tuned"),
+                ("alignment", "shuffled"),
+                ("alignment", "current_loss"),
+                ("tuned", "uniform"),
+                ("uniform", "none"),
+            )
+        }
+        for kind in FIXTURES
+    }
+    # Supported only if alignment beats both fixed controls, with intervals
+    # excluding zero, on both structured fixtures.
+    supported = all(
+        contrasts[kind][name]["high"] < 0
+        for kind in ("dependent", "interaction")
+        for name in ("alignment-uniform", "alignment-tuned")
+    )
+    return {"contrasts": contrasts, "adaptive_supported": supported}
 
 
 def _job(job: tuple[str, int, str, Config, str | None]) -> dict[str, object]:
@@ -551,6 +595,9 @@ def main() -> None:
                 if r["fixture"] == kind and r["arm"] == arm
             ]
             print(f"{kind:12} {arm:16} {np.mean(values):.4f}", flush=True)
+    analysis = analyse(rows)
+    (args.output / "analysis.json").write_text(json.dumps(analysis, indent=2) + "\n")
+    print(json.dumps(analysis, indent=2), flush=True)
 
 
 if __name__ == "__main__":

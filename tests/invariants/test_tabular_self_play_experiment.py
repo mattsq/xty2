@@ -12,15 +12,18 @@ import pytest
 import torch
 from experiments import tabular_self_play_tuning as tuning
 from experiments.tabular_self_play import (
+    CONFIRMATION_SEEDS,
     POLICIES,
     TASKS,
     Config,
     Predictor,
     Task,
     alignment,
+    analyse,
     condense,
     fit_logistic_probe,
     fixture,
+    interval,
     policy_weights,
     readout,
     run_arm,
@@ -219,3 +222,42 @@ def test_tuning_selects_on_validation_only(tmp_path: Path) -> None:
         "interaction": "uniform",
         "independent": "uniform",
     }
+
+
+def _rows(offsets: dict[str, float]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for kind in ("dependent", "interaction", "independent"):
+        for i, seed in enumerate(CONFIRMATION_SEEDS):
+            # Seed-level noise shared by every arm: pairing must cancel it.
+            common = 0.05 * ((-1) ** i) + 0.001 * i
+            for arm in ("none", "uniform", "fixed_dependent", "tuned"):
+                bce = 0.4 + common + offsets.get(arm, 0.0)
+                rows.append({"fixture": kind, "seed": seed, "arm": arm, "bce": bce})
+            for arm in ("alignment", "current_loss", "shuffled"):
+                bce = 0.4 + common + offsets.get(arm, 0.0) + 0.002 * (i % 3)
+                rows.append({"fixture": kind, "seed": seed, "arm": arm, "bce": bce})
+    return rows
+
+
+def test_analysis_pairs_by_seed_and_requires_both_fixed_controls() -> None:
+    better = analyse(_rows({"alignment": -0.02}))
+    contrast = better["contrasts"]
+    assert isinstance(contrast, dict)
+    interval = contrast["dependent"]["alignment-uniform"]
+    # Unpaired, the +-0.05 seed noise would swamp a 0.02 gain.
+    assert interval["high"] < 0 < interval["low"] + 0.03
+    assert better["adaptive_supported"] is True
+    # Beating uniform alone is not enough when the tuned control is as good.
+    tied = analyse(_rows({"alignment": -0.02, "tuned": -0.02}))
+    assert tied["adaptive_supported"] is False
+
+
+def test_interval_is_the_declared_ten_seed_t_interval() -> None:
+    # Alternating +-1: mean 0, sample sd sqrt(10/9), so the half-width is
+    # 2.2622 * sqrt(10/9) / sqrt(10) = 2.2622 / 3.
+    result = interval([(-1.0) ** i for i in range(10)])
+    assert result["mean"] == pytest.approx(0.0)
+    assert result["high"] == pytest.approx(2.2622 / 3)
+    assert result["low"] == pytest.approx(-2.2622 / 3)
+    with pytest.raises(ValueError):
+        interval([0.0] * 9)
