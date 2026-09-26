@@ -14,6 +14,10 @@ concurrency:
 env:
   # Gradient-norm / cosine logging is off in CI by construction (DESIGN.md §6.2).
   XTY2_GRADIENT_DIAGNOSTICS: "0"
+  # The test models use tiny CPU tensors; parallel kernels cost more than they save.
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
 
 # `uv run --no-sync` throughout: the install step below puts CPU-only torch in
 # the venv, and a re-sync would replace it with the multi-gigabyte CUDA wheel
@@ -48,8 +52,8 @@ jobs:
       - name: mypy --strict
         run: uv run --no-sync mypy --strict
 
-  tests:
-    name: Tier 0 + Tier 1
+  invariants:
+    name: Tier 0 — invariants
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -61,5 +65,32 @@ jobs:
       - uses: ./.github/actions/install
       - name: Tier 0 — invariants
         run: uv run --no-sync pytest tests/invariants
+
+  smoke:
+    name: Tier 1 — smoke (${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.11"
+          cache-dependency-glob: "pyproject.toml"
+      - uses: ./.github/actions/install
       - name: Tier 1 — smoke
-        run: uv run --no-sync pytest tests/smoke
+        env:
+          SHARD: ${{ matrix.shard }}
+        shell: bash
+        run: |
+          # Enumerate files at runtime so new recipes cannot be left out of CI.
+          mapfile -t files < <(find tests/smoke -maxdepth 1 -name 'test_*.py' | sort)
+          selected=()
+          for i in "${!files[@]}"; do
+            if (( i % 4 == SHARD )); then selected+=("${files[i]}"); fi
+          done
+          printf 'Running %s\n' "${selected[@]}"
+          uv run --no-sync pytest "${selected[@]}" --durations=10

@@ -20,6 +20,7 @@ dependencies = [
 dev = [
   "mypy>=1.11",
   "pytest>=8.0",
+  "pytest-xdist>=3.6",
   "ruff>=0.6",
 ]
 
@@ -41,7 +42,8 @@ packages = ["xty2"]
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 minversion = "8.0"
-testpaths = ["tests"]
+# A plain `pytest` is the PR suite. Tier 2 requires an explicit benchmark path.
+testpaths = ["tests/invariants", "tests/smoke"]
 addopts = "-ra --strict-markers --strict-config"
 xfail_strict = true
 filterwarnings = ["error"]
