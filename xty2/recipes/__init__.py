@@ -110,8 +110,15 @@ from xty2.recipes.vicreg import (
     VICREG_PRETRAIN_STEPS,
     vicreg,
 )
+from xty2.recipes.vime import (
+    ALPHA,
+    MASK_PROBABILITY,
+    VIME_PRETRAIN_STEPS,
+    vime,
+)
 
 __all__ = [
+    "ALPHA",
     "BARLOW_TWINS_BATCH_SIZE",
     "BARLOW_TWINS_ENCODER_WIDTHS",
     "BARLOW_TWINS_JOINT_FIT_STEPS",
@@ -139,6 +146,7 @@ __all__ = [
     "INVARIANCE_WEIGHT",
     "JOINT_FIT_STEPS",
     "LARGE_CORRUPTION_RATE",
+    "MASK_PROBABILITY",
     "META_FEEDBACK",
     "MISSING_ANCHORS",
     "NORMALISATION_EPSILON",
@@ -180,6 +188,7 @@ __all__ = [
     "VICREG_JOINT_FIT_STEPS",
     "VICREG_OBSERVED_TREATMENTS",
     "VICREG_PRETRAIN_STEPS",
+    "VIME_PRETRAIN_STEPS",
     "WEAK_MASK_RATE",
     "barlow_twins",
     "cnflow",
@@ -203,4 +212,5 @@ __all__ = [
     "uda",
     "variational_treatment",
     "vicreg",
+    "vime",
 ]

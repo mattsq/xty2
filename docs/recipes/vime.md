@@ -1,6 +1,6 @@
 # Recipe spec card: vime
 
-**Status:** `reviewed`
+**Status:** `implemented`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to implement or audit fidelity;
