@@ -1,4 +1,4 @@
-"""SCARF's random feature corruption (`DESIGN.md` §5).
+"""SCARF's and VIME's random feature corruptions (`DESIGN.md` §5).
 
 Every other transform in this package writes a value the *transform* chose — a
 constant fill, a jittered number clipped back into bounds. This one writes a
@@ -162,6 +162,125 @@ class FeatureCorruption:
         return tuple(spec for spec in _selected(schema, self.columns) if spec.mutable)
 
 
+@dataclass(frozen=True)
+class BernoulliMarginalCorruption:
+    """VIME's pretext generator `g_m` (Eq. 3): a Bernoulli mask per cell.
+
+    Each mutable cell is selected independently with probability `p`, and a
+    selected cell takes a value drawn i.i.d. from its column over the training
+    population. A row therefore corrupts a Binomial(`M`, `p`) number of cells,
+    which is what separates this from `FeatureCorruption`'s fixed count of
+    `floor(rate * M)`: the two share a mean and not a variance, and the pretext
+    task is a different one (`docs/recipes/vime.md` §3.1).
+
+    ``columns=None`` means every mutable feature. Immutable features are never
+    selected, even when listed (`vime.md` deviation 6). A donor may hold the
+    cell's own value, in which case the cell is selected and unchanged; the
+    mask *label* is the set of cells that changed, which the consuming
+    objective computes from the two realisations (`vime.md` §7).
+    """
+
+    p: float
+    columns: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if self.columns is not None:
+            object.__setattr__(self, "columns", tuple(self.columns))
+        if isinstance(self.p, bool) or not isinstance(self.p, int | float):
+            raise ViewError(
+                f"BernoulliMarginalCorruption.p must be a number, got {type(self.p)}"
+            )
+        if not math.isfinite(float(self.p)) or not 0.0 <= float(self.p) <= 1.0:
+            raise ViewError(
+                f"BernoulliMarginalCorruption.p is a per-cell probability and "
+                f"must be in [0, 1], got {self.p!r}"
+            )
+        if self.columns is not None:
+            if not self.columns:
+                raise ViewError(
+                    "BernoulliMarginalCorruption.columns cannot be empty; use "
+                    "p=0 for no corruption"
+                )
+            if any(not _is_name(name) for name in self.columns):
+                raise ViewError(
+                    "BernoulliMarginalCorruption.columns must hold non-empty names"
+                )
+            if len(set(self.columns)) != len(self.columns):
+                raise ViewError(
+                    "BernoulliMarginalCorruption.columns cannot contain duplicates"
+                )
+
+    def validate(self, schema: Schema) -> None:
+        _selected(schema, self.columns)
+
+    def affected_columns(self, schema: Schema) -> frozenset[str]:
+        if float(self.p) == 0.0:
+            return frozenset()
+        return frozenset(spec.name for spec in self._mutable(schema))
+
+    def apply(
+        self,
+        batch: XTYBatch,
+        schema: Schema,
+        *,
+        generator: torch.Generator,
+        population: TrainingPopulation | None = None,
+    ) -> XTYBatch:
+        """`x~ = m * x_bar + (1 - m) * x`, with `x_bar_j` drawn from `p_hat_{X_j}`.
+
+        Eq. 3 defines `p_hat_{X_j}` as the empirical marginal of column `j`
+        over the unlabelled set, so the donor pool is the training population
+        and never the batch. `population` is required for the reason
+        `FeatureCorruption.apply` gives.
+        """
+        if population is None:
+            raise ViewError(
+                "BernoulliMarginalCorruption draws each replacement from the "
+                "training population's empirical marginal (VIME Eq. 3), and this "
+                "stage supplied none. A stage declaring ExternalBatches has no "
+                "training population; declare a sampler so the loader builds one."
+            )
+        self.validate(schema)
+        names = self.affected_columns(schema)
+        specs = tuple(spec for spec in self._mutable(schema) if spec.name in names)
+        rows, width = batch.batch_size, len(specs)
+        if not width or not rows:
+            return batch.replace(x=batch.x.clone())
+        indices = torch.tensor(
+            [schema.index_of(spec.name) for spec in specs],
+            dtype=torch.long,
+            device=batch.device,
+        )
+        selected = batch.x.index_select(1, indices)
+        donor_pool = population.rows.x.index_select(1, indices)
+
+        # `m_j ~ Bern(p_m)` independently per cell: `mask_generator`'s
+        # `np.random.binomial(1, p_m, x.shape)`.
+        mask = torch.rand(
+            (rows, width),
+            dtype=selected.dtype,
+            device=batch.device,
+            generator=generator,
+        ) < float(self.p)
+        # One donor row per cell, with replacement (`vime.md` §7).
+        donors = torch.randint(
+            donor_pool.shape[0],
+            (rows, width),
+            dtype=torch.long,
+            device=batch.device,
+            generator=generator,
+        )
+        replacement = torch.where(mask, donor_pool.gather(0, donors), selected)
+        return batch.replace(x=batch.x.index_copy(1, indices, replacement))
+
+    def describe(self) -> str:
+        columns = "all" if self.columns is None else "[" + ", ".join(self.columns) + "]"
+        return f"BernoulliMarginalCorruption(p={float(self.p)!r}, columns={columns})"
+
+    def _mutable(self, schema: Schema) -> tuple[FeatureSpec, ...]:
+        return tuple(spec for spec in _selected(schema, self.columns) if spec.mutable)
+
+
 def _selected(
     schema: Schema, columns: tuple[str, ...] | None
 ) -> tuple[FeatureSpec, ...]:
@@ -170,7 +289,7 @@ def _selected(
     unknown = sorted(set(columns) - set(schema.feature_names))
     if unknown:
         raise ViewError(
-            f"FeatureCorruption names unknown column(s) {unknown!r}; have "
+            f"the corruption names unknown column(s) {unknown!r}; have "
             f"{schema.feature_names!r}"
         )
     wanted = set(columns)
@@ -181,4 +300,4 @@ def _is_name(value: object) -> bool:
     return isinstance(value, str) and bool(value)
 
 
-__all__ = ["FeatureCorruption"]
+__all__ = ["BernoulliMarginalCorruption", "FeatureCorruption"]

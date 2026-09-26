@@ -44,6 +44,7 @@ class Port(StrEnum):
     JOINT_ENERGY = "energy(x,t,y)"
     RECONSTRUCTION = "reconstruction"
     PRETEXT_GIVEN_X = "pretext_logits(x)"
+    FEATURE_MASK_LOGITS = "mask_logits(x)"
 
 
 class Axis(StrEnum):
@@ -256,6 +257,12 @@ PORT_SPECS: dict[Port, PortSpec] = {
         "tensor",
         (Axis.BATCH, Axis.FREE),
         "categorical logits for a declared self-supervised transform",
+    ),
+    Port.FEATURE_MASK_LOGITS: PortSpec(
+        Port.FEATURE_MASK_LOGITS,
+        "tensor",
+        (Axis.BATCH, Axis.FEATURES),
+        "one replaced-cell logit per feature",
     ),
 }
 

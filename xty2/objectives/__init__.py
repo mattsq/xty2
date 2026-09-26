@@ -64,6 +64,10 @@ from xty2.objectives.marginal import (
     GradPath,
     MissingTreatmentMarginalNLL,
 )
+from xty2.objectives.masked_feature import (
+    FeatureReconstruction,
+    MaskEstimationBCE,
+)
 from xty2.objectives.meta_pseudo_labels import (
     MetaFeedbackCoefficient,
     MetaFeedbackState,
@@ -146,11 +150,13 @@ __all__ = [
     "EmbeddingCovariance",
     "EmbeddingInvariance",
     "EmbeddingVariance",
+    "FeatureReconstruction",
     "FeatureStopGrad",
     "GradPath",
     "InfoNCEContrastive",
     "LabeledMemoryInstanceConsistency",
     "LabeledSimilarityMemory",
+    "MaskEstimationBCE",
     "MeanEntropyMaximisation",
     "MemorySmoothedLabelGraph",
     "MemorySmoothedLabels",

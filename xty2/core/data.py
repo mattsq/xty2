@@ -45,9 +45,12 @@ from xty2.core.errors import ArtifactError, CompileError, Xty2Error, require_str
 from xty2.core.rows import Rows, row_mask, validate_population
 from xty2.core.schema import Schema
 
-Standardisation = Literal["none", "zscore"]
-"""How a block of columns is centred and scaled. `zscore` is fitted on the
-train assignment and applied everywhere; `none` passes values through."""
+Standardisation = Literal["none", "zscore", "minmax"]
+"""How a block of columns is centred and scaled. `zscore` and `minmax` are
+fitted on the train assignment and applied everywhere; `none` passes values
+through. `minmax` maps each training column onto `[0, 1]` (VIME section 5);
+held-out rows take the same fitted map and may fall outside it. Constant
+training columns use a unit scale and therefore map to zero."""
 
 Mechanism = Literal["observed", "mcar"]
 """Where a row's treatment missingness comes from.

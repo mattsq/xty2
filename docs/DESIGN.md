@@ -94,6 +94,7 @@ pairing empty by construction is a compile error.
 | `JOINT_ENERGY` | one energy per candidate treatment `[B, K]` |
 | `RECONSTRUCTION` | feature reconstruction `[B, D]` |
 | `PRETEXT_GIVEN_X` | categorical self-supervised transform logits `[B, R]` |
+| `FEATURE_MASK_LOGITS` | one replaced-cell logit per feature `[B, D]`; VIME's `s_m`, with TabTransformer-RTD as the named second consumer (VIME card section 5.1) |
 
 Ports are load-bearing vocabulary. Adding one requires a reviewed card that
 cannot express a source mechanic without it, plus a named second consumer used

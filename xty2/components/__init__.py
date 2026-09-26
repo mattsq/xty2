@@ -11,6 +11,7 @@ from xty2.components.projection import ProjectionHead
 from xty2.components.simsiam import SimSiamPredictor, SimSiamProjector
 from xty2.components.treatment import CategoricalPropensity
 from xty2.components.vicreg import VICRegExpander
+from xty2.components.vime import FeatureEstimatorHead, MaskEstimatorHead
 
 __all__ = [
     "BarlowTwinsProjector",
@@ -18,7 +19,9 @@ __all__ = [
     "CategoricalPropensity",
     "ConditionalFlow",
     "ConditionalFlowOutcome",
+    "FeatureEstimatorHead",
     "MLPEncoder",
+    "MaskEstimatorHead",
     "PretextHead",
     "ProjectionHead",
     "SimSiamPredictor",

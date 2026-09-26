@@ -9,9 +9,11 @@ import torch.nn.functional as F
 
 from xty2.components._nn import (
     CFRNET_INITIALISATION,
+    GLOROT_UNIFORM_INITIALISATION,
     TORCH_LINEAR_INITIALISATION,
     elu_stack,
     initialise_cfrnet,
+    initialise_glorot_uniform,
     relu_stack,
     validate_dimension,
     validate_dropout,
@@ -66,13 +68,15 @@ class MLPEncoder(Component):
                 f"{owner}.normalisation supports 'row_l2' or 'none', got "
                 f"{self.normalisation!r}"
             )
-        if self.initialisation not in (
+        supported = (
             CFRNET_INITIALISATION,
             TORCH_LINEAR_INITIALISATION,
-        ):
+            GLOROT_UNIFORM_INITIALISATION,
+        )
+        if self.initialisation not in supported:
             raise GraphError(
-                f"{owner}.initialisation supports {CFRNET_INITIALISATION!r} or "
-                f"{TORCH_LINEAR_INITIALISATION!r}, got {self.initialisation!r}"
+                f"{owner}.initialisation supports one of {list(supported)!r}, got "
+                f"{self.initialisation!r}"
             )
         stack = elu_stack if self.activation == "elu" else relu_stack
         self.network, self.output_dim = stack(
@@ -80,6 +84,8 @@ class MLPEncoder(Component):
         )
         if self.initialisation == CFRNET_INITIALISATION:
             initialise_cfrnet(self)
+        elif self.initialisation == GLOROT_UNIFORM_INITIALISATION:
+            initialise_glorot_uniform(self)
 
     def forward(self, ports: PortView) -> dict[Port, PortValue]:
         representation = self.network(ports.tensor(Port.X_RAW))

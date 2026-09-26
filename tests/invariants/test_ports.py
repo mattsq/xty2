@@ -32,7 +32,7 @@ REPR_WIDTH = 5
 
 def conforming_value(port: Port) -> object:
     """A value that satisfies `port` for the fixture schema."""
-    if port is Port.X_RAW or port is Port.RECONSTRUCTION:
+    if port in (Port.X_RAW, Port.RECONSTRUCTION, Port.FEATURE_MASK_LOGITS):
         return torch.randn(BATCH_SIZE, NUM_FEATURES)
     if port is Port.Y_RAW:
         return torch.randn(BATCH_SIZE)
@@ -59,6 +59,7 @@ def test_the_port_vocabulary_is_exactly_the_design_document_s() -> None:
         "energy(x,t,y)",
         "reconstruction",
         "pretext_logits(x)",
+        "mask_logits(x)",
     }
 
 
