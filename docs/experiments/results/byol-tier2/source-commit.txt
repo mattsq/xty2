@@ -1,0 +1,8 @@
+tree e02a03d693b01a889604617befb4a4b35cd8ed48
+parent ebbbf8a49b18debee7fe640d7da97e2dfd623ac0
+author Codex <codex@openai.com> 1789545028 +0530
+committer Codex <codex@openai.com> 1789545028 +0530
+
+Implement complete paired BYOL Tier 2 study
+
+Pre-result source snapshot. Strict upper-bound mutant observed failing; protocol scalars reject mutations. Tier 0/1 running; focused smoke running; ruff passes; strict mypy passes with Python 3.12 target (installed NumPy stubs require it).

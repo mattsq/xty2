@@ -13,7 +13,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Literal
 
-Relation = Literal["<=", ">=", ">", "between", "info"]
+Relation = Literal["<=", "<", ">=", ">", "between", "info"]
 CardStatus = Literal[
     "draft",
     "reviewed",
@@ -163,7 +163,7 @@ class MetricResult:
             raise ValueError(f"benchmark metric {self.name!r} has no replicates")
         if not all(math.isfinite(value) for value in self.values):
             raise ValueError(f"benchmark metric {self.name!r} must be finite")
-        if self.relation not in ("<=", ">=", ">", "between", "info"):
+        if self.relation not in ("<=", "<", ">=", ">", "between", "info"):
             raise ValueError(
                 f"metric {self.name!r} has unknown relation {self.relation!r}"
             )
@@ -171,7 +171,7 @@ class MetricResult:
             raise ValueError(
                 f"informational metric {self.name!r} cannot carry a target"
             )
-        if self.relation in ("<=", ">=", ">") and (
+        if self.relation in ("<=", "<", ">=", ">") and (
             not isinstance(self.target, int | float)
             or isinstance(self.target, bool)
             or not math.isfinite(float(self.target))
@@ -260,7 +260,7 @@ class MetricResult:
         margin = self.margin
         if margin is None:
             return None
-        if self.relation == ">":
+        if self.relation in ("<", ">"):
             return margin > self.stderr
         return margin >= self.stderr
 
@@ -279,7 +279,7 @@ class MetricResult:
             assert isinstance(self.target, tuple)
             return min(self.mean - self.target[0], self.target[1] - self.mean)
         assert isinstance(self.target, int | float)
-        if self.relation == "<=":
+        if self.relation in ("<", "<="):
             return float(self.target) - self.mean
         return self.mean - float(self.target)
 
@@ -309,6 +309,8 @@ class MetricResult:
         assert isinstance(self.target, int | float)
         if self.relation == ">":
             return f"mean - stderr > {self.target:g}{suffix}"
+        if self.relation == "<":
+            return f"mean + stderr < {self.target:g}{suffix}"
         return f"mean {self.relation} {self.target:g}{suffix}, by at least one stderr"
 
     def summary(self) -> str:
