@@ -93,4 +93,6 @@ jobs:
             if (( i % 4 == SHARD )); then selected+=("${files[i]}"); fi
           done
           printf 'Running %s\n' "${selected[@]}"
-          uv run --no-sync pytest "${selected[@]}" --durations=10
+          # Keep each module's shared fit on one worker while running two
+          # independent recipes at a time on this runner.
+          uv run --no-sync pytest "${selected[@]}" -n 2 --dist loadfile --durations=10
