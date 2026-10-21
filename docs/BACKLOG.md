@@ -50,9 +50,9 @@ the historical notes once carried here.
 
 Meta Pseudo Labels + UDA is deviating. Its authoritative
 card at `docs/recipes/meta_pseudo_labels.md` specifies the hard-label one-step
-estimator, the bounded `meta_gradient` executor boundary, and a ten-seed Tier 2
-study whose verdict differed between machines; §6.4 there proposes a
-100-seed protocol awaiting review.
+estimator, the bounded `meta_gradient` executor boundary, and a 100-seed Tier 2
+study (§6.4) whose median student ratio is `0.9995`: no consistent effect, and
+a mean still within one standard error of its tolerance.
 
 ### Recommended stress-test sequence
 
@@ -208,8 +208,8 @@ The teacher update depends on how a student trained on teacher labels performs
 on labelled data. The bounded `meta_gradient` executor represents that atomic
 inner/outer update explicitly rather than hiding a loop in a recipe function.
 `docs/recipes/meta_pseudo_labels.md` is authoritative for the selected variant,
-executor shape, and evidence; its ten-seed Tier 2 target is `deviating`,
-and card §6.4 proposes a larger study.
+executor shape, and evidence; its 100-seed Tier 2 target is `deviating`
+(card §6.4).
 
 ### 2.12 SelfMatch, SimCLRv2 and Noisy Student
 

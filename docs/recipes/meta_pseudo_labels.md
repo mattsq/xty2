@@ -341,7 +341,7 @@ parameters. Widening any of those is a new card/design decision.
 
 ### Tier 2 outcome
 
-On 2026-10-21, commit `52f645a7a619` produced a `deviating` result: This is the predeclared project-local Meta Pseudo Labels mechanism target: whether appendix A's centred hard-label score-function feedback improves the inner student's treatment NLL over the otherwise identical h=0 execution. It is not a reproduction of a published image-accuracy number; the tabular DGP, views, architecture, and 3,000-step budget are the reviewed deviations listed in the card. Within noise of the target: student_treatment_NLL_ratio was 0.997683 +/- 0.00994 against mean <= 1, by at least one stderr, inside its target by 0.00232 — less than its own standard error, so the run does not distinguish it from a miss.
+On 2026-10-21, commit `c7921229b9fa` produced a `deviating` result: This is the predeclared project-local Meta Pseudo Labels mechanism target: whether appendix A's centred hard-label score-function feedback improves the inner student's treatment NLL over the otherwise identical h=0 execution. It is not a reproduction of a published image-accuracy number; the tabular DGP, views, architecture, and 3,000-step budget are the reviewed deviations listed in the card. Within noise of the target: student_treatment_NLL_ratio was 0.995541 +/- 0.00577 against mean <= 1, by at least one stderr, inside its target by 0.00446 — less than its own standard error, so the run does not distinguish it from a miss.
 
 ## 6. Reproduction target
 
@@ -499,6 +499,7 @@ trajectory differences are reported rather than chosen after the run.
 |---|---|---|---|---|
 | 2026-09-04 | `06f2cb8d0ff5` | student_treatment_NLL_ratio<br>outer_teacher_treatment_NLL_ratio<br>all_losses_gradients_and_checkpoints_finite<br>terminal_student_class_mass_concentration | 0.983341 +/- 0.00652<br>0.983566 +/- 0.0139<br>1 +/- 0<br>0.521234 +/- 0.00482 | yes |
 | 2026-10-21 | `52f645a7a619` | student_treatment_NLL_ratio<br>outer_teacher_treatment_NLL_ratio<br>all_losses_gradients_and_checkpoints_finite<br>terminal_student_class_mass_concentration | 0.997683 +/- 0.00994<br>1.01487 +/- 0.00424<br>1 +/- 0<br>0.521526 +/- 0.00638 | no |
+| 2026-10-21 | `c7921229b9fa` | student_treatment_NLL_ratio<br>outer_teacher_treatment_NLL_ratio<br>all_losses_gradients_and_checkpoints_finite<br>terminal_student_class_mass_concentration | 0.995541 +/- 0.00577<br>1.00832 +/- 0.00875<br>1 +/- 0<br>0.526084 +/- 0.00204 | no |
 
 ### 6.4 Amendment: the ten-seed verdict depends on the machine
 
@@ -572,6 +573,23 @@ on the status, whichever way it goes. The cost is about 1.4–2 hours per
 nightly against the job's 300-minute limit. The §6 YAML, §6.1's replicate
 range and the benchmark's bound seed count changed together; the 100-seed
 ledger row was measured from that committed protocol.
+
+**The 100-seed result.** Commit `c7921229b9fa`, on the same machine as the
+second row, gave `0.995541 +/- 0.00577` and stays `deviating`. Its first ten
+replicates reproduce the second row exactly (`0.997683`), so the extension
+changed no earlier draw. The standard error is nearly twice the `0.0031`
+projected above. The per-replicate distribution has heavier tails than the
+first ten suggested: standard deviation `0.058`, range `0.789` to `1.345`.
+The median ratio is `0.9995` and 51 of 100 replicates fall below `1`. The
+teacher ratio is `1.0083 +/- 0.0088`, with 44 below `1`. On this fixture the
+evidence is that MPL's feedback has no consistent effect on either role.
+
+The projection's purpose is not met. The margin to the tolerance (`0.0045`) is
+still smaller than one standard error, so the reporting layer flags the run as
+within noise. A runner class whose rounding moves the mean by about `0.0013`
+would record `reproduced`. That claim was the projection's, not the
+protocol's, and this row replaces it: whether the two nightly runner classes
+now agree is an empirical question for the next nightly, not a settled one.
 
 ## 7. Unknowns
 
