@@ -353,7 +353,7 @@ reproduction:
   published: none - no published number applies to this adaptation
   published_source: n/a
   tolerance: student NLL ratio < 1.0 in mean by at least one stderr; outer-teacher NLL <= 1.10x the zero-feedback arm; finite losses and gradients in every replicate; terminal student class-mass concentration < 0.95
-  seeds: 10
+  seeds: 100
   report: mean_and_stderr
 ```
 
@@ -372,12 +372,14 @@ balanced predictions while rejecting collapse onto a single class.
 
 ### 6.1 Fixed DGP
 
-Reuse `uda.md` §6.1 without changing a draw. For replicate `r=0..9`, the base
-seed is `s_r = 94000+100r`; training generation uses `s_r+1`, held-out
+Reuse `uda.md` §6.1 without changing a draw. For replicate `r=0..99`, the base
+seed is `s_r = 94000+100r`; replicates `r=0..9` are `uda.md`'s ten fixtures and
+`r=10..99` extend the same rule (§6.4); training generation uses `s_r+1`, held-out
 generation `s_r+2`, outer-teacher initialisation `s_r+6`, inner-student
 initialisation `s_r+7`, stage/view RNG `s_r+10000`, and hard-label sampling
 `s_r+20000`. The last two offsets are new here and collide with nothing
-`uda.md` consumes.
+`uda.md` consumes. They collide with nothing within this card while `r<100`:
+`s_r+20000 = s_{r+100}+10000`, so a hundred replicates is the ceiling.
 
 Inherited from `uda.md` §6.1: the generating equations, the row counts, the
 seeded MCAR permutation, the assertion that both treatment levels appear among
@@ -486,7 +488,7 @@ coverage was `0.8839`, and TSA retained fraction was `1.0`. The paired weak and
 strong view label-flip rates were `2.15%` and `4.30%`, respectively. These are
 single-seed wiring measurements, not evidence for the Tier 2 claim.
 
-**Tier 2.** Run the paired arms over all ten replicates. Only the student NLL
+**Tier 2.** Run the paired arms over all 100 replicates. Only the student NLL
 ratio, teacher guardrail, finiteness and class-mass concentration ceiling determine
 `reproduced` versus `deviating`. The signs of hard-label accuracy and feedback
 trajectory differences are reported rather than chosen after the run.
@@ -557,7 +559,7 @@ On this fixture and budget, one centred scalar per 448-row batch behaves like
 noise, so any effect is too small for ten seeds to resolve. No hyperparameter
 was searched to recover a pass.
 
-**Proposed protocol change — awaiting review.** Raise `seeds` from `10` to
+**Protocol change — approved 2026-10-21.** Raise `seeds` from `10` to
 `100` and leave the metric, tolerance, fixture and every offset unchanged.
 Replicates `r=10..99` extend §6.1's generating rule `s_r = 94000+100r` beyond
 `uda.md`'s ten fixtures. The view-label-flip report continues per replicate.
@@ -567,9 +569,9 @@ with nothing. The hard-label seed `s_r+20000` equals the view seed
 spread, the standard error falls to about `0.0031`, about three standard errors
 from the threshold at the pooled `0.990`. Two runner classes should then agree
 on the status, whichever way it goes. The cost is about 1.4–2 hours per
-nightly against the job's 300-minute limit. Once this is reviewed, the §6
-YAML, §6.1's replicate range, the benchmark's bound seed count, and the
-re-measured ledger row land in one commit, as Tier 2 requires.
+nightly against the job's 300-minute limit. The §6 YAML, §6.1's replicate
+range and the benchmark's bound seed count changed together; the 100-seed
+ledger row was measured from that committed protocol.
 
 ## 7. Unknowns
 

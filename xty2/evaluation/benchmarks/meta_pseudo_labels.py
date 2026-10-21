@@ -56,7 +56,7 @@ def run(
     workers: int,
     cache_root: Path,
 ) -> BenchmarkResult:
-    """Run the ten paired replicates predeclared by the card's section 6."""
+    """Run the 100 paired replicates predeclared by the card's section 6."""
     del cache_root
     spec.bind(
         {
@@ -84,14 +84,14 @@ def run(
                 "losses and gradients in every replicate; terminal student "
                 "class-mass concentration < 0.95"
             ),
-            "seeds": "10",
+            "seeds": "100",
             "report": "mean_and_stderr",
         },
         documentation=("published_source",),
     )
-    if spec.seed_count != 10:
+    if spec.seed_count != 100:
         raise ValueError(
-            f"meta_pseudo_labels card reviewed ten replicates, got {spec.seed_count}"
+            f"meta_pseudo_labels card reviewed 100 replicates, got {spec.seed_count}"
         )
     rows = parallel_replicates(_replicate, spec.seed_count, workers=workers)
     return BenchmarkResult(
