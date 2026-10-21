@@ -1,6 +1,6 @@
 # Recipe spec card: meta_pseudo_labels
 
-**Status:** `reproduced`
+**Status:** `deviating`
 <!-- draft | reviewed | implemented | smoke-passing | reproduced | deviating -->
 
 > **Agent route:** read §2–§5 to review or change the optimisation boundary.
@@ -339,6 +339,10 @@ programming system: exactly one inner step, exactly one outer step, no arbitrary
 stage DAG, no implicit higher-order unroll, and no user callback that mutates
 parameters. Widening any of those is a new card/design decision.
 
+### Tier 2 outcome
+
+On 2026-10-21, commit `52f645a7a619` produced a `deviating` result: This is the predeclared project-local Meta Pseudo Labels mechanism target: whether appendix A's centred hard-label score-function feedback improves the inner student's treatment NLL over the otherwise identical h=0 execution. It is not a reproduction of a published image-accuracy number; the tabular DGP, views, architecture, and 3,000-step budget are the reviewed deviations listed in the card. Within noise of the target: student_treatment_NLL_ratio was 0.997683 +/- 0.00994 against mean <= 1, by at least one stderr, inside its target by 0.00232 — less than its own standard error, so the run does not distinguish it from a miss.
+
 ## 6. Reproduction target
 
 ```yaml
@@ -492,6 +496,80 @@ trajectory differences are reported rather than chosen after the run.
 | Date | Commit | Metric | Value ± stderr | Within tolerance? |
 |---|---|---|---|---|
 | 2026-09-04 | `06f2cb8d0ff5` | student_treatment_NLL_ratio<br>outer_teacher_treatment_NLL_ratio<br>all_losses_gradients_and_checkpoints_finite<br>terminal_student_class_mass_concentration | 0.983341 +/- 0.00652<br>0.983566 +/- 0.0139<br>1 +/- 0<br>0.521234 +/- 0.00482 | yes |
+| 2026-10-21 | `52f645a7a619` | student_treatment_NLL_ratio<br>outer_teacher_treatment_NLL_ratio<br>all_losses_gradients_and_checkpoints_finite<br>terminal_student_class_mass_concentration | 0.997683 +/- 0.00994<br>1.01487 +/- 0.00424<br>1 +/- 0<br>0.521526 +/- 0.00638 | no |
+
+### 6.4 Amendment: the ten-seed verdict depends on the machine
+
+Both rows in §6.3 are retained. Each was produced honestly under the reviewed
+protocol, and their disagreement is the evidence this amendment reasons from.
+
+**What the nightly showed.** At the single commit `52f645a7a619`, the nightly
+suite passed this card on some runners and failed it on others. Every failing
+run reported exactly `0.997683 +/- 0.00994`, the second ledger row, which was
+recorded on a third machine (Intel Xeon, AVX-512) from the committed tree. The
+passing runs took about 12 minutes instead of 8.5, which points to a second
+runner CPU class. The status is a pure function of seeds and code on one
+machine, but not across machines. Different BLAS and vector-kernel rounding
+perturbs the last bits, and the MPL arm's endogenous trajectory amplifies them
+over 3,000 steps. Seed `94000` shows the size of that amplification. The Tier 1
+note in §6.2 records a student ratio of `0.9642`; the run behind the second
+row gives `1.0195` for the same seed.
+
+Student NLL ratios behind the second row, per replicate `r` (base seed
+`94000+100r`):
+
+| r | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ratio | 1.0195 | 1.0157 | 0.9922 | 0.9418 | 0.9543 | 1.0491 | 0.9992 | 0.9928 | 0.9952 | 1.0170 |
+
+Six replicates improve and four worsen. The per-replicate standard deviation is
+`0.031` here and `0.021` behind the first row. Pooling the two rows puts the
+effect near a ratio of `0.990`. That is about one standard error from the
+threshold at ten seeds, so the reviewed tolerance (mean below `1` by at least
+one stderr) has no stable answer at this sample size.
+
+**What was audited before calling this a property of the method.** The
+executor was re-read against §3.2 and eq. (12). It forms the pre-update
+pseudo-label gradient before the one student step, and the labelled gradient at
+`theta'_S` after it. It takes their cosine similarity, updates the baseline
+before subtracting it (`training_utils.py:479-483`), and descends on
+`h * CE(y_hat_u, T(x_u))` with `h` and the sample detached, which is eq. (12)'s
+sign. The meta-score enters the teacher total at the `mean` reduction and the
+§4 weight `1.0`, alongside the TSA and UDA terms. Tier 0 rule 6 already fixes
+the sign on an analytic fixture. No departure from the card was found.
+
+**A dose diagnostic.** If the feedback carried usable information, amplifying
+it should move the student ratio consistently. The meta-score weight of the MPL
+arm alone was scaled, with the `h=0` arm unchanged, over the same ten
+replicates on the same machine. This is a diagnostic, not a recipe change; §4
+keeps weight `1.0`.
+
+| Meta-score weight | Student NLL ratio | Teacher NLL ratio |
+|---|---|---|
+| 1 (the card) | `0.9977 +/- 0.0099` | `1.0149 +/- 0.0042` |
+| 5 | `0.9854 +/- 0.0121` | `1.0662 +/- 0.0240` |
+| 20 | `1.0121 +/- 0.0212` | `1.0603 +/- 0.0190` |
+
+The spread grows with the dose and the direction does not follow it. The
+teacher worsens at every dose. Its average `h` stays near zero, with a
+population standard deviation near `0.5` and a positive fraction near `0.51`.
+On this fixture and budget, one centred scalar per 448-row batch behaves like
+noise, so any effect is too small for ten seeds to resolve. No hyperparameter
+was searched to recover a pass.
+
+**Proposed protocol change — awaiting review.** Raise `seeds` from `10` to
+`100` and leave the metric, tolerance, fixture and every offset unchanged.
+Replicates `r=10..99` extend §6.1's generating rule `s_r = 94000+100r` beyond
+`uda.md`'s ten fixtures. The view-label-flip report continues per replicate.
+`100` is the largest count that keeps §6.1's claim that the new offsets collide
+with nothing. The hard-label seed `s_r+20000` equals the view seed
+`s_{r+100}+10000`, so replicate `r+100` must not exist. At the larger observed
+spread, the standard error falls to about `0.0031`, about three standard errors
+from the threshold at the pooled `0.990`. Two runner classes should then agree
+on the status, whichever way it goes. The cost is about 1.4–2 hours per
+nightly against the job's 300-minute limit. Once this is reviewed, the §6
+YAML, §6.1's replicate range, the benchmark's bound seed count, and the
+re-measured ledger row land in one commit, as Tier 2 requires.
 
 ## 7. Unknowns
 

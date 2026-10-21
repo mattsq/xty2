@@ -48,10 +48,11 @@ amendment that replaced it is the more transferable part of the result. Read
 their cards before proposing a close relative; their active ledgers supersede
 the historical notes once carried here.
 
-Meta Pseudo Labels + UDA is reproduced. Its authoritative
+Meta Pseudo Labels + UDA is deviating. Its authoritative
 card at `docs/recipes/meta_pseudo_labels.md` specifies the hard-label one-step
-estimator, the bounded `meta_gradient` executor boundary, and the completed
-ten-seed Tier 2 study.
+estimator, the bounded `meta_gradient` executor boundary, and a ten-seed Tier 2
+study whose verdict differed between machines; §6.4 there proposes a
+100-seed protocol awaiting review.
 
 ### Recommended stress-test sequence
 
@@ -60,7 +61,7 @@ ten-seed Tier 2 study.
 2. ReMixMatch (`implemented`, study open): crowd one recipe without adding
    procedural recipe code.
 3. SimMatch (`implemented`, study partly open): test explicit historical state.
-4. Meta Pseudo Labels + UDA (`reproduced`): test the optimisation boundary.
+4. Meta Pseudo Labels + UDA (`deviating`, study open): test the optimisation boundary.
 5. A latent-treatment ELBO (`reproduced`): compose all three native
    probabilistic quantities.
 6. An explicit missingness model (no card yet): decide whether availability
@@ -207,8 +208,8 @@ The teacher update depends on how a student trained on teacher labels performs
 on labelled data. The bounded `meta_gradient` executor represents that atomic
 inner/outer update explicitly rather than hiding a loop in a recipe function.
 `docs/recipes/meta_pseudo_labels.md` is authoritative for the selected variant,
-executor shape, and completed evidence; its ten-seed Tier 2 target is
-`reproduced`.
+executor shape, and evidence; its ten-seed Tier 2 target is `deviating`,
+and card §6.4 proposes a larger study.
 
 ### 2.12 SelfMatch, SimCLRv2 and Noisy Student
 
