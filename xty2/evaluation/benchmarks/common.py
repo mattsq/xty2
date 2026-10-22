@@ -188,6 +188,7 @@ __all__ = [
     "bool_float",
     "cluster_centres",
     "cluster_population",
+    "cluster_posterior",
     "column",
     "configure_worker",
     "continuous_schema",
@@ -195,6 +196,7 @@ __all__ = [
     "parallel_replicates",
     "standardise_outcome",
     "take",
+    "treatment_posterior",
 ]
 
 
@@ -356,6 +358,27 @@ def cluster_centres(
     return (vertices @ hadamard.T).to(torch.float32)
 
 
+def _label_map(labels: Sequence[int] | None, classes: int) -> Tensor | None:
+    """Validate `cluster_population`'s `labels` before any draw is taken."""
+    if labels is None:
+        return None
+    mapping = torch.tensor(labels, dtype=torch.long)
+    if mapping.shape != (classes,):
+        raise ValueError(
+            f"labels must have one entry per cluster, got "
+            f"{tuple(mapping.shape)} for K = {classes}"
+        )
+    if int(mapping.min()) < 0:
+        raise ValueError(f"labels must be non-negative, got {list(labels)!r}")
+    levels = int(mapping.max()) + 1
+    if levels < 2 or set(mapping.tolist()) != set(range(levels)):
+        raise ValueError(
+            f"labels must use every level from 0 to their largest, and at "
+            f"least two, got {list(labels)!r}"
+        )
+    return mapping
+
+
 def _inverse_cdf(uniform: Tensor, probabilities: Tensor, classes: int) -> Tensor:
     """Sample `[rows]` classes from `[rows, K]` probabilities and one uniform.
 
@@ -380,6 +403,7 @@ def cluster_population(
     groups: Sequence[int] | None = None,
     within: float = 1.0,
     noise: float = CLUSTER_NOISE,
+    labels: Sequence[int] | None = None,
 ) -> ClusterPopulation:
     """The `K`-cluster generalisation of `fixmatch.md` §6.1's DGP.
 
@@ -406,7 +430,8 @@ def cluster_population(
             simplex every existing caller gets. See `cluster_centres`.
         within: Within-group separation as a fraction of the between-group one.
             Ignored when every group is a singleton.
-        effects: The outcome multiplier per treatment level, length `K`; `y =
+        effects: The outcome multiplier per treatment level, one per level
+            (`K` of them, or the number of levels `labels` declares); `y =
             baseline + effect * effects[t]`. `None` is `(0, 1, 1, ...)`, which
             at `K = 2` is the original `y = baseline + t * effect`. Deliberately
             **not** a dose: `DESIGN.md` §11.4's `continuous-t` row and
@@ -417,6 +442,14 @@ def cluster_population(
             The default is `fixmatch.md` §6.1's 0.6. A smaller value makes
             the signal columns more predictable from one another without
             changing any draw, which is what `vime.md` §6.1 needs from them.
+        labels: The treatment level each cluster's draw maps to, length `K`.
+            `None` is the identity, so every existing caller keeps its draws.
+            The assignment is still drawn over the `K` clusters with `low`,
+            then mapped, so `labels=(0, 1, 1)` at `K = 3` puts two clusters
+            under one treatment. This is how a fixture breaks the cluster
+            assumption on purpose: `meta_pseudo_labels.md` §6.5 places a
+            minority cluster beside a large cluster of the *other* level.
+            Every level from 0 to the largest must be used.
 
     Every treatment is observed. The label budget is the *recipe's* declaration
     (`data.missingness_mechanism`), so a benchmark that masked rows here would
@@ -436,15 +469,17 @@ def cluster_population(
         raise ValueError(
             f"prior must be positive and sum to 1, got {weights.tolist()!r}"
         )
+    mapping = _label_map(labels, classes)
+    levels = classes if mapping is None else int(mapping.max()) + 1
     multipliers = (
-        torch.arange(classes, dtype=torch.float32).clamp(max=1.0)
+        torch.arange(levels, dtype=torch.float32).clamp(max=1.0)
         if effects is None
         else torch.tensor(effects, dtype=torch.float32)
     )
-    if multipliers.shape != (classes,):
+    if multipliers.shape != (levels,):
         raise ValueError(
-            f"effects must have one entry per class, got "
-            f"{tuple(multipliers.shape)} for K = {classes}"
+            f"effects must have one entry per treatment level, got "
+            f"{tuple(multipliers.shape)} for {levels} levels"
         )
     if not 0.0 < low < 1.0:
         raise ValueError(f"low is a probability mass in (0, 1), got {low}")
@@ -466,6 +501,8 @@ def cluster_population(
     assignment = torch.full((rows, classes), low / (classes - 1))
     assignment[torch.arange(rows), cluster] = 1.0 - low
     treatment = _inverse_cdf(u_t, assignment, classes)
+    if mapping is not None:
+        treatment = mapping[treatment]
     baseline = 0.5 * x[:, 0] - 0.3 * x[:, 1] + 0.2 * (x[:, 4].square() - 1.0)
     true_effect = 1.0 + 0.5 * torch.tanh(x[:, 2])
     y = baseline + true_effect * multipliers[treatment] + 0.5 * epsilon_y
@@ -480,6 +517,71 @@ def cluster_population(
         ),
         true_effect=true_effect,
     )
+
+
+def cluster_posterior(
+    x: Tensor,
+    *,
+    classes: int = 2,
+    prior: Sequence[float] | None = None,
+    groups: Sequence[int] | None = None,
+    within: float = 1.0,
+    noise: float = CLUSTER_NOISE,
+) -> Tensor:
+    """`p(cluster | x)` under `cluster_population` with the same declaration.
+
+    Exact, not estimated: the signal columns are an isotropic Gaussian of
+    standard deviation `noise` around one of `K` centres, and the remaining
+    columns are independent of the cluster, so the posterior is a softmax of
+    log prior minus scaled squared distance over the signal columns alone.
+    A card that scores a *region* of the fixture — `meta_pseudo_labels.md`
+    §6.5's minority cluster — defines the region as the rows this posterior
+    assigns to it, so every module draws the same boundary.
+
+    Returns:
+        `[rows, K]` probabilities.
+    """
+    weights = (
+        torch.full((classes,), 1.0 / classes, dtype=x.dtype)
+        if prior is None
+        else torch.tensor(prior, dtype=x.dtype)
+    )
+    centres = cluster_centres(classes, groups=groups, within=within).to(x.dtype)
+    distance = (x[:, None, :SIGNAL_COLUMNS] - centres[None]).square().sum(dim=-1)
+    return torch.softmax(weights.log()[None] - distance / (2.0 * noise**2), dim=1)
+
+
+def treatment_posterior(
+    x: Tensor,
+    *,
+    classes: int = 2,
+    prior: Sequence[float] | None = None,
+    groups: Sequence[int] | None = None,
+    within: float = 1.0,
+    noise: float = CLUSTER_NOISE,
+    low: float = SEPARATED,
+    labels: Sequence[int] | None = None,
+) -> Tensor:
+    """The Bayes `p(t | x)` of `cluster_population`: the best any model can do.
+
+    The cluster posterior pushed through the assignment (`1 - low` on the
+    cluster's own class, `low` split over the rest) and then through `labels`.
+
+    Returns:
+        `[rows, levels]` probabilities.
+    """
+    posterior = cluster_posterior(
+        x, classes=classes, prior=prior, groups=groups, within=within, noise=noise
+    )
+    assignment = torch.full((classes, classes), low / (classes - 1), dtype=x.dtype)
+    assignment.fill_diagonal_(1.0 - low)
+    probabilities = posterior @ assignment
+    mapping = _label_map(labels, classes)
+    if mapping is None:
+        return probabilities
+    fold = torch.zeros(classes, int(mapping.max()) + 1, dtype=x.dtype)
+    fold[torch.arange(classes), mapping] = 1.0
+    return probabilities @ fold
 
 
 def two_cluster_population(

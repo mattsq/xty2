@@ -316,6 +316,7 @@ labelled rows during MPL training.
 | 8 | `judgement` | — | Treat appendix B's UDA argument as `x_u`, matching its prose and the reference implementation, rather than the displayed `x_l` in algorithm 1 line 10. | UDA is introduced there as the teacher's unlabelled-data objective; `x_l` would duplicate a labelled augmentation term and contradict the surrounding text. | Preserves the shipped UDA comparison. |
 | 9 | `judgement` | — | Report the raw student and teacher parameters and construct no evaluation EMA, dropping `uda.md`'s `TeacherSpec(decay=0.9999, role="evaluation")`. | MPL's own `ema_decay` default is `0`, that is no moving average (`flag_utils.py:113`), so the inherited EMA is a UDA-side choice rather than a paper mechanic. Keeping it would add a second reported parameter set to a card whose question is one gradient path. | `uda.md`'s headline Tier 2 number is its EMA NLL, so §6 here is not directly comparable with that column; the paired arms are unaffected. |
 | 10 | `judgement` | — | Hold the teacher's UDA consistency weight at a constant `1.0` rather than ramping it linearly over `uda_steps` as `training_utils.py:489-491` does. | `uda.md` is the nearest shipped baseline and already declares a constant weight; introducing MPL and a weight ramp in one card would make a difference unattributable. | Stronger early consistency pressure on the teacher than the reference schedule; both arms share it. |
+| 11 | `judgement` | — | Replace `uda.md`'s two-cluster Tier 2 fixture with §6.1's minority trap: three clusters, a 5% minority beside a large cluster of the other treatment. Tier 1 keeps the two-cluster fixture. | The inherited fixture gives the teacher no confidently wrong region for feedback to correct: by step 3,000 the feedback no longer rewards better pseudo-labels (§6.4, §6.5). | Moves the Tier 2 target from overall student NLL to paired minority-region accuracy, with a declared weight-20 dose arm reported as information. §6 is no longer comparable with `uda.md`'s. |
 
 No paper mechanic is intentionally omitted because of the current framework.
 The executor is fidelity-bearing and was added under `DESIGN.md` §11.2 rather
@@ -347,12 +348,12 @@ On 2026-10-21, commit `c7921229b9fa` produced a `deviating` result: This is the 
 
 ```yaml
 reproduction:
-  dataset: project-local seed-locked two-cluster XTY DGP (6 features, K=2), specified in §6.1 and inherited from uda.md
-  variant: paired MPL feedback versus the forced-zero-feedback arm defined below; same initial teacher/student parameters, batches, views, hard-label RNG and UDA objectives
-  metric: held-out inner-student treatment NLL ratio, MPL over the zero-feedback arm; held-out outer-teacher NLL ratio, finiteness and terminal student class-mass concentration as status-determining guardrails; sampled-label accuracy, h and baseline trajectories, UDA gate coverage, TSA retained fraction and view label-flip rates as reported diagnostics
+  dataset: project-local minority-trap XTY DGP (6 features, K=2): cluster_population(classes=3, groups=(2,1), within=0.6, noise=0.4, prior=(0.475,0.05,0.475)) relabelled by (0,1,1), specified in §6.1
+  variant: paired MPL (meta-score weight 1.0) versus the forced-zero-feedback arm, plus a declared weight-20 dose arm reported as information
+  metric: paired gain in inner-student accuracy on the held-out minority region (Bayes cluster posterior picks the minority cluster), MPL weight 1.0 minus h=0; h=0 minority accuracy as the fixture-validity guardrail; finiteness, outer-teacher NLL ratio and class-mass concentration as before; the dose arm's gains, both NLL ratios and the h diagnostics as information
   published: none - no published number applies to this adaptation
   published_source: n/a
-  tolerance: student NLL ratio < 1.0 in mean by at least one stderr; outer-teacher NLL <= 1.10x the zero-feedback arm; finite losses and gradients in every replicate; terminal student class-mass concentration < 0.95
+  tolerance: minority-accuracy gain >= 0.10 in mean by at least one stderr; h=0 minority accuracy <= 0.60 (the trap binds); outer-teacher NLL <= 1.10x the zero-feedback arm; finite losses and gradients in every replicate; terminal student class-mass concentration < 0.95
   seeds: 100
   report: mean_and_stderr
 ```
@@ -372,16 +373,38 @@ balanced predictions while rejecting collapse onto a single class.
 
 ### 6.1 Fixed DGP
 
-Reuse `uda.md` §6.1 without changing a draw. For replicate `r=0..99`, the base
-seed is `s_r = 94000+100r`; replicates `r=0..9` are `uda.md`'s ten fixtures and
-`r=10..99` extend the same rule (§6.4); training generation uses `s_r+1`, held-out
+**Tier 2 fixture: the minority trap (§6.5, deviation 11).** For replicate
+`r=0..99`, the base seed is `s_r = 94000+100r`; training generation uses `s_r+1`, held-out
 generation `s_r+2`, outer-teacher initialisation `s_r+6`, inner-student
 initialisation `s_r+7`, stage/view RNG `s_r+10000`, and hard-label sampling
-`s_r+20000`. The last two offsets are new here and collide with nothing
-`uda.md` consumes. They collide with nothing within this card while `r<100`:
-`s_r+20000 = s_{r+100}+10000`, so a hundred replicates is the ceiling.
+`s_r+20000`. The offsets collide with nothing within this card while `r<100`:
+`s_r+20000 = s_{r+100}+10000`, so a hundred replicates is the ceiling. Both the
+training (1,024 rows) and held-out (2,048 rows) draws are
+`cluster_population(classes=3, groups=(2, 1), within=0.6, noise=0.4,
+prior=(0.475, 0.05, 0.475), labels=(0, 1, 1))`:
 
-Inherited from `uda.md` §6.1: the generating equations, the row counts, the
+```text
+cluster c ~ Categorical(0.475, 0.05, 0.475)
+x[0:4]    = mu_c + 0.4 epsilon[0:4]      mu = cluster_centres(3, groups=(2,1), within=0.6)
+x[4:6]    = epsilon[4:6]
+d ~ Categorical: p(d = c | c) = 0.98, the remaining 0.02 split over the other two clusters
+t         = (0, 1, 1)[d]
+baseline  = 0.5x0 - 0.3x1 + 0.2(x4^2 - 1)
+effect    = 1 + 0.5 tanh(x2)
+y         = baseline + t * effect + 0.5 epsilon_y
+```
+
+Clusters 0 and 1 form the tight group, `1.08` apart; cluster 2 is `1.8` from
+both. The **minority region** is the set of held-out rows whose exact cluster
+posterior (`cluster_posterior`) picks cluster 1, about 4% of rows. The Bayes
+rule (`treatment_posterior`) is right on about `0.83` of it, and its treatment
+NLL is about `0.146` overall. View label-flip rates are reported against that
+Bayes rule.
+
+**Tier 1 fixture: unchanged.** Tier 1 keeps seed `94000` on `uda.md` §6.1's
+two-cluster draw, without changing a draw. It checks wiring, not the §6 claim.
+
+Inherited from `uda.md` §6.1 by both fixtures: the row counts, the
 seeded MCAR permutation, the assertion that both treatment levels appear among
 the observed rows, the shared quota stream, and the pre-training report of view
 label-flip rates and treatment prevalence. Not inherited: outcome scaling,
@@ -401,8 +424,9 @@ y         = baseline + t * effect + 0.5 epsilon_y
 
 Exactly 64 training treatments are observed by the inherited seeded MCAR
 permutation; all held-out treatments and every outcome are observed. Outcomes
-remain in `XTYBatch` only to assert that neither role reaches `Y_RAW`. Both arms
-use the identical ordered quota stream of 64 observed and 448 missing rows.
+remain in `XTYBatch` only to assert that neither role reaches `Y_RAW`. Every arm
+uses the identical ordered quota stream of 64 observed and 448 missing rows.
+The equations above the Tier 1 note describe the two-cluster draw only.
 
 ### 6.2 Predeclared evidence
 
@@ -488,10 +512,12 @@ coverage was `0.8839`, and TSA retained fraction was `1.0`. The paired weak and
 strong view label-flip rates were `2.15%` and `4.30%`, respectively. These are
 single-seed wiring measurements, not evidence for the Tier 2 claim.
 
-**Tier 2.** Run the paired arms over all 100 replicates. Only the student NLL
-ratio, teacher guardrail, finiteness and class-mass concentration ceiling determine
-`reproduced` versus `deviating`. The signs of hard-label accuracy and feedback
-trajectory differences are reported rather than chosen after the run.
+**Tier 2.** Run the three paired arms of §6.5 over all 100 replicates of the
+minority trap. Only the weight-1.0 arm's paired minority-accuracy gain, the
+`h=0` trap guardrail, the teacher NLL guardrail, finiteness and the class-mass
+concentration ceiling determine `reproduced` versus `deviating`. The dose arm,
+the student NLL ratio and the feedback diagnostics are reported, not chosen
+after the run.
 
 ### 6.3 Result ledger
 
@@ -591,10 +617,12 @@ would record `reproduced`. That claim was the projection's, not the
 protocol's, and this row replaces it: whether the two nightly runner classes
 now agree is an empirical question for the next nightly, not a settled one.
 
-### 6.5 Proposed amendment: a fixture where the teacher is confidently wrong — awaiting review
+### 6.5 Amendment: a fixture where the teacher is confidently wrong
 
-This section proposes replacing the §6 target. Nothing here is implemented, and
-the §6 YAML, §6.1 and the benchmark module still describe the current fixture.
+**Approved on 2026-10-22 and implemented.** The §6 YAML, §6.1, §5 row 11 and
+the benchmark module now describe the minority trap. §6.3's first three rows
+and §6.4 are the record of the two-cluster fixture. The text below is the
+proposal as reviewed, with the draft §6 block removed now that §6 carries it.
 Every number below comes from scratch screening on one machine (Intel Xeon,
 AVX-512), at the 3,000-step budget and §4 hyperparameters unless a row says
 otherwise. Seeds use the §6.1 stream, `s_r = 94000+100r`.
@@ -670,19 +698,8 @@ shares parameters at initialisation, batches, views and hard-label streams, as
    weight `1.0`: the dose arm is built in the benchmark module, the same way
    the `h=0` arm is, so `plan.hyperparameters` is unchanged.
 
-A draft of the replacement §6 block:
-
-```text
-reproduction:
-  dataset: project-local minority-trap XTY DGP (6 features, K=2): cluster_population(classes=3, groups=(2,1), within=0.6, noise=0.4, prior=(0.475,0.05,0.475)) relabelled by (0,1,1), specified in §6.5
-  variant: paired MPL (meta-score weight 1.0) versus the forced-zero-feedback arm, plus a declared weight-20 dose arm reported as information
-  metric: paired gain in inner-student accuracy on the held-out minority region (Bayes cluster posterior picks the minority cluster), MPL weight 1.0 minus h=0; h=0 minority accuracy as the fixture-validity guardrail; finiteness, outer-teacher NLL ratio and class-mass concentration as before; the dose arm's gains, both NLL ratios and the h diagnostics as information
-  published: none - no published number applies to this adaptation
-  published_source: n/a
-  tolerance: minority-accuracy gain >= 0.10 in mean by at least one stderr; h=0 minority accuracy <= 0.60 (the trap binds); outer-teacher NLL <= 1.10x the zero-feedback arm; finite losses and gradients in every replicate; terminal student class-mass concentration < 0.95
-  seeds: 100
-  report: mean_and_stderr
-```
+The approved block is §6's, applied verbatim except that `dataset` now points
+to §6.1.
 
 **Why `0.10`, and why it was chosen after the screen.** The claim being tested
 is that the feedback repairs a teacher that is confidently wrong. Closing a
@@ -700,7 +717,7 @@ no-practical-effect claim at `0` (a mean gain at or below `0`), which would sit
 about 1.6 standard errors from the expected weight-1 result and could flip by
 machine as the current target did.
 
-**What implementing it would add.**
+**What implementing it added.**
 
 - A `labels` argument to `cluster_population`
   (`xty2/evaluation/benchmarks/common.py`) mapping clusters to treatment
@@ -709,20 +726,15 @@ machine as the current target did.
 - A shared helper returning the Bayes cluster posterior for this family, so
   the minority region is defined once.
 - A third arm and the new metrics in `xty2/evaluation/benchmarks/meta_pseudo_labels.py`.
-- A new §5 row: `11 | judgement | — | Replace uda.md's two-cluster Tier 2
-  fixture with the §6.5 minority trap | The inherited fixture gives the
-  teacher no confidently wrong region for feedback to correct (§6.4, §6.5) |
-  Moves the Tier 2 target from overall NLL to minority-region accuracy; no
-  longer comparable with uda.md's §6`. §6.1's opening sentence ("Reuse
-  `uda.md` §6.1 without changing a draw") would be rewritten with it.
+- §5 row 11, with §6.1 rewritten to describe both fixtures.
 - Tier 1 keeps seed `94000` on the current fixture; it checks wiring, not this
   claim.
 
 The cost is about 100 minutes per nightly on the recording machine (three
 arms, 100 replicates, four workers), against the job's 300-minute limit. The
-seed stream and its ceiling of 100 are unchanged. §6.3's rows and §6.4 stay as
-the record of the current fixture. The new target's first ledger row would
-land in the same commit as the module, run from that committed tree.
+seed stream and its ceiling of 100 are unchanged. The new target's first ledger
+row is measured from the committed protocol and recorded in the commit that
+follows it.
 
 ## 7. Unknowns
 
