@@ -51,9 +51,10 @@ the historical notes once carried here.
 Meta Pseudo Labels + UDA is deviating. Its authoritative
 card at `docs/recipes/meta_pseudo_labels.md` specifies the hard-label one-step
 estimator, the bounded `meta_gradient` executor boundary, and a 100-seed Tier 2
-study (§6.4) whose median student ratio is `0.9995`: no consistent effect, and
-a mean still within one standard error of its tolerance. Card §6.5 proposes a
-minority-trap fixture where the teacher is confidently wrong, awaiting review.
+study whose median student ratio was `0.9995` (§6.4). Its Tier 2 target is now
+§6.5's minority trap, where the teacher is confidently wrong: at the paper's
+weight the student's minority-accuracy gain is `0.0055 +/- 0.0065`
+(`deviating`), while a declared weight-20 dose arm gains `+0.069 +/- 0.014`.
 
 ### Recommended stress-test sequence
 
@@ -209,8 +210,8 @@ The teacher update depends on how a student trained on teacher labels performs
 on labelled data. The bounded `meta_gradient` executor represents that atomic
 inner/outer update explicitly rather than hiding a loop in a recipe function.
 `docs/recipes/meta_pseudo_labels.md` is authoritative for the selected variant,
-executor shape, and evidence; its 100-seed Tier 2 target is `deviating`
-(card §6.4).
+executor shape, and evidence; its 100-seed minority-trap Tier 2 target is
+`deviating` (card §6.5).
 
 ### 2.12 SelfMatch, SimCLRv2 and Noisy Student
 

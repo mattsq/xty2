@@ -342,7 +342,7 @@ parameters. Widening any of those is a new card/design decision.
 
 ### Tier 2 outcome
 
-On 2026-10-21, commit `c7921229b9fa` produced a `deviating` result: This is the predeclared project-local Meta Pseudo Labels mechanism target: whether appendix A's centred hard-label score-function feedback improves the inner student's treatment NLL over the otherwise identical h=0 execution. It is not a reproduction of a published image-accuracy number; the tabular DGP, views, architecture, and 3,000-step budget are the reviewed deviations listed in the card. Within noise of the target: student_treatment_NLL_ratio was 0.995541 +/- 0.00577 against mean <= 1, by at least one stderr, inside its target by 0.00446 — less than its own standard error, so the run does not distinguish it from a miss.
+On 2026-10-22, commit `6494ee9b4227` produced a `deviating` result: This is the predeclared project-local Meta Pseudo Labels mechanism target of card section 6.5: whether appendix A's centred hard-label score-function feedback, at the section 4 meta-score weight, repairs a teacher that UDA's consistency leads to absorb a 5% minority cluster into its neighbour's class, measured as the student's paired accuracy gain on that region over the otherwise identical h=0 execution. A declared weight-20 dose arm is reported as information and does not determine the status. It is not a reproduction of a published image-accuracy number; the tabular DGP, views, architecture, and 3,000-step budget are the reviewed deviations listed in the card. Failed target(s): student_minority_accuracy_gain was 0.00551841 +/- 0.0065 against mean >= 0.1, by at least one stderr.
 
 ## 6. Reproduction target
 
@@ -526,6 +526,7 @@ after the run.
 | 2026-09-04 | `06f2cb8d0ff5` | student_treatment_NLL_ratio<br>outer_teacher_treatment_NLL_ratio<br>all_losses_gradients_and_checkpoints_finite<br>terminal_student_class_mass_concentration | 0.983341 +/- 0.00652<br>0.983566 +/- 0.0139<br>1 +/- 0<br>0.521234 +/- 0.00482 | yes |
 | 2026-10-21 | `52f645a7a619` | student_treatment_NLL_ratio<br>outer_teacher_treatment_NLL_ratio<br>all_losses_gradients_and_checkpoints_finite<br>terminal_student_class_mass_concentration | 0.997683 +/- 0.00994<br>1.01487 +/- 0.00424<br>1 +/- 0<br>0.521526 +/- 0.00638 | no |
 | 2026-10-21 | `c7921229b9fa` | student_treatment_NLL_ratio<br>outer_teacher_treatment_NLL_ratio<br>all_losses_gradients_and_checkpoints_finite<br>terminal_student_class_mass_concentration | 0.995541 +/- 0.00577<br>1.00832 +/- 0.00875<br>1 +/- 0<br>0.526084 +/- 0.00204 | no |
+| 2026-10-22 | `6494ee9b4227` | student_minority_accuracy_gain<br>zero_feedback_student_minority_accuracy<br>outer_teacher_treatment_NLL_ratio<br>all_losses_gradients_and_checkpoints_finite<br>terminal_student_class_mass_concentration | 0.00551841 +/- 0.0065<br>0.339695 +/- 0.0163<br>0.990021 +/- 0.0107<br>1 +/- 0<br>0.529258 +/- 0.00203 | no |
 
 ### 6.4 Amendment: the ten-seed verdict depends on the machine
 
@@ -730,11 +731,38 @@ machine as the current target did.
 - Tier 1 keeps seed `94000` on the current fixture; it checks wiring, not this
   claim.
 
-The cost is about 100 minutes per nightly on the recording machine (three
-arms, 100 replicates, four workers), against the job's 300-minute limit. The
+The proposal estimated about 100 minutes per nightly. The first run took 2 h
+32 min on the recording machine (three arms, 100 replicates, four workers),
+against the job's 300-minute limit. The
 seed stream and its ceiling of 100 are unchanged. The new target's first ledger
 row is measured from the committed protocol and recorded in the commit that
 follows it.
+
+**The first 100-seed result (`6494ee9b4227`, 2026-10-22): `deviating`, by a
+wide margin.** The status-determining gain is `0.0055 +/- 0.0065`, about 15
+standard errors below the `0.10` bar, so the verdict should not depend on the
+runner class. The trap binds: the `h=0` student is right on `0.340 +/- 0.016`
+of the minority region, against Bayes `0.835 +/- 0.004`, and that region is
+`4.2%` of held-out rows. The teacher guardrail holds (`0.990 +/- 0.011`).
+Every arm finished finite. View label-flip rates against the Bayes rule are
+`2.1%` weak and `4.4%` strong.
+
+| Arm | Student minority gain | Seeds up / down | Teacher minority gain | Student NLL ratio (below 1) |
+|---|---|---|---|---|
+| MPL, §4 weight `1.0` (status) | `+0.0055 +/- 0.0065`, median `0` | 44 / 30 | `+0.030 +/- 0.0096` | `0.991 +/- 0.007` (56/100) |
+| Dose arm, weight `20` (information) | `+0.069 +/- 0.014`, median `+0.031` | 67 / 22 | `+0.044 +/- 0.015` | `0.939 +/- 0.013` (73/100) |
+
+At the paper's weight, the teacher moves toward the minority's label by about
+three standard errors, but the student does not follow: one centred scalar per
+448-row batch, competing with a full-weight UDA term, shifts the teacher's
+minority probabilities too little to change the student's hard-label fit.
+When the feedback outweighs UDA (the dose arm), the student escapes the trap
+on two-thirds of replicates and its overall NLL improves by about 6%. Both
+conclusions need the 100 seeds. The 16-seed screen overstated the weight-1
+gain (`+0.028`) and understated how consistently the dose arm improves NLL.
+The card's §2 question has a mechanism answer: the feedback carries the
+information MPL needs and corrects the error it was designed for, but at the
+paper's weight, on this fixture and budget, too weakly to change the student.
 
 ## 7. Unknowns
 
