@@ -52,7 +52,8 @@ Meta Pseudo Labels + UDA is deviating. Its authoritative
 card at `docs/recipes/meta_pseudo_labels.md` specifies the hard-label one-step
 estimator, the bounded `meta_gradient` executor boundary, and a 100-seed Tier 2
 study (§6.4) whose median student ratio is `0.9995`: no consistent effect, and
-a mean still within one standard error of its tolerance.
+a mean still within one standard error of its tolerance. Card §6.5 proposes a
+minority-trap fixture where the teacher is confidently wrong, awaiting review.
 
 ### Recommended stress-test sequence
 

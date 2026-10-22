@@ -591,6 +591,139 @@ would record `reproduced`. That claim was the projection's, not the
 protocol's, and this row replaces it: whether the two nightly runner classes
 now agree is an empirical question for the next nightly, not a settled one.
 
+### 6.5 Proposed amendment: a fixture where the teacher is confidently wrong — awaiting review
+
+This section proposes replacing the §6 target. Nothing here is implemented, and
+the §6 YAML, §6.1 and the benchmark module still describe the current fixture.
+Every number below comes from scratch screening on one machine (Intel Xeon,
+AVX-512), at the 3,000-step budget and §4 hyperparameters unless a row says
+otherwise. Seeds use the §6.1 stream, `s_r = 94000+100r`.
+
+**Why the current fixture cannot answer the question.** The paper's account of
+what the feedback buys is a teacher that stops reinforcing its own early
+mistakes (appendix D.3, figure 4; the TwoMoon example in §3.1 and figure 2).
+The paper's own isolated evidence for it is small: a plain pseudo-label teacher
+gains `+0.32` points from MPL (appendix D.4, table 10), and the UDA → UDA+MPL
+gain in figure 3 is a single ImageNet-10% run. On the current fixture the UDA
+teacher learns the cluster structure within a few hundred steps, so there is
+no such mistake to correct. An oracle probe made this measurable. Freeze a
+teacher/student pair, draw 200 hard-label samples on one fixed 448-row batch,
+and compute `h_raw` and the realised one-step labelled-loss drop for each draw.
+
+| Snapshot (current fixture, seeds 0–3) | corr(`h_raw`, realised drop) | corr(`h_raw`, draw quality under the Bayes posterior) |
+|---|---|---|
+| step 1 | `+0.70` … `+0.96` | `+0.52` … `+0.77` |
+| step 3,000 | `+0.91` … `+0.96` | `-0.06` … `+0.24` |
+
+The first column confirms the estimator: `h_raw` tracks the realised
+improvement at every snapshot, so eq. (12) is implemented as derived. The
+second shows the feedback rewarding better pseudo-labels early and almost not
+at all by the end of training. Sweeping the shipped `cluster_population` family
+(K up to 5, class groups, noise 0.3–0.6, the paper's 64:128 batch geometry)
+gave student ratios between `0.987` and `1.026` with no consistent sign.
+
+**The proposed fixture: a minority trap.** Draw
+`cluster_population(classes=3, groups=(2, 1), within=0.6, noise=0.4,
+prior=(0.475, 0.05, 0.475))` and map clusters to treatments by `(0, 1, 1)`:
+`K=2`, with label noise `low=0.02` at the cluster level, as now. Cluster 1 is a
+5% minority. It sits `1.08` from the large cluster 0, whose label is the other
+class, and shares its label with the distant cluster 2. Its labels are
+recoverable: the Bayes classifier is right on `0.83` of the minority region
+(rows whose Bayes cluster posterior picks cluster 1, about 4% of rows), with
+Bayes NLL `0.146` overall. Under the inherited MCAR budget, about 3 of the 64
+labels fall in it. UDA's sharpened, confidence-gated consistency pulls the
+minority into its neighbour's class, and the student copies the teacher. The
+trap binds: across 16 seeds the `h=0` student is right on `0.13`–`0.54` of the
+minority region (mean `0.29`). At step 3,000 the probe finds the feedback still
+informative on all four seeds probed: corr(`h_raw`, draw quality) is
+`+0.12`–`+0.21`, and corr(`h_raw`, minority labels correct) is `+0.10`–`+0.26`.
+
+**What the screen found on it.** The paired metric is the student's accuracy
+on the minority region, MPL minus `h=0`:
+
+| Arm | Seeds | Minority-accuracy gain | Seeds up / down | Median student NLL ratio |
+|---|---|---|---|---|
+| §4 as written (meta-score weight `1.0`) | 8 | `+0.027` (median `+0.012`) | 6 / 2 | `0.994` |
+| weight `1.0`, UDA weight ramped `0 → 1` over the run (reverting deviation 10) | 16 | `+0.028 +/- 0.043` (median `+0.011`) | 10 / 4 | `1.011` |
+| weight `1.0`, all schedules stretched to 12,000 steps | 8 | `+0.02` | 3 / 2 | `0.993` |
+| meta-score weight `5` | 8 | `+0.09` | 6 / 2 | `0.958` |
+| meta-score weight `20` | 16 | `+0.073 +/- 0.039` (median `+0.033`) | 12 / 3 | `0.967` |
+
+On the current fixture the same weight-20 dose only widened the spread (§6.4).
+Here it corrects the trap, and the teacher's minority accuracy rises with it
+(`+0.076 +/- 0.041`, 12 of 16 seeds). At the paper's weight, neither a 4×
+budget nor the reference's UDA ramp makes the correction reliable: the
+consistency term outweighs the feedback throughout training. The student NLL
+ratio is the wrong headline for this claim. The trap is about 4% of rows, and
+one replicate escaped it completely (`0.19 → 0.79`) while its overall NLL got
+worse.
+
+**The proposed study: three paired arms on the minority trap.** Every arm
+shares parameters at initialisation, batches, views and hard-label streams, as
+§6 already requires of two arms.
+
+1. `h=0`, the reviewed control, unchanged.
+2. MPL as §4 declares it, meta-score weight `1.0`. **This arm alone determines
+   the status.**
+3. A declared dose arm, MPL with meta-score weight `20`. Its metrics are
+   reported as information and never determine the status. The recipe keeps
+   weight `1.0`: the dose arm is built in the benchmark module, the same way
+   the `h=0` arm is, so `plan.hyperparameters` is unchanged.
+
+A draft of the replacement §6 block:
+
+```text
+reproduction:
+  dataset: project-local minority-trap XTY DGP (6 features, K=2): cluster_population(classes=3, groups=(2,1), within=0.6, noise=0.4, prior=(0.475,0.05,0.475)) relabelled by (0,1,1), specified in §6.5
+  variant: paired MPL (meta-score weight 1.0) versus the forced-zero-feedback arm, plus a declared weight-20 dose arm reported as information
+  metric: paired gain in inner-student accuracy on the held-out minority region (Bayes cluster posterior picks the minority cluster), MPL weight 1.0 minus h=0; h=0 minority accuracy as the fixture-validity guardrail; finiteness, outer-teacher NLL ratio and class-mass concentration as before; the dose arm's gains, both NLL ratios and the h diagnostics as information
+  published: none - no published number applies to this adaptation
+  published_source: n/a
+  tolerance: minority-accuracy gain >= 0.10 in mean by at least one stderr; h=0 minority accuracy <= 0.60 (the trap binds); outer-teacher NLL <= 1.10x the zero-feedback arm; finite losses and gradients in every replicate; terminal student class-mass concentration < 0.95
+  seeds: 100
+  report: mean_and_stderr
+```
+
+**Why `0.10`, and why it was chosen after the screen.** The claim being tested
+is that the feedback repairs a teacher that is confidently wrong. Closing a
+fifth of the gap between the `h=0` student (about `0.29`) and Bayes (`0.83`) is
+about `0.11`; `0.10` rounds it down. The screen measured a per-replicate
+standard deviation of `0.065`–`0.172` for this gain. At 100 seeds the larger
+value gives a standard error near `0.017`. That puts the expected weight-1
+result (about `+0.03`) four standard errors below the bar, and the expected
+dose-arm result (about `+0.07`) about two below. The predicted status is
+therefore `deviating`, decided by the paper's weight with a margin the two
+runner classes should agree on, while the dose arm records that the mechanism
+works when it outweighs UDA. This threshold was set after seeing the scratch
+data, and review should weigh it as such. The alternative is a
+no-practical-effect claim at `0` (a mean gain at or below `0`), which would sit
+about 1.6 standard errors from the expected weight-1 result and could flip by
+machine as the current target did.
+
+**What implementing it would add.**
+
+- A `labels` argument to `cluster_population`
+  (`xty2/evaluation/benchmarks/common.py`) mapping clusters to treatment
+  levels, with Tier 0 tests. The default `None` is the identity, so every
+  existing caller keeps its exact draws.
+- A shared helper returning the Bayes cluster posterior for this family, so
+  the minority region is defined once.
+- A third arm and the new metrics in `xty2/evaluation/benchmarks/meta_pseudo_labels.py`.
+- A new §5 row: `11 | judgement | — | Replace uda.md's two-cluster Tier 2
+  fixture with the §6.5 minority trap | The inherited fixture gives the
+  teacher no confidently wrong region for feedback to correct (§6.4, §6.5) |
+  Moves the Tier 2 target from overall NLL to minority-region accuracy; no
+  longer comparable with uda.md's §6`. §6.1's opening sentence ("Reuse
+  `uda.md` §6.1 without changing a draw") would be rewritten with it.
+- Tier 1 keeps seed `94000` on the current fixture; it checks wiring, not this
+  claim.
+
+The cost is about 100 minutes per nightly on the recording machine (three
+arms, 100 replicates, four workers), against the job's 300-minute limit. The
+seed stream and its ceiling of 100 are unchanged. §6.3's rows and §6.4 stay as
+the record of the current fixture. The new target's first ledger row would
+land in the same commit as the module, run from that committed tree.
+
 ## 7. Unknowns
 
 | Unspecified or conflicting source detail | Our choice | Basis |
