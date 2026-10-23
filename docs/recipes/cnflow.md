@@ -167,6 +167,30 @@ data:
 
 `conditional_flow` is a new `OutcomeDistribution` implementation behind the existing `Y_GIVEN_XT` port. No new port, objective protocol, or execution mode is required.
 
+### 5.2 Tier 1 evidence boundary
+
+The smoke fixture retains 512 training rows, exactly 50% MCAR treatment
+missingness, 512 held-out rows, 48-row batches and 3,000 steps. The paired
+complete-case ablation retains the same initial parameters and batch stream.
+Both fits must have finite traces and held-out metrics; the existing full-fit
+loss-decrease, propensity-baseline and wide ATE checks remain.
+
+The former requirement that the marginal arm beat complete cases by 0.05 nats
+on this one held-out draw is withdrawn as a Tier 1 assertion. It failed
+intermittently even after the training population was increased from 128 to
+512. Neither the flow claim in §2 nor exact marginalisation guarantees a
+finite-sample generalisation advantage after 3,000 Adam steps. This changes
+the wiring evidence, not the recipe or the Tier 2 target/status.
+
+Instead, initialisation/data seeds 17, 18 and 19 each exercise one executor
+step on 48 rows with every treatment hidden (unit row weights). The mixed loss
+must equal an independent enumeration of the two-class mixture; the encoder,
+flow and propensity updates must each descend that mixture's gradient.
+Flipping every hidden treatment placeholder must leave the entire update
+identical. The paired complete-case control must make no update. This tests
+the declared mechanism without selecting a seed or threshold for a favourable
+held-out result. See the [failure investigation](../experiments/2026-10-23-cnflow-smoke.md).
+
 ### Tier 2 outcome
 
 On 2026-08-24, commit `d060df351f2fe8bac6d951c3757506c684d8b408` produced a `deviating` result: This is the predeclared project-local conditional-density validation target. Matching it validates the CNFlow recipe's limited claim and is not a reproduction of Durkan et al. Failed target(s): paired_d_conditional_NLL was 1.88504 +/- 0.225 nat/row against mean <= -0.1 nat/row.
