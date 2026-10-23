@@ -416,9 +416,11 @@ def test_role_checkpoints_round_trip_under_explicit_role_paths(
 
 
 def test_the_card_records_the_tier_two_result() -> None:
-    """Only the completed ten-seed protocol promotes the card to reproduced."""
+    """The ten-seed verdict differed between machines, so the card is deviating."""
     card = CARD.read_text(encoding="utf-8")
-    assert "**Status:** `reproduced`" in card
+    assert "**Status:** `deviating`" in card
+    assert "### Tier 2 outcome" in card
+    assert "### 6.4 Amendment: the ten-seed verdict depends on the machine" in card
     ledger = card.split("### 6.3 Result ledger", 1)[1].split("## 7.", 1)[0]
     for metric in (
         "student_treatment_NLL_ratio",

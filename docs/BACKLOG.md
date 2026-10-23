@@ -48,10 +48,13 @@ amendment that replaced it is the more transferable part of the result. Read
 their cards before proposing a close relative; their active ledgers supersede
 the historical notes once carried here.
 
-Meta Pseudo Labels + UDA is reproduced. Its authoritative
+Meta Pseudo Labels + UDA is deviating. Its authoritative
 card at `docs/recipes/meta_pseudo_labels.md` specifies the hard-label one-step
-estimator, the bounded `meta_gradient` executor boundary, and the completed
-ten-seed Tier 2 study.
+estimator, the bounded `meta_gradient` executor boundary, and a 100-seed Tier 2
+study whose median student ratio was `0.9995` (§6.4). Its Tier 2 target is now
+§6.5's minority trap, where the teacher is confidently wrong: at the paper's
+weight the student's minority-accuracy gain is `0.0055 +/- 0.0065`
+(`deviating`), while a declared weight-20 dose arm gains `+0.069 +/- 0.014`.
 
 ### Recommended stress-test sequence
 
@@ -60,7 +63,7 @@ ten-seed Tier 2 study.
 2. ReMixMatch (`implemented`, study open): crowd one recipe without adding
    procedural recipe code.
 3. SimMatch (`implemented`, study partly open): test explicit historical state.
-4. Meta Pseudo Labels + UDA (`reproduced`): test the optimisation boundary.
+4. Meta Pseudo Labels + UDA (`deviating`, study open): test the optimisation boundary.
 5. A latent-treatment ELBO (`reproduced`): compose all three native
    probabilistic quantities.
 6. An explicit missingness model (no card yet): decide whether availability
@@ -207,8 +210,8 @@ The teacher update depends on how a student trained on teacher labels performs
 on labelled data. The bounded `meta_gradient` executor represents that atomic
 inner/outer update explicitly rather than hiding a loop in a recipe function.
 `docs/recipes/meta_pseudo_labels.md` is authoritative for the selected variant,
-executor shape, and completed evidence; its ten-seed Tier 2 target is
-`reproduced`.
+executor shape, and evidence; its 100-seed minority-trap Tier 2 target is
+`deviating` (card §6.5).
 
 ### 2.12 SelfMatch, SimCLRv2 and Noisy Student
 

@@ -26,6 +26,8 @@ not vacuous because it is genuinely different code.
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 import pytest
 import torch
 from xty2.core import XTYBatch
@@ -36,6 +38,8 @@ from xty2.evaluation.benchmarks.common import (
     ClusterPopulation,
     cluster_centres,
     cluster_population,
+    cluster_posterior,
+    treatment_posterior,
     two_cluster_population,
 )
 
@@ -449,3 +453,100 @@ def test_an_ill_formed_adjacency_declaration_is_refused(
 ) -> None:
     with pytest.raises(ValueError):
         cluster_centres(4, **kwargs)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Cluster-to-treatment labels and the exact posteriors (`meta_pseudo_labels.md`
+# §6.5's minority trap)
+# ---------------------------------------------------------------------------
+
+
+class _Clusters(TypedDict):
+    classes: int
+    groups: tuple[int, ...]
+    within: float
+    noise: float
+    prior: tuple[float, ...]
+
+
+TRAP: _Clusters = {
+    "classes": 3,
+    "groups": (2, 1),
+    "within": 0.6,
+    "noise": 0.4,
+    "prior": (0.475, 0.05, 0.475),
+}
+
+
+def test_identity_labels_are_the_unlabelled_draws_exactly() -> None:
+    plain = cluster_population(ROWS, seed=11, row_offset=0, classes=3)
+    identity = cluster_population(
+        ROWS, seed=11, row_offset=0, classes=3, labels=(0, 1, 2)
+    )
+    assert torch.equal(plain.batch.x, identity.batch.x)
+    assert torch.equal(plain.batch.t, identity.batch.t)
+    assert torch.equal(plain.batch.y, identity.batch.y)
+
+
+def test_labels_map_each_clusters_draw_and_leave_the_features_alone() -> None:
+    plain = cluster_population(ROWS, seed=11, row_offset=0, **TRAP)
+    trap = cluster_population(ROWS, seed=11, row_offset=0, labels=(0, 1, 1), **TRAP)
+    assert torch.equal(plain.batch.x, trap.batch.x)
+    assert torch.equal(trap.batch.t, torch.tensor([0, 1, 1])[plain.batch.t])
+    # The map is not the identity on this draw: clusters 1 and 2 both occur.
+    assert bool((plain.batch.t == 2).any()) and bool((plain.batch.t == 1).any())
+
+
+def test_the_outcome_multiplier_follows_the_mapped_levels() -> None:
+    trap = cluster_population(
+        20_000, seed=5, row_offset=0, labels=(0, 1, 1), effects=(0.0, 2.0), **TRAP
+    )
+    means = [float(trap.batch.y[trap.batch.t == level].mean()) for level in (0, 1)]
+    assert means[1] - means[0] > 1.0, means
+    with pytest.raises(ValueError, match="treatment level"):
+        cluster_population(
+            32, seed=1, row_offset=0, labels=(0, 1, 1), effects=(0.0, 1.0, 1.0), **TRAP
+        )
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [(0, 1), (0, 1, 1, 0), (1, 1, 1), (0, 0, 0), (0, 2, 2), (-1, 0, 1)],
+)
+def test_an_ill_formed_label_map_is_refused(labels: tuple[int, ...]) -> None:
+    with pytest.raises(ValueError, match="labels"):
+        cluster_population(32, seed=1, row_offset=0, labels=labels, **TRAP)
+
+
+def test_the_cluster_posterior_is_the_two_cluster_closed_form() -> None:
+    """At `K = 2` the posterior is a logistic in the signal-column sum.
+
+    With centres at `-a` and `+a` in all four signal columns and equal priors,
+    `||x + a||^2 - ||x - a||^2 = 4 a sum(x)`, so
+    `p(c = 1 | x) = sigmoid(2 a sum(x) / sigma^2)`. Derived here rather than
+    read from `cluster_centres`, so the two sides share no arithmetic.
+    """
+    population = cluster_population(4_096, seed=3, row_offset=0)
+    x = population.batch.x
+    expected = torch.sigmoid(2.0 * 0.45 * x[:, :SIGNAL_COLUMNS].sum(dim=1) / 0.36)
+    posterior = cluster_posterior(x)
+    assert torch.allclose(posterior[:, 1], expected, atol=1e-5)
+    assert torch.allclose(posterior.sum(dim=1), torch.ones(4_096), atol=1e-6)
+
+
+def test_the_treatment_posterior_is_calibrated_and_beats_a_misspecified_one() -> None:
+    trap = cluster_population(40_000, seed=9, row_offset=0, labels=(0, 1, 1), **TRAP)
+    x, t = trap.batch.x, trap.batch.t
+    bayes = treatment_posterior(x, labels=(0, 1, 1), low=0.02, **TRAP)
+    assert bayes.shape == (40_000, 2)
+    frequency = torch.bincount(t, minlength=2).float() / t.numel()
+    assert torch.allclose(bayes.mean(dim=0), frequency, atol=0.01)
+    nll = float(-bayes.gather(1, t[:, None]).log().mean())
+    wrong: tuple[_Clusters, ...] = (
+        {**TRAP, "prior": (1 / 3, 1 / 3, 1 / 3)},
+        {**TRAP, "noise": 0.6},
+        {**TRAP, "within": 1.0},
+    )
+    for declaration in wrong:
+        other = treatment_posterior(x, labels=(0, 1, 1), low=0.02, **declaration)
+        assert nll < float(-other.gather(1, t[:, None]).log().mean()), declaration
