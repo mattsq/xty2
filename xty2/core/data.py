@@ -53,6 +53,7 @@ held-out rows take the same fitted map and may fall outside it. Constant
 training columns use a unit scale and therefore map to zero."""
 
 Mechanism = Literal["observed", "mcar"]
+Drawn = Literal["per_stage", "per_program"]
 """Where a row's treatment missingness comes from.
 
 `observed` takes the dataset's own `t_observed` mask unchanged — the honest
@@ -145,11 +146,18 @@ class MissingnessSpec:
     A rate belongs to `mcar` and to nothing else: an `observed` mechanism that
     also carried a rate would be a number the run ignores, printed in the plan
     as though it governed something.
+
+    `drawn` says whose seed keys an induced mask. ``"per_stage"`` keys it by
+    each stage's own seed, so the stages of one program see different
+    labelled rows. ``"per_program"`` keys every stage by the program seed, so
+    a later stage is given the labelled set an earlier one was: the paper's
+    fine-tuning "on the labeled dataset" needs that (MPL card §6.7).
     """
 
     mechanism: Mechanism = REQUIRED
     rate: float | None = None
     observed: int | None = None
+    drawn: Drawn = "per_stage"
 
     def __post_init__(self) -> None:
         if is_required(self.mechanism):
@@ -162,12 +170,21 @@ class MissingnessSpec:
                 f"MissingnessSpec.mechanism is {self.mechanism!r}; expected one "
                 f"of {list(get_args(Mechanism))!r}"
             )
+        if self.drawn not in get_args(Drawn):
+            raise CompileError(
+                f"MissingnessSpec.drawn is {self.drawn!r}; expected one of "
+                f"{list(get_args(Drawn))!r}"
+            )
         if self.mechanism == "observed":
-            if self.rate is not None or self.observed is not None:
+            if (
+                self.rate is not None
+                or self.observed is not None
+                or self.drawn != "per_stage"
+            ):
                 raise CompileError(
                     "MissingnessSpec(mechanism='observed') takes the dataset's "
-                    "own mask, so a rate or a label budget would govern nothing "
-                    "while printing in the plan as though it did."
+                    "own mask, so a rate, a label budget or a draw scope would "
+                    "govern nothing while printing in the plan as though it did."
                 )
             return
         if (self.rate is None) == (self.observed is None):
@@ -206,12 +223,14 @@ class MissingnessSpec:
         """
         if self.mechanism == "observed":
             return "observed: the dataset's own t_observed mask, unchanged"
+        scope = ", drawn once per program" if self.drawn == "per_program" else ""
         if self.observed is not None:
             return (
                 f"treatment MCAR to a budget of {self.observed} labelled rows, "
-                "keyed by row_id"
+                f"keyed by row_id{scope}"
             )
-        return f"treatment MCAR at {float(self.rate or 0.0):.3f}, keyed by row_id"
+        rate = float(self.rate or 0.0)
+        return f"treatment MCAR at {rate:.3f}, keyed by row_id{scope}"
 
 
 @dataclass(frozen=True)

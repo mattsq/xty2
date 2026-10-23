@@ -358,7 +358,10 @@ Meta-gradient stages emit one checkpoint per role under
 state and is not resumable checkpoint state. A later `gradient` stage may start
 from one of those checkpoints only by naming its role in `initialise_role`;
 `run_program` runs a meta-gradient stage with its role and hard-label seeds
-supplied explicitly as `MetaGradientSeeds`.
+supplied explicitly as `MetaGradientSeeds`. An induced treatment mask is keyed
+by each stage's seed unless the data policy declares
+`MissingnessSpec(drawn="per_program")`, which keys every stage by the program
+seed so that all stages see one labelled set.
 
 When an evaluation protocol declares validation-based early stopping,
 `MinimumValidationSelection` may observe the graph at a fixed interval while

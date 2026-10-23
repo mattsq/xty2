@@ -21,6 +21,7 @@ from xty2.core import (
     FeatureSpec,
     GradientClipping,
     GraphError,
+    MissingnessSpec,
     OptimiserSpec,
     Port,
     Program,
@@ -38,6 +39,7 @@ from xty2.objectives import MetaFeedbackCoefficient, MetaPseudoLabelScore
 from xty2.recipes import INNER_ROLE, OUTER_ROLE, meta_pseudo_labels
 from xty2.training import (
     MetaGradientSeeds,
+    ProgramResult,
     RunDirectory,
     StageResult,
     run_meta_gradient,
@@ -493,6 +495,62 @@ def test_finetune_starts_from_the_named_role_of_the_meta_checkpoint() -> None:
         not torch.equal(value, student[name])
         for name, value in moved.checkpoint.parameters.items()
     ), "a non-zero rate must move the student, or the identity above is vacuous"
+
+
+def _labelled_ids(program: ProgramResult, stage: str) -> set[int]:
+    population = program.stage(stage).population
+    assert population is not None
+    rows = population.rows
+    return set(rows.row_id[rows.t_observed].tolist())
+
+
+def test_both_stages_fine_tune_on_one_labelled_set() -> None:
+    """Card §6.7: the mask is drawn once per program, not once per stage."""
+    recipe = _finetune_recipe(lr_scale=0.0)
+    assert recipe.data is not None
+    assert recipe.data.missingness.drawn == "per_program"
+    sources = {"meta_train": _dataset(), "finetune": _dataset()}
+    shared = run_program(
+        compile(recipe),
+        sources,
+        seed=104_000,
+        meta_seeds={"meta_train": _META_SEEDS},
+    )
+    meta = _labelled_ids(shared, "meta_train")
+    assert len(meta) == 64
+    assert _labelled_ids(shared, "finetune") == meta
+
+    per_stage = replace(
+        recipe,
+        data=replace(
+            recipe.data,
+            missingness=replace(recipe.data.missingness, drawn="per_stage"),
+        ),
+    )
+    separate = run_program(
+        compile(per_stage),
+        sources,
+        seed=104_000,
+        meta_seeds={"meta_train": _META_SEEDS},
+    )
+    assert _labelled_ids(separate, "meta_train") == meta, "stage 0 keeps its mask"
+    assert _labelled_ids(separate, "finetune") != meta
+
+
+def test_missingness_draw_scope_is_validated_and_printed() -> None:
+    spec = MissingnessSpec(mechanism="mcar", observed=64, drawn="per_program")
+    assert spec.describe().endswith("keyed by row_id, drawn once per program")
+    assert (
+        MissingnessSpec(mechanism="mcar", observed=64)
+        .describe()
+        .endswith("keyed by row_id")
+    )
+    with pytest.raises(CompileError, match="drawn is 'sometimes'"):
+        MissingnessSpec(mechanism="mcar", observed=64, drawn="sometimes")  # type: ignore[arg-type]
+    with pytest.raises(CompileError, match="draw scope"):
+        MissingnessSpec(mechanism="observed", drawn="per_program")
+    planned = compile(meta_pseudo_labels(_schema())).plan.hyperparameters
+    assert planned["data.missingness_mechanism"].endswith("drawn once per program")
 
 
 def test_role_initialisation_is_declared_and_validated() -> None:

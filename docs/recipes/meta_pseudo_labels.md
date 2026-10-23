@@ -343,7 +343,7 @@ data:
   treatment_encoding:
     student_pseudo_label_nll: integer classes 0..K-1; one categorical draw per t_missing row   # XTYBatch contract; eq. (10)
   split_protocol: one fixed project-local DGP, split train/test by the section 6.1 fixture; no image protocol applies (deviation 1); training rows are assignment 'train'
-  missingness_mechanism: treatment MCAR to a budget of 64 labelled rows, keyed by row_id
+  missingness_mechanism: treatment MCAR to a budget of 64 labelled rows, keyed by row_id, drawn once per program   # §6.7: fine-tuning reads joint training's labelled set
 ```
 
 `losses.weights.meta_train.student_labelled_feedback_nll=0.0` means the value is
@@ -390,6 +390,7 @@ they remain design checks rather than speculative implementations.
 | `Realisation.role`: a named parameter set beyond the closed `params` literal, so one graph declaration can be evaluated under `outer_teacher` and `inner_student` weights in one step | fidelity-bearing, load-bearing vocabulary | this card | `BACKLOG.md` §11.2 and §15.6, concretely Lakshminarayanan et al., *Simple and Scalable Predictive Uncertainty Estimation using Deep Ensembles* (2017): "we train an ensemble of `M` networks independently, with random initialisation", which is `M` named parameter sets over one declaration with per-set initialisation seeds and no EMA relationship. The checked common shape is a named, independently initialised, independently optimised parameter set that the plan prints and the compiler sorts; what MPL adds beyond an ensemble is per-role optimisers, and an ensemble adds aggregation this card does not need. | `Realisation.params` is `Literal["student","teacher"]` and its own guard says a third parameter set "is a new realisation axis: it needs a reviewed card whose §4 checklist cannot be honoured without it". This is that card: §4 declares two optimisers, two learning rates and two initialisations, and `teacher` already means a non-trainable EMA copy. |
 | `Realisation.state`: a within-step position marker, here `post_update`, so the labelled gradient probe names the parameters it is evaluated at | fidelity-bearing, load-bearing vocabulary | this card | The same Ren et al. (2018) row below: its clean validation loss is evaluated strictly after the weighted inner step, so it needs the same pre/post distinction on one parameter set. Review may instead prefer to keep `state` out of the realisation key and carry the position in `meta_gradient`'s declared six-step order; the card asks for the axis because Tier 0 rule 13 requires the plan and digest to print which state each probe reads, and an executor-private position is not plan-visible. | Eq. (12) reads one parameter set at two states inside one iteration. Without a marker the two student gradients are indistinguishable in the plan, which is precisely the confusion rule 4 exists to catch. |
 | `Stage.initialise_role`, and `run_program` executing `meta_gradient` stages with explicit `MetaGradientSeeds` | fidelity-bearing, load-bearing vocabulary | this card's `finetune` stage | Ren et al. (2018), as in the first row: the classifier trained in the inner role of its bilevel loop is the model that is evaluated or trained further. The checked common shape is that the field selects one role's checkpoint and assumes nothing about the other role. The field is required when the source is a `meta_gradient` stage and rejected otherwise, so no consumer picks a role by default. | Paper §2 and §3.2 fine-tune the student after joint training. `initialise_from` read a stage's single checkpoint, a `meta_gradient` stage writes one per role (`DESIGN.md` §7.1), and `run_program` refused `meta_gradient` stages. Running the fine-tuning outside the program would remove it from the plan. |
+| `MissingnessSpec.drawn`: `"per_stage"` (default) or `"per_program"`, which keys every stage's induced mask by the program seed | fidelity-bearing, load-bearing vocabulary | this card's data policy | The staged fine-tuning programs in `BACKLOG.md` §2.12, concretely SimCLRv2 and Noisy Student, which fine-tune on the labelled set an earlier stage was given. The checked common shape is a data-policy statement, printed under a card key, that every stage of a program reads one mask; it says nothing about which stages consume labels. | Paper §3.2 fine-tunes "on the labeled dataset" joint training was given. `run_program` keyed each stage's mask by its own seed, so the two stages shared 2–6 of 64 labelled rows (§6.7). An opt-in field fixes this card without changing PAWS, SCARF or VIME's draws. |
 | `SampledTeacherTreatmentNLL`, `MetaPseudoLabelScore`, and `MetaFeedbackCoefficient` | fidelity-bearing, reversible | this card | not required (ordinary objective/executor helpers; no shared vocabulary) | Existing pseudo-label objectives use an argmax from the same graph. MPL requires a seeded categorical sample from one role, reused by the other role and by a score-function term, plus a gradient-alignment scalar. Keeping these small objects explicit makes the sampled target, detach points and coefficient visible to Tier 0. |
 
 The executor contract must remain narrower than a general differentiable
@@ -460,6 +461,11 @@ posterior (`cluster_posterior`) picks cluster 1, about 4% of rows. The Bayes
 rule (`treatment_posterior`) is right on about `0.83` of it, and its treatment
 NLL is about `0.146` overall. View label-flip rates are reported against that
 Bayes rule.
+
+**One labelled set.** The induced mask is drawn once per program from the
+program seed `s_r+10000` (§6.7), so `meta_train`, `finetune` and the
+information stage all see the same 64 labelled rows, the set the one-stage
+protocol used.
 
 **Fine-tuning streams.** `run_program` runs `meta_train` at stage seed
 `s_r+10000`, the stream the one-stage protocol used, with the role and
@@ -547,6 +553,10 @@ The equations above the Tier 1 note describe the two-cluster draw only.
     source, or on a stage without objectives. `run_program` requires
     `MetaGradientSeeds` for exactly its meta-gradient stages. The plan prints
     the role beside `initialise from`.
+16. Under `drawn="per_program"` both stages see the same 64 labelled rows.
+    Under `"per_stage"`, `meta_train` keeps the same rows and `finetune` sees
+    a different set, so the shared-set assertion is not vacuous. The plan
+    prints the scope, and an `observed` mechanism rejects one (§6.7).
 
 **Tier 1 (one-seed smoke).**
 
@@ -844,8 +854,7 @@ paper's weight, on this fixture and budget, too weakly to change the student.
 
 ### 6.6 Amendment: the paper's labelled fine-tuning of the student
 
-**Approved on 2026-10-23 and implemented, except Tier 2, which §6.7 blocks.**
-Review settled the three questions
+**Approved on 2026-10-23 and implemented.** Review settled the three questions
 at the end of this section. Fine-tuning uses plain SGD. The paper's stated rate
 of `1e-5` determines the status. Because that rate is not expected to move the
 student, a declared fine-tuning rate of `1e-3` runs beside it and is reported
@@ -1010,7 +1019,17 @@ that it runs the two-stage program; and the benchmark module. Fine-tuning adds
 - Is moving the status metric to the fine-tuned student acceptable, given
   that the screen predicts the same verdict?
 
-### 6.7 Open question: each stage draws its own labelled set — awaiting review
+### 6.7 Amendment: one labelled set for the whole program
+
+**Approved on 2026-10-23 (option 1) and implemented.** `MissingnessSpec` takes
+`drawn="per_program"`, and this recipe's data policy declares it. The plan
+prints it under `data.missingness_mechanism` as "drawn once per program". The
+default stays `"per_stage"`, so no other recipe's draws or plan digests change.
+`meta_train` is stage 0, whose seed is the program seed, so its mask, and with
+it every pre-fine-tuning metric, is unchanged from the `6494ee9b4227`
+protocol. Tier 0 asserts that both stages see the same 64 labelled rows, and
+that the per-stage contrast differs only in `finetune`. The text below is the
+question as raised.
 
 Implementing §6.6 exposed a framework behaviour that the approved card did not
 list. `run_program` builds each stage's training population from that stage's
@@ -1051,10 +1070,8 @@ treat as unlabelled.
    results, of PAWS, SCARF and VIME. Each would need re-running in the same
    change, which is outside this card.
 
-Until review chooses, the code on this branch implements §6.6 with the
-per-stage behaviour. Tier 0 and Tier 1 pass, but Tier 1's fine-tuning uses the
-wrong labelled set. The benchmark refuses to run: its paired-rows guard raises.
-No Tier 2 result is recorded.
+When the question was raised, the branch implemented §6.6 with the per-stage
+behaviour, and the benchmark's paired-rows guard refused to run.
 
 ## 7. Unknowns
 

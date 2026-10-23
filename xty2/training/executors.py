@@ -566,8 +566,13 @@ def _feed(
     data: BatchSource | Dataset,
     *,
     seed: int,
+    program_seed: int | None = None,
 ) -> tuple[BatchSource, TrainingPopulation | None]:
     """Resolve what the caller supplied against what the stage declared.
+
+    ``program_seed`` keys the treatment mask instead of ``seed`` when the
+    policy declares ``drawn="per_program"``. Outside `run_program` there is no
+    program, and the stage seed is the program seed of a one-stage run.
 
     Where the stage samples, this is the whole of the loader: the declared
     policy is applied to the supplied rows, the fitted statistics are checked
@@ -598,7 +603,13 @@ def _feed(
         raise TrainingError(
             f"recipe {run.recipe.name!r} has a sampling stage and no data policy"
         )
-    population = build_population(data, spec, seed=seed)
+    per_program = spec.missingness.drawn == "per_program"
+    population = build_population(
+        data,
+        spec,
+        seed=seed,
+        missingness_seed=program_seed if per_program else None,
+    )
     check_fitted_on(population, data, spec)
     return iterate(population, sampler, steps=compiled.steps, seed=seed), population
 
@@ -1323,7 +1334,7 @@ def run_program(
 
         stage_seed = seed + index * STREAM_STRIDE
         drawn, population = _feed(
-            run, compiled, sources[compiled.name], seed=stage_seed
+            run, compiled, sources[compiled.name], seed=stage_seed, program_seed=seed
         )
         # Artifact joins wrap the resolved stream rather than the caller's
         # source: a pseudo-label side table replaces the treatment placeholder

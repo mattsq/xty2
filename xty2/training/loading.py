@@ -70,8 +70,12 @@ def build_population(
     spec: DataSpec,
     *,
     seed: int,
+    missingness_seed: int | None = None,
 ) -> TrainingPopulation:
     """Apply `spec` to `dataset` and return the training rows.
+
+    ``missingness_seed`` keys an induced mask when it differs from ``seed``:
+    `run_program` passes the program seed for a ``drawn="per_program"`` policy.
 
     The order is split, then standardise, then apply missingness — statistics
     are fitted on the training split *before* anything else touches the rows,
@@ -91,7 +95,9 @@ def build_population(
     train_rows = _take(dataset.rows, train_index)
     statistics = _fit(train_rows, spec)
     standardised = _apply(train_rows, statistics)
-    rows = _apply_missingness(standardised, spec, seed=seed)
+    rows = _apply_missingness(
+        standardised, spec, seed=seed if missingness_seed is None else missingness_seed
+    )
     if not dataset.rows.equal_to(before):
         raise TrainingError(
             "building a training population wrote into its Dataset. Loading is "

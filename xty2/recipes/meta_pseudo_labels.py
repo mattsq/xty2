@@ -116,7 +116,11 @@ DATA_POLICY = DataSpec(
         train="train",
     ),
     preprocess=PreprocessSpec(features="none", outcome="none"),
-    missingness=MissingnessSpec(mechanism="mcar", observed=OBSERVED_TREATMENTS),
+    # One labelled set for both stages: paper §3.2 fine-tunes "on the labeled
+    # dataset" joint training was given (card §6.7).
+    missingness=MissingnessSpec(
+        mechanism="mcar", observed=OBSERVED_TREATMENTS, drawn="per_program"
+    ),
 )
 
 
