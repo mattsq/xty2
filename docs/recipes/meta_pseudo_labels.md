@@ -23,17 +23,25 @@
 ## 2. Estimand and claim
 
 - **Estimand:** the categorical treatment distribution `p(t | x)` learned by
-  the final student. The mechanism estimand is the paired change in held-out
-  treatment NLL caused by allowing a labelled-batch student feedback signal to
-  update the pseudo-label teacher, holding teacher UDA, data, batches, views,
-  architecture, optimiser steps and random seeds fixed.
+  the final student. The mechanism estimand is the paired change in the final
+  student's held-out accuracy on §6.1's minority region, the rows where the
+  teacher is confidently wrong. It is caused by allowing a labelled-batch
+  student feedback signal to update the pseudo-label teacher, holding teacher
+  UDA, data, batches, views, architecture, optimiser steps and random seeds
+  fixed. The paired change in overall held-out treatment NLL is reported
+  alongside it.
 - **Claim:** Meta Pseudo Labels (MPL) trains an independent teacher to choose
   pseudo-labels that improve a student's loss on labelled examples after one
   student update. The paper presents this as a one-step approximation to a
   bilevel objective and reports that MPL improves an already strong UDA teacher
-  on low-label image benchmarks. In the selected project-local experiment the
-  falsifiable claim is narrower: centred cosine feedback improves the final
-  student's treatment NLL over the otherwise identical zero-feedback arm.
+  on low-label image benchmarks, which the paper attributes to the teacher
+  correcting its own confirmation bias (appendix D.3). In the selected
+  project-local experiment the falsifiable claim is narrower: at the §4
+  meta-score weight, centred cosine feedback raises the final student's
+  accuracy on a minority cluster the UDA teacher absorbs into its neighbour's
+  class by at least `0.10` over the otherwise identical zero-feedback arm
+  (§6.5). The card's earlier claim, an improvement in overall treatment NLL on
+  `uda.md`'s two-cluster fixture, was tested and not supported (§6.4).
 - **Nearest shipped baseline:** `uda`. The outer teacher reuses the reviewed
   `uda.md` treatment-classification graph, weak/strong views, confidence gate,
   sharpening and TSA policy. The controlled addition is an independently
