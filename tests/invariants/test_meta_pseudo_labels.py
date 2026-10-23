@@ -29,13 +29,21 @@ from xty2.core import (
     Schema,
     State,
     TeacherSpec,
+    TrainingError,
     WeightDecay,
     XTYBatch,
     compile,
 )
 from xty2.objectives import MetaFeedbackCoefficient, MetaPseudoLabelScore
 from xty2.recipes import INNER_ROLE, OUTER_ROLE, meta_pseudo_labels
-from xty2.training import RunDirectory, StageResult, run_meta_gradient, run_stage
+from xty2.training import (
+    MetaGradientSeeds,
+    RunDirectory,
+    StageResult,
+    run_meta_gradient,
+    run_program,
+    run_stage,
+)
 
 CARD = Path("docs/recipes/meta_pseudo_labels.md")
 RECIPE_SOURCE = Path("xty2/recipes/meta_pseudo_labels.py")
@@ -79,6 +87,31 @@ def _short_recipe(*, steps: int = 2, force_zero: bool = False) -> Recipe:
     return replace(
         recipe,
         program=Program((replace(stage, steps=steps, meta_gradient=meta),)),
+    )
+
+
+_META_SEEDS = MetaGradientSeeds(
+    roles={OUTER_ROLE: 94_006, INNER_ROLE: 94_007}, hard_label=114_000
+)
+
+
+def _finetune_recipe(*, lr_scale: float, role: str = INNER_ROLE) -> Recipe:
+    """Both stages, shortened; `lr_scale=0` makes fine-tuning an identity."""
+    recipe = meta_pseudo_labels(_schema())
+    meta_train, finetune = recipe.program
+    optimiser = replace(
+        finetune.optimiser,
+        lr_schedule=Constant(lr_scale),
+        weight_decay=WeightDecay.none(),
+    )
+    return replace(
+        recipe,
+        program=Program(
+            (
+                replace(meta_train, steps=2),
+                replace(finetune, steps=1, initialise_role=role, optimiser=optimiser),
+            )
+        ),
     )
 
 
@@ -149,7 +182,9 @@ def test_recipe_is_declarative_and_card_matches_every_planned_value() -> None:
             mismatched.append(f"{key}: absent from plan")
             continue
         if isinstance(stated, str):
-            if not isinstance(value, Mapping) and _rendered(value) != stated:
+            if isinstance(value, Mapping):
+                mismatched.append(f"{key}: scoped in the plan, unscoped in the card")
+            elif _rendered(value) != stated:
                 mismatched.append(f"{key}: card {stated!r} vs plan {value!r}")
             checked += 1
             continue
@@ -191,10 +226,12 @@ def test_plan_prints_roles_optimisers_order_states_and_card_keys() -> None:
     assert hyperparameters["optimisation.optimiser"] == {
         INNER_ROLE: "sgd(momentum=0.9, nesterov=True)",
         OUTER_ROLE: "sgd(momentum=0.9, nesterov=True)",
+        "finetune": "sgd(momentum=0.0, nesterov=False)",
     }
     assert hyperparameters["optimisation.lr"] == {
         INNER_ROLE: 0.03,
         OUTER_ROLE: 0.03,
+        "finetune": 1e-5,
     }
     assert (
         hyperparameters["losses.weights"]["meta_train.student_labelled_feedback_nll"]
@@ -413,6 +450,80 @@ def test_role_checkpoints_round_trip_under_explicit_role_paths(
         loaded = directory.read_checkpoint("meta_train", role=role)
         assert loaded.plan_digest == checkpoint.plan_digest
         assert loaded.components == checkpoint.components
+
+
+def test_finetune_starts_from_the_named_role_of_the_meta_checkpoint() -> None:
+    """Paper §2: the fine-tuned model is the student, not the teacher."""
+    run = compile(_finetune_recipe(lr_scale=0.0))
+    program = run_program(
+        run,
+        {"meta_train": _dataset(), "finetune": _dataset()},
+        seed=104_000,
+        meta_seeds={"meta_train": _META_SEEDS},
+    )
+    meta = program.stage("meta_train")
+    direct = run_meta_gradient(
+        run,
+        "meta_train",
+        _dataset(),
+        seed=104_000,
+        role_seeds=_META_SEEDS.roles,
+        hard_label_seed=_META_SEEDS.hard_label,
+    )
+    tuned = program.stage("finetune").checkpoint.parameters
+    for role in (INNER_ROLE, OUTER_ROLE):
+        expected = direct.role_checkpoints[role].parameters
+        assert all(
+            torch.equal(value, expected[name])
+            for name, value in meta.role_checkpoints[role].parameters.items()
+        ), f"run_program changed the {role} stream"
+    student = meta.role_checkpoints[INNER_ROLE].parameters
+    teacher = meta.role_checkpoints[OUTER_ROLE].parameters
+    assert set(tuned) == set(student)
+    assert all(torch.equal(value, student[name]) for name, value in tuned.items())
+    assert any(not torch.equal(value, teacher[name]) for name, value in tuned.items())
+
+    moved = run_program(
+        compile(_finetune_recipe(lr_scale=1e5)),
+        {"meta_train": _dataset(), "finetune": _dataset()},
+        seed=104_000,
+        meta_seeds={"meta_train": _META_SEEDS},
+    ).stage("finetune")
+    assert any(
+        not torch.equal(value, student[name])
+        for name, value in moved.checkpoint.parameters.items()
+    ), "a non-zero rate must move the student, or the identity above is vacuous"
+
+
+def test_role_initialisation_is_declared_and_validated() -> None:
+    recipe = meta_pseudo_labels(_schema())
+    meta_train, finetune = recipe.program
+    plan = compile(recipe).plan.render()
+    assert "initialise from: meta_train (role inner_student)" in plan
+    with pytest.raises(CompileError, match="writes one checkpoint per role"):
+        Program((meta_train, replace(finetune, initialise_role=None)))
+    with pytest.raises(CompileError, match="writes one checkpoint per role"):
+        Program((meta_train, replace(finetune, initialise_role="critic")))
+    with pytest.raises(CompileError, match="without initialise_from"):
+        replace(finetune, initialise_from=None)
+    with pytest.raises(CompileError, match="is not a meta-gradient stage"):
+        Program(
+            (
+                meta_train,
+                replace(
+                    finetune,
+                    initialise_from=None,
+                    initialise_role=None,
+                    name="first",
+                ),
+                replace(finetune, initialise_from="first"),
+            )
+        )
+    with pytest.raises(CompileError, match="only a gradient stage with objectives"):
+        replace(finetune, objectives=(), trainable=())
+    run = compile(_finetune_recipe(lr_scale=0.0))
+    with pytest.raises(TrainingError, match="needs meta_seeds"):
+        run_program(run, {"meta_train": _dataset(), "finetune": _dataset()}, seed=0)
 
 
 def test_the_card_records_the_tier_two_result() -> None:

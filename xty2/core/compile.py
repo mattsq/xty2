@@ -180,6 +180,11 @@ class CompiledStage:
         return self.stage.initialise_from
 
     @property
+    def initialise_role(self) -> str | None:
+        """The role of a meta-gradient source checkpoint, if one is selected."""
+        return self.stage.initialise_role
+
+    @property
     def teacher(self) -> TeacherSpec | None:
         """The stage-local EMA teacher declaration, if any."""
         return self.stage.teacher
@@ -357,7 +362,11 @@ class ExecutionPlan:
             f"  executor: {compiled.executor}",
         ]
         if compiled.initialise_from is not None:
-            lines.append(f"  initialise from: {compiled.initialise_from}")
+            source_role = compiled.initialise_role
+            lines.append(
+                f"  initialise from: {compiled.initialise_from}"
+                + ("" if source_role is None else f" (role {source_role})")
+            )
         if compiled.inputs:
             lines.append(f"  inputs: {', '.join(compiled.inputs)}")
         if compiled.stage.allow_leakage:

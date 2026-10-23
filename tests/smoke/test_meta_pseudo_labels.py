@@ -1,7 +1,8 @@
-"""Tier 1 — one full-budget Meta Pseudo Labels paired run."""
+"""Tier 1 — one full-budget Meta Pseudo Labels paired run, then fine-tuning."""
 
 from __future__ import annotations
 
+import copy
 import math
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
@@ -12,6 +13,7 @@ from torch.nn import functional as F
 from xty2.core import (
     CategoricalTreatment,
     CompiledRun,
+    ComponentGraph,
     Dataset,
     FeatureSpec,
     Port,
@@ -23,7 +25,13 @@ from xty2.core import (
 )
 from xty2.objectives import MetaFeedbackCoefficient
 from xty2.recipes import INNER_ROLE, OUTER_ROLE, meta_pseudo_labels
-from xty2.training import StageResult, run_meta_gradient
+from xty2.training import (
+    Checkpoint,
+    MetaGradientSeeds,
+    ProgramResult,
+    StageResult,
+    run_program,
+)
 
 BASE_SEED = 94_000
 TRAIN_ROWS = 1_024
@@ -66,7 +74,7 @@ def _population(rows: int, *, seed: int, row_offset: int) -> XTYBatch:
 
 
 def _zero_feedback(recipe: Recipe) -> Recipe:
-    stage = recipe.program[0]
+    stage, *later = recipe.program
     meta = stage.meta_gradient
     assert meta is not None
     feedback = meta.feedback
@@ -81,6 +89,7 @@ def _zero_feedback(recipe: Recipe) -> Recipe:
                         meta, feedback=replace(feedback, force_zero=True)
                     ),
                 ),
+                *later,
             )
         ),
     )
@@ -89,6 +98,7 @@ def _zero_feedback(recipe: Recipe) -> Recipe:
 @dataclass(frozen=True)
 class _Metrics:
     run: CompiledRun
+    program: ProgramResult
     result: StageResult
     student_nll: float
     teacher_nll: float
@@ -96,11 +106,21 @@ class _Metrics:
     class_mass_concentration: float
 
 
-def _evaluate(run: CompiledRun, result: StageResult, test: XTYBatch) -> _Metrics:
+def _graph_at(run: CompiledRun, checkpoint: Checkpoint) -> ComponentGraph:
+    graph = copy.deepcopy(run.graph)
+    state = graph.state_dict()
+    for name, value in {**checkpoint.parameters, **checkpoint.buffers}.items():
+        state["_components." + name].copy_(value)
+    return graph
+
+
+def _evaluate(run: CompiledRun, program: ProgramResult, test: XTYBatch) -> _Metrics:
+    result = program.stage("meta_train")
+    tuned = _graph_at(run, program.stage("finetune").checkpoint)
     with torch.no_grad():
-        student = result.role_graphs[INNER_ROLE].evaluate(
-            test, schema=run.recipe.schema, only=run.graph.names
-        )[Port.T_GIVEN_X]
+        student = tuned.evaluate(test, schema=run.recipe.schema, only=run.graph.names)[
+            Port.T_GIVEN_X
+        ]
         teacher = result.role_graphs[OUTER_ROLE].evaluate(
             test, schema=run.recipe.schema, only=run.graph.names
         )[Port.T_GIVEN_X]
@@ -114,6 +134,7 @@ def _evaluate(run: CompiledRun, result: StageResult, test: XTYBatch) -> _Metrics
     baseline = frequency.log().expand(test.batch_size, -1)
     return _Metrics(
         run=run,
+        program=program,
         result=result,
         student_nll=float(F.nll_loss(student.log_probs, test.t)),
         teacher_nll=float(F.nll_loss(teacher.log_probs, test.t)),
@@ -136,18 +157,18 @@ def paired() -> Mapping[str, _Metrics]:
     results: dict[str, _Metrics] = {}
     for name, recipe in recipes.items():
         run = compile(recipe)
-        result = run_meta_gradient(
+        program = run_program(
             run,
-            "meta_train",
-            data,
+            {"meta_train": data, "finetune": data},
             seed=BASE_SEED + 10_000,
-            role_seeds={
-                OUTER_ROLE: BASE_SEED + 6,
-                INNER_ROLE: BASE_SEED + 7,
+            meta_seeds={
+                "meta_train": MetaGradientSeeds(
+                    roles={OUTER_ROLE: BASE_SEED + 6, INNER_ROLE: BASE_SEED + 7},
+                    hard_label=BASE_SEED + 20_000,
+                )
             },
-            hard_label_seed=BASE_SEED + 20_000,
         )
-        results[name] = _evaluate(run, result, test)
+        results[name] = _evaluate(run, program, test)
     return results
 
 
@@ -172,6 +193,29 @@ def test_both_paired_arms_run_the_full_budget_finitely(
             assert all(
                 torch.isfinite(value).all() for value in checkpoint.parameters.values()
             )
+        finetune = metrics.program.stage("finetune")
+        assert finetune.steps == 1_000
+        for record in finetune.records:
+            assert math.isfinite(record.total) and math.isfinite(record.grad_norm)
+        assert all(
+            torch.isfinite(value).all()
+            for value in finetune.checkpoint.parameters.values()
+        )
+
+
+def test_finetuning_starts_from_the_student_and_moves_it(
+    paired: Mapping[str, _Metrics],
+) -> None:
+    for metrics in paired.values():
+        student = metrics.result.role_checkpoints[INNER_ROLE].parameters
+        tuned = metrics.program.stage("finetune").checkpoint.parameters
+        shift = math.sqrt(
+            sum(
+                float((tuned[name] - value).square().sum())
+                for name, value in student.items()
+            )
+        )
+        assert 0.0 < shift < 1.0, shift
 
 
 def test_both_students_beat_frequency_and_avoid_one_class_collapse(

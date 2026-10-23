@@ -713,9 +713,48 @@ def run_meta_gradient(
             f"stage {compiled.name!r} declares executor={compiled.executor!r}, "
             "not 'meta_gradient'"
         )
+    source, population = _feed(run, compiled, batches, seed=seed)
+    return _run_fed_meta_gradient(
+        run,
+        compiled,
+        source,
+        population,
+        seed=seed,
+        seeds=MetaGradientSeeds(roles=role_seeds, hard_label=hard_label_seed),
+        run_dir=run_dir,
+    )
+
+
+@dataclass(frozen=True)
+class MetaGradientSeeds:
+    """The two streams a ``meta_gradient`` stage needs beyond its stage seed.
+
+    `run_meta_gradient` takes them as arguments; `run_program` takes one of
+    these per meta-gradient stage, because a program seed alone would leave
+    role initialisation and categorical sampling to an executor-chosen offset
+    that the MPL card's pairing could not name.
+    """
+
+    roles: Mapping[str, int]
+    hard_label: int
+
+
+def _run_fed_meta_gradient(
+    run: CompiledRun,
+    compiled: CompiledStage,
+    source: BatchSource,
+    population: TrainingPopulation | None,
+    *,
+    seed: int,
+    seeds: MetaGradientSeeds,
+    run_dir: RunDirectory | None,
+) -> StageResult:
+    """Validate the seeds, build both role graphs, and run the stage."""
     meta = compiled.stage.meta_gradient
     if meta is None:  # pragma: no cover - Stage rejects this
         raise TrainingError(f"meta-gradient stage {compiled.name!r} has no contract")
+    role_seeds = seeds.roles
+    hard_label_seed = seeds.hard_label
     supplied = dict(role_seeds)
     expected = {role.name for role in compiled.roles}
     if set(supplied) != expected:
@@ -727,7 +766,6 @@ def run_meta_gradient(
         raise TrainingError("meta-gradient role seeds must be integers")
     if type(hard_label_seed) is not int:
         raise TrainingError("hard_label_seed must be an integer")
-    source, population = _feed(run, compiled, batches, seed=seed)
     role_graphs = {
         role.name: _initialised_role_graph(run.graph, supplied[role.name])
         for role in compiled.roles
@@ -1191,6 +1229,7 @@ def run_program(
     seed: int,
     run_dir: RunDirectory | None = None,
     probes: Mapping[str, GradientProbe] | None = None,
+    meta_seeds: Mapping[str, MetaGradientSeeds] | None = None,
 ) -> ProgramResult:
     """Execute every compiled stage in order.
 
@@ -1205,6 +1244,11 @@ def run_program(
     makes them distinct: a stage walks one view key per optimiser step from
     its own seed upwards, so consecutively numbered stage seeds would hand
     stage ``i`` step 1 the key stage ``i + 1`` already used at step 0.
+
+    A ``meta_gradient`` stage takes its role and hard-label seeds from
+    ``meta_seeds``, keyed by stage name and required for every such stage. A
+    later stage that initialises from it overlays the one role checkpoint its
+    ``initialise_role`` names.
     """
     sources = dict(batches)
     expected = tuple(stage.name for stage in run.stages)
@@ -1214,6 +1258,15 @@ def run_program(
         raise TrainingError(
             f"program {run.recipe.name!r} needs one batch source per stage; "
             f"missing {missing!r}, unexpected {extra!r}, stages {list(expected)!r}"
+        )
+    meta_map = dict(meta_seeds or {})
+    meta_stages = [
+        stage.name for stage in run.stages if stage.executor == "meta_gradient"
+    ]
+    if set(meta_map) != set(meta_stages):
+        raise TrainingError(
+            f"program {run.recipe.name!r} needs meta_seeds for exactly its "
+            f"meta-gradient stages {meta_stages!r}, got {sorted(meta_map)!r}"
         )
     probe_map = dict(probes or {})
     unknown_probes = sorted(set(probe_map) - set(expected))
@@ -1242,8 +1295,14 @@ def run_program(
         )
         source_checkpoint: Checkpoint | None = None
         if compiled.initialise_from is not None:
-            source_checkpoint = by_name[compiled.initialise_from].checkpoint
-            _restore_checkpoint(run, source_checkpoint)
+            source_result = by_name[compiled.initialise_from]
+            role = compiled.initialise_role
+            source_checkpoint = (
+                source_result.checkpoint
+                if role is None
+                else source_result.role_checkpoints[role]
+            )
+            _restore_checkpoint(run, source_checkpoint, role=role)
 
         inputs: list[PseudoLabels] = []
         for input_name in compiled.inputs:
@@ -1305,10 +1364,19 @@ def run_program(
                 initialise_from=source_checkpoint,
             )
         else:
-            raise TrainingError(
-                f"program stage {compiled.name!r} uses meta_gradient; execute "
-                "it with run_meta_gradient so its role and hard-label seeds "
-                "are supplied explicitly"
+            if compiled.name in probe_map:
+                raise TrainingError(
+                    f"meta-gradient stage {compiled.name!r} does not take a "
+                    "gradient probe; its probes are the executor's own steps"
+                )
+            result = _run_fed_meta_gradient(
+                run,
+                compiled,
+                stage_batches,
+                population,
+                seed=stage_seed,
+                seeds=meta_map[compiled.name],
+                run_dir=run_dir,
             )
         result = replace(result, population=population)
         results.append(result)
@@ -1979,8 +2047,15 @@ def _resolve(run: CompiledRun, stage: str | CompiledStage) -> CompiledStage:
     return resolved
 
 
-def _restore_checkpoint(run: CompiledRun, checkpoint: Checkpoint) -> None:
-    """Overlay one verified earlier-stage checkpoint on the reset graph."""
+def _restore_checkpoint(
+    run: CompiledRun, checkpoint: Checkpoint, *, role: str | None = None
+) -> None:
+    """Overlay one verified earlier-stage checkpoint on the reset graph.
+
+    ``role`` names the meta-gradient role the checkpoint belongs to; its
+    components are checked against that role's trainables, because the stage
+    itself owns none.
+    """
     if checkpoint.recipe != run.recipe.name:
         raise TrainingError(
             f"checkpoint {checkpoint.stage!r} belongs to recipe "
@@ -1994,11 +2069,21 @@ def _restore_checkpoint(run: CompiledRun, checkpoint: Checkpoint) -> None:
             "artifact from the exact compiled program."
         )
     source = run.stage(checkpoint.stage)
-    if checkpoint.components != source.trainable:
+    if role is None:
+        trainable = source.trainable
+    else:
+        owners = [owner for owner in source.roles if owner.name == role]
+        if len(owners) != 1:
+            raise TrainingError(
+                f"checkpoint {checkpoint.stage!r} is restored as role {role!r}, "
+                f"which that compiled stage does not declare"
+            )
+        trainable = owners[0].trainable
+    if checkpoint.components != trainable:
         raise TrainingError(
             f"checkpoint {checkpoint.stage!r} carries components "
             f"{checkpoint.components!r}, but that compiled stage trains "
-            f"{source.trainable!r}"
+            f"{trainable!r}" + ("" if role is None else f" under role {role!r}")
         )
     if checkpoint.steps != source.steps:
         raise TrainingError(
@@ -2117,6 +2202,7 @@ __all__ = [
     "STREAM_STRIDE",
     "BatchSource",
     "BatchSources",
+    "MetaGradientSeeds",
     "ProgramResult",
     "StageResult",
     "StepRecord",

@@ -355,7 +355,10 @@ steps, seed, and plan digest. A pseudo-label artifact records row ids, labels,
 the producing checkpoint for each row, and the source checkpoints.
 Meta-gradient stages emit one checkpoint per role under
 `stages/<stage>/roles/<role>/checkpoint.pt`; their scalar baseline is execution
-state and is not resumable checkpoint state.
+state and is not resumable checkpoint state. A later `gradient` stage may start
+from one of those checkpoints only by naming its role in `initialise_role`;
+`run_program` runs a meta-gradient stage with its role and hard-label seeds
+supplied explicitly as `MetaGradientSeeds`.
 
 When an evaluation protocol declares validation-based early stopping,
 `MinimumValidationSelection` may observe the graph at a fixed interval while
@@ -562,7 +565,7 @@ judgement explaining why the choice survives the capability.
 | `out-of-core-data` | streaming or larger-than-memory datasets | a card's dataset does not fit in memory | — |
 | `stateful-sampler` | sampling driven by model or training state | a card states curriculum sampling, hard-negative mining, or acquisition | — |
 | `checkpointed-objective-state` | serialisation and restoration of stage-local objective state | a reviewed method must resume a history-dependent objective bit-identically | `simmatch` §5.7 |
-| `batch-row-repetition` | repeated `row_id` values inside one batch | a faithful protocol requires a quota larger than its source population | `fixmatch` §5.12; `doublematch` §5.7; `flexmatch` §5.8; `freematch` §5.9; `comatch` §5.4; `simmatch` §5.5; `softmatch` §5.8 |
+| `batch-row-repetition` | repeated `row_id` values inside one batch | a faithful protocol requires a quota larger than its source population | `fixmatch` §5.12; `doublematch` §5.7; `flexmatch` §5.8; `freematch` §5.9; `comatch` §5.4; `simmatch` §5.5; `softmatch` §5.8; `meta_pseudo_labels` §5.12 |
 | `lr-schedules` | schedule families beyond the implemented types | a reviewed card names one | — |
 | `augmentation-vocabulary` | a shared augmentation vocabulary and adaptive controller | multiple useful operations and magnitudes exist | `fixmatch` §5.10; `doublematch` §5.6; `flexmatch` §5.7; `freematch` §5.8; `comatch` §5.3; `simmatch` §5.8; `softmatch` §5.7; `remixmatch` §5.3 |
 | `staged-gate` | confidence gating on staged pseudo-label writeback | a reviewed staged method names the gate | — |

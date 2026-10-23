@@ -7,6 +7,7 @@ from xty2.components._nn import CFRNET_INITIALISATION
 from xty2.core import (
     META_GRADIENT_ORDER,
     ComponentGraph,
+    Constant,
     CosineDecay,
     DataSpec,
     GradientClipping,
@@ -16,6 +17,8 @@ from xty2.core import (
     ParameterRole,
     Port,
     PreprocessSpec,
+    Quota,
+    QuotaSampler,
     Realisation,
     Recipe,
     RecomputeRule,
@@ -55,6 +58,13 @@ OUTER_WEAK = Realisation(view="weak_x", role=OUTER_ROLE)
 OUTER_STRONG = Realisation(view="strong_x", role=OUTER_ROLE)
 INNER_STRONG = Realisation(view="strong_x", role=INNER_ROLE)
 INNER_WEAK_POST = Realisation(view="weak_x", role=INNER_ROLE, state="post_update")
+FINETUNE_WEAK = Realisation(view="weak_x")
+
+# Paper §3.2: "SGD with a fixed learning rate of 10^-5 ... 1,000 steps for
+# CIFAR-10 and SVHN"; weight decay is the Supervised step's L2 term at
+# training_utils.py:147, at §4's inherited value (card §6.6).
+FINETUNE_LR = 1e-5
+FINETUNE_STEPS = 1_000
 
 META_FEEDBACK = MetaFeedbackCoefficient(
     kind="cosine_similarity",
@@ -77,6 +87,26 @@ OPTIMISER = OptimiserSpec(
     clipping=GradientClipping.none(),
 )
 
+FINETUNE_OPTIMISER = OptimiserSpec(
+    name="sgd",
+    lr=FINETUNE_LR,
+    momentum=0.0,
+    nesterov=False,
+    weight_decay=WeightDecay(
+        value=5e-4,
+        on_norm_and_bias=True,
+        components=None,
+    ),
+    lr_schedule=Constant(1.0),
+    clipping=GradientClipping.none(),
+)
+
+# The whole labelled pool every step: the paper's 512 would repeat row_ids
+# (card §5 row 12, ledger key batch-row-repetition).
+FINETUNE_SAMPLER = QuotaSampler(
+    quotas=(Quota(rows="t_observed", size=OBSERVED_TREATMENTS),)
+)
+
 DATA_POLICY = DataSpec(
     split=SplitSpec(
         protocol=(
@@ -93,7 +123,11 @@ DATA_POLICY = DataSpec(
 def meta_pseudo_labels(
     schema: Schema, *, recompute_rules: tuple[RecomputeRule, ...] = ()
 ) -> Recipe:
-    """Build the single atomic meta-gradient stage; recipes contain no loop."""
+    """Build the atomic meta-gradient stage and the student's fine-tuning.
+
+    Recipes contain no loop: `meta_train` is one declared executor, and
+    `finetune` starts from its `inner_student` checkpoint (paper §2, §3.2).
+    """
     system = ComponentGraph(
         [
             MLPEncoder(
@@ -222,6 +256,27 @@ def meta_pseudo_labels(
                 steps=UDA_STEPS,
                 sampler=FIXMATCH_SAMPLER,
             ),
+            Stage(
+                name="finetune",
+                executor="gradient",
+                initialise_from="meta_train",
+                initialise_role=INNER_ROLE,
+                trainable=trainable,
+                optimiser=FINETUNE_OPTIMISER,
+                objectives=(
+                    Weighted(
+                        ObservedTreatmentNLL(
+                            name="student_finetune_nll",
+                            realisation=FINETUNE_WEAK,
+                        ),
+                        weight=1.0,
+                        reduction="mean",
+                    ),
+                ),
+                rows="t_observed",
+                steps=FINETUNE_STEPS,
+                sampler=FINETUNE_SAMPLER,
+            ),
         ),
         card="docs/recipes/meta_pseudo_labels.md",
         purpose="predictive",
@@ -248,6 +303,11 @@ def meta_pseudo_labels(
 
 __all__ = [
     "DATA_POLICY",
+    "FINETUNE_LR",
+    "FINETUNE_OPTIMISER",
+    "FINETUNE_SAMPLER",
+    "FINETUNE_STEPS",
+    "FINETUNE_WEAK",
     "INNER_ROLE",
     "INNER_STRONG",
     "INNER_WEAK_POST",

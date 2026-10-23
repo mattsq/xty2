@@ -652,6 +652,10 @@ class Stage:
             this stage's initial values. Components absent from that checkpoint
             retain the recipe's initial values; no immediately preceding stage
             is inherited implicitly.
+        initialise_role: Which role's checkpoint to overlay when
+            `initialise_from` names a ``meta_gradient`` stage, which writes one
+            checkpoint per role (§7.1). Required there and rejected anywhere
+            else, so a consumer can never pick up the other role by default.
         teacher: The EMA teacher this stage maintains, or `None`. A teacher
             realisation is compilable only when this is present.
         action: An optional pseudo-label emission or functional array fit.
@@ -686,6 +690,7 @@ class Stage:
     trainable: tuple[str, ...] = ()
     rows: Rows = "all"
     initialise_from: str | None = None
+    initialise_role: str | None = None
     teacher: TeacherSpec | None = None
     action: PseudoLabelAction | ArrayFitAction | None = None
     inputs: tuple[str, ...] = ()
@@ -729,6 +734,22 @@ class Stage:
                 raise CompileError(
                     f"stage {self.name!r} initialises from {source!r}, which "
                     "must be a Python identifier naming an earlier stage"
+                )
+        if self.initialise_role is not None:
+            role = require_str(
+                "Stage.initialise_role", self.initialise_role, error=CompileError
+            )
+            if self.initialise_from is None:
+                raise CompileError(
+                    f"stage {self.name!r} names initialise_role={role!r} without "
+                    "initialise_from; a role selects one checkpoint of the "
+                    "stage it initialises from"
+                )
+            if self.executor != "gradient" or not self.objectives:
+                raise CompileError(
+                    f"stage {self.name!r} initialises from role {role!r}; only "
+                    "a gradient stage with objectives may start from a "
+                    "meta-gradient role checkpoint"
                 )
         if self.teacher is not None and not isinstance(self.teacher, TeacherSpec):
             raise CompileError(
@@ -1098,7 +1119,22 @@ class Program(Sequence[Stage]):
                         "(DESIGN.md §7)."
                     )
                 producer = self.stages[source_index]
-                if producer.executor != "gradient" or not producer.objectives:
+                if producer.executor == "meta_gradient":
+                    roles = [role.name for role in producer.roles]
+                    if stage.initialise_role not in roles:
+                        raise CompileError(
+                            f"stage {stage.name!r} initialises from meta-gradient "
+                            f"stage {source!r} with initialise_role="
+                            f"{stage.initialise_role!r}; that stage writes one "
+                            f"checkpoint per role, so name one of {roles!r}"
+                        )
+                elif stage.initialise_role is not None:
+                    raise CompileError(
+                        f"stage {stage.name!r} names initialise_role="
+                        f"{stage.initialise_role!r}, but {source!r} is not a "
+                        "meta-gradient stage and has no roles"
+                    )
+                elif producer.executor != "gradient" or not producer.objectives:
                     raise CompileError(
                         f"stage {stage.name!r} initialises from {source!r}, but "
                         f"that stage uses executor={producer.executor!r} and "

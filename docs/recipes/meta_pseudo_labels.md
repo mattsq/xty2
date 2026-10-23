@@ -23,7 +23,8 @@
 ## 2. Estimand and claim
 
 - **Estimand:** the categorical treatment distribution `p(t | x)` learned by
-  the final student. The mechanism estimand is the paired change in the final
+  the final student, which is the student after the paper's labelled
+  fine-tuning (§3.1). The mechanism estimand is the paired change in the final
   student's held-out accuracy on §6.1's minority region, the rows where the
   teacher is confidently wrong. It is caused by allowing a labelled-batch
   student feedback signal to update the pseudo-label teacher, holding teacher
@@ -142,6 +143,22 @@ Appendix B algorithm 1 adds the teacher's labelled loss and UDA loss to the MPL
 feedback gradient; the student continues to learn only from teacher
 pseudo-labels during this phase.
 
+After joint training the paper fine-tunes the student. §2, final paragraph:
+"we can take a student model that has converged after training with Meta
+Pseudo Labels and finetune it on labeled data to improve its accuracy". §3.2,
+*Implementation details*, fixes the procedure for the low-label benchmarks:
+"SGD with a fixed learning rate of 10⁻⁵ and a batch size of 512, running for
+2,000 steps for ImageNet-10% and 1,000 steps for CIFAR-10 and SVHN", and "we
+return the model at the final checkpoint". Each fine-tuning step is
+
+$$
+\theta_S \leftarrow \theta_S - 10^{-5}\,
+\nabla_{\theta_S}\mathrm{CE}\left(y_l, S(x_l;\theta_S)\right),
+$$
+
+starting from the student's parameters at the end of joint training. The
+teacher takes no further part.
+
 ### 3.2 Mapping to xty2
 
 One `meta_gradient` stage owns two independent instances of the same
@@ -168,6 +185,13 @@ score in one atomic iteration. `TeacherSpec` is also inapplicable: it creates a
 non-trainable EMA copy after a student update, not an independently optimised
 outer model.
 
+Fine-tuning is an ordinary second stage. `finetune` is a `gradient` stage that
+starts from the `inner_student` checkpoint of `meta_train`
+(`initialise_from="meta_train"`, `initialise_role="inner_student"`) and fits
+the labelled NLL on `weak_x`. The teacher's checkpoint is not read. A
+`meta_gradient` stage writes one checkpoint per role, so the role is named
+rather than inferred (§5.1).
+
 | Paper symbol | Meaning | xty2 Port | xty2 Objective / Component / executor action |
 |---|---|---|---|
 | `T(x_u; theta_T)` | trainable teacher treatment distribution | `T_GIVEN_X @ strong_x, role=outer_teacher` | `MLPEncoder` + `CategoricalPropensity`; hard categorical sample owned by `meta_gradient` |
@@ -179,6 +203,7 @@ outer model.
 | `h * CE(y_hat_u,T(x_u))` | score-function teacher feedback | `T_GIVEN_X @ strong_x, role=outer_teacher` | `MetaPseudoLabelScore`, rows `t_missing`; sampled labels and `h` detached |
 | `g_T,supervised` | teacher labelled objective | `T_GIVEN_X @ weak_x, role=outer_teacher` | shipped `TrainingSignalAnnealedTreatmentNLL`, rows `t_observed` |
 | `g_T,UDA` | teacher weak-to-strong consistency | weak + strong `T_GIVEN_X`, role `outer_teacher` | shipped `ConfidenceMaskedConsistencyLoss`, rows `t_missing` |
+| `CE(y_l, S(x_l))` after joint training | the student's labelled fine-tuning loss | `T_GIVEN_X @ weak_x`, default parameters overlaid from `inner_student` | stage `finetune`: `ObservedTreatmentNLL` named `student_finetune_nll`, rows `t_observed` |
 | — | tabular weak view | — | shipped `ViewSpec("weak_x", FeatureMask(p=0.1))` |
 | `RandAugment(x_u)` | stronger label-preserving view | — | shipped `ViewSpec("strong_x", FeatureMask(p=0.1), FeatureMask(p=0.1))` (deviation 2) |
 
@@ -198,6 +223,7 @@ gradients:
     meta_train.teacher_meta_score: none                                     # sampled target and h are listed under detached_targets
     meta_train.teacher_tsa_nll: none                                     # inherited from uda.md
     meta_train.teacher_uda_consistency: p(t|x) @ view=weak_x params=student role=outer_teacher
+    finetune.student_finetune_nll: none                                    # ref impl Supervised step, training_utils.py:140-147
   detached_targets:
     student_pseudo_label_nll: hard categorical sample and outer_teacher graph
     teacher_meta_score: hard categorical sample and centred feedback coefficient  # appendix A eq. (12); ref impl training_utils.py:483
@@ -205,6 +231,7 @@ gradients:
   gradient_clipping:
     inner_student: none          # ref impl clips by params.grad_bound, whose flag_utils.py:100 default 1e9 is inert; uda.md declares none
     outer_teacher: none          # same call site, training_utils.py:500; flag_utils.py:132 defines teacher_grad_bound=20 but this commit does not read it
+    finetune: none               # Supervised step clips at grad_bound, training_utils.py:152, inert at the flag_utils.py:100 default 1e9
   marginal_nll_grad_path: n/a    # no marginal term; deviation 1 omits the outcome stack
 
 teacher:
@@ -220,24 +247,28 @@ losses:
     meta_train.teacher_meta_score: mean                # ref impl training_utils.py:490
     meta_train.teacher_tsa_nll: mean                   # inherited from uda.md; retained-row mean is objective arithmetic
     meta_train.teacher_uda_consistency: mean           # inherited from uda.md; rejected rows stay in the denominator
+    finetune.student_finetune_nll: mean                # ref impl training_utils.py:140-145, a SUM divided by train_batch_size
   eligible_rows:
     meta_train.student_pseudo_label_nll: t_missing     # algorithm 1 line 6
     meta_train.student_labelled_feedback_nll: t_observed  # algorithm 1 line 7
     meta_train.teacher_meta_score: t_missing           # algorithm 1 line 8
     meta_train.teacher_tsa_nll: t_observed             # algorithm 1 line 9
     meta_train.teacher_uda_consistency: t_missing      # algorithm 1 line 10; deviation 8
+    finetune.student_finetune_nll: t_observed          # paper §3.2 "finetune the student on the labeled dataset"
   weights:
     meta_train.student_pseudo_label_nll: 1.0           # algorithm 1 line 6
     meta_train.student_labelled_feedback_nll: 0.0      # gradient probe only; it is not applied to the student optimiser
     meta_train.teacher_meta_score: 1.0                 # ref impl training_utils.py:496 adds it unweighted
     meta_train.teacher_tsa_nll: 1.0                    # ref impl training_utils.py:495
     meta_train.teacher_uda_consistency: 1.0            # uda_weight default 1.0, flag_utils.py:146; deviation 10 drops its ramp
+    finetune.student_finetune_nll: 1.0                 # the Supervised step's only loss term, training_utils.py:147
   schedules:
     meta_train.student_pseudo_label_nll: constant 1.0
     meta_train.student_labelled_feedback_nll: constant 0.0
     meta_train.teacher_meta_score: constant 1.0        # the feedback magnitude is h, not a schedule
     meta_train.teacher_tsa_nll: constant 1.0           # the TSA ceiling is gate arithmetic under losses.confidence_threshold
     meta_train.teacher_uda_consistency: constant 1.0   # ref impl ramps over uda_steps; deviation 10
+    finetune.student_finetune_nll: constant 1.0
   temperature:
     student_pseudo_label_nll: 1.0       # eq. (10) samples from T(x_u; theta_T) itself
     teacher_uda_consistency: 0.4        # inherited from uda.md; deviation 3
@@ -253,18 +284,28 @@ optimisation:
   optimiser:
     inner_student: sgd(momentum=0.9, nesterov=True)    # inherited from uda.md; deviation 3
     outer_teacher: sgd(momentum=0.9, nesterov=True)    # inherited from uda.md; deviation 3
+    finetune: sgd(momentum=0.0, nesterov=False)        # paper §3.2 "SGD"; common_utils.py:452-455 for optim_type='sgd'; §7
   lr:
     inner_student: 0.03                                # inherited from uda.md; deviation 3 (ref impl mpl_student_lr=0.1, flag_utils.py:157)
     outer_teacher: 0.03                                # inherited from uda.md; deviation 3 (ref impl mpl_teacher_lr=0.1, flag_utils.py:161)
+    finetune: 1e-05                                    # paper §3.2 "a fixed learning rate of 10^-5"; not rescaled by batch/256, §7
   lr_schedule:
     inner_student: cosine 1.0 * cos(pi * 0.4375 * min(step/3000, 1))   # inherited from uda.md; no warmup or wait steps, deviation 3
     outer_teacher: cosine 1.0 * cos(pi * 0.4375 * min(step/3000, 1))   # inherited from uda.md; deviation 3
+    finetune: constant 1.0                                              # paper §3.2 "fixed"
   weight_decay:
     inner_student: 0.0005 (all trainable components; all parameters)     # inherited from uda.md; deviation 3
     outer_teacher: 0.0005 (all trainable components; all parameters)     # inherited from uda.md; deviation 3
-  batch_size: 512                                      # inherited from uda.md; deviation 3
-  labelled_unlabelled_ratio: 7.0                       # 64:448, inherited from uda.md; deviation 3
-  total_steps_or_epochs: 3000                           # atomic student-then-teacher steps; inherited from uda.md
+    finetune: 0.0005 (all trainable components; all parameters)          # Supervised step's L2 term, training_utils.py:147; §7
+  batch_size:
+    meta_train: 512                                    # inherited from uda.md; deviation 3
+    finetune: 64                                       # paper §3.2 says 512; the whole labelled pool, deviation 12
+  labelled_unlabelled_ratio:
+    meta_train: 7.0                                    # 64:448, inherited from uda.md; deviation 3
+    finetune: None                                     # one labelled quota; the sampler draws no labelled/unlabelled pair
+  total_steps_or_epochs:
+    meta_train: 3000                                   # atomic student-then-teacher steps; inherited from uda.md
+    finetune: 1000                                     # paper §3.2, CIFAR-10 and SVHN
 
 architecture:
   widths_depths:
@@ -299,7 +340,8 @@ architecture:
 data:
   standardisation: x: none fitted on 'train'           # inherited from uda.md §6.1
   outcome_scaling: y: none fitted on 'train'           # DataSpec contract; Y_RAW remains unreachable from both role graphs
-  treatment_encoding: integer classes 0..K-1; one categorical draw per t_missing row   # XTYBatch contract; eq. (10)
+  treatment_encoding:
+    student_pseudo_label_nll: integer classes 0..K-1; one categorical draw per t_missing row   # XTYBatch contract; eq. (10)
   split_protocol: one fixed project-local DGP, split train/test by the section 6.1 fixture; no image protocol applies (deviation 1); training rows are assignment 'train'
   missingness_mechanism: treatment MCAR to a budget of 64 labelled rows, keyed by row_id
 ```
@@ -310,6 +352,10 @@ must print that distinction and reject any declaration that both probes and
 applies this loss, because the paper's student does not learn directly from
 labelled rows during MPL training.
 
+The `finetune` stage trains the same two components the `inner_student` role
+declares, so `architecture.*` keys need no `finetune` scope: they are printed
+once per role and the stage overlays that role's parameters.
+
 ## 5. Deviations from the paper
 
 | # | Kind | Blocked on | What we do differently | Why | Expected effect on the §6 metric |
@@ -318,17 +364,19 @@ labelled rows during MPL training.
 | 2 | `judgement` | — | Replace image RandAugment with UDA's shipped 10% weak mask and composed 10% + 10% strong mask. | Image transforms have no tabular semantics. Reusing the reproduced UDA views keeps the nearest baseline fixed and retains its predeclared label-flip check. | Narrows the invariance family; both paired arms share it exactly. |
 | 3 | `judgement` | — | Reuse `uda.md`'s teacher policy and hyperparameters instead of paper table 8's CIFAR values: 3,000 steps, lr `0.03`, temperature `0.4`, confidence `0.8`, exponential TSA, no label smoothing, and a 64:448 quota. | The card tests one new mechanic against the shipped baseline. Simultaneously changing UDA would make a gain unattributable. | Reduces training horizon and changes feedback scale; the paired comparison remains interpretable but is not a paper reproduction. |
 | 4 | `judgement` | — | Use independent tabular MLP propensity graphs rather than two WideResNet-28-2 classifiers. | Architecture is an orthogonal component and the project does not ingest images. | Changes optimisation geometry, so even the sign of MPL's effect is empirical. |
-| 5 | `judgement` | — | Stop after joint MPL training; do not fine-tune the student on labelled rows. | The paper's §3.2 fine-tuning is a later supervised mechanism. The primary question is whether labelled feedback improves the pseudo-label learning path itself. | Likely understates final supervised accuracy; avoids washing out or creating the paired MPL difference. |
+| 5 | `withdrawn` | — | ~~Stop after joint MPL training; do not fine-tune the student on labelled rows.~~ **Withdrawn.** The program now ends with the paper's §3.2 fine-tuning stage (§3.1, §3.2, §6.6). | The paper makes fine-tuning part of the method (§2, final paragraph), and the card's estimand is the final student. Omitting a paper mechanic on the intuition that it is inert was the departure; §6.6's screen measured it instead. | §6's status metric now reads the fine-tuned students. At the paper's rate, the 8-seed screen moved the paired gain from `+0.027` to `+0.026`. |
 | 6 | `judgement` | — | Use one hard categorical sample per missing row and paper-v4's score-function estimator, not the pinned code's detached soft distribution used as both target and teacher logits. | v4 §2 and appendix A explicitly select hard samples. The authors' public issue discussion identifies the old soft path as inconsistent with the derived feedback formula. | Adds sampling variance but preserves the teacher feedback gradient described by eqs. (10)–(12). |
 | 7 | `judgement` | — | Follow the pinned update-then-subtract order — `b_{t+1}=0.99b_t+0.01h_raw`, then `h=h_raw-b_{t+1}` — and additionally fix `b_0=0` with a reset at every execution. | Appendix C.3 specifies a moving baseline but neither its order nor its initialisation; `training_utils.py:479-483` fixes the order under `tf.control_dependencies`, so only `b_0` and the reset are ours to choose. The reference variable carries no initialiser, and a paired comparison needs a deterministic start. | Feedback magnitudes over the first few steps depend on `b_0`; the arms share initial state and exogenous streams, while later endogenous trajectories may diverge after feedback. |
 | 8 | `judgement` | — | Treat appendix B's UDA argument as `x_u`, matching its prose and the reference implementation, rather than the displayed `x_l` in algorithm 1 line 10. | UDA is introduced there as the teacher's unlabelled-data objective; `x_l` would duplicate a labelled augmentation term and contradict the surrounding text. | Preserves the shipped UDA comparison. |
 | 9 | `judgement` | — | Report the raw student and teacher parameters and construct no evaluation EMA, dropping `uda.md`'s `TeacherSpec(decay=0.9999, role="evaluation")`. | MPL's own `ema_decay` default is `0`, that is no moving average (`flag_utils.py:113`), so the inherited EMA is a UDA-side choice rather than a paper mechanic. Keeping it would add a second reported parameter set to a card whose question is one gradient path. | `uda.md`'s headline Tier 2 number is its EMA NLL, so §6 here is not directly comparable with that column; the paired arms are unaffected. |
 | 10 | `judgement` | — | Hold the teacher's UDA consistency weight at a constant `1.0` rather than ramping it linearly over `uda_steps` as `training_utils.py:489-491` does. | `uda.md` is the nearest shipped baseline and already declares a constant weight; introducing MPL and a weight ramp in one card would make a difference unattributable. | Stronger early consistency pressure on the teacher than the reference schedule; both arms share it. |
 | 11 | `judgement` | — | Replace `uda.md`'s two-cluster Tier 2 fixture with §6.1's minority trap: three clusters, a 5% minority beside a large cluster of the other treatment. Tier 1 keeps the two-cluster fixture. | The inherited fixture gives the teacher no confidently wrong region for feedback to correct: by step 3,000 the feedback no longer rewards better pseudo-labels (§6.4, §6.5). | Moves the Tier 2 target from overall student NLL to paired minority-region accuracy, with a declared weight-20 dose arm reported as information. §6 is no longer comparable with `uda.md`'s. |
+| 12 | `framework-limitation` | `batch-row-repetition` | Fine-tune on all 64 labelled rows each step, rather than the paper's batch of 512. | §3.2's batch of 512 is larger than the 64-row labelled pool, so a faithful batch repeats `row_id` values, which `XTYBatch` forbids (`DESIGN.md` §7.1). The reference draws its labelled batch from a repeated, shuffled stream (`data_utils.py:504-516`). | With a mean reduction, a full-pool step is the exact expectation of the gradient of a 512-row draw from the same 64 rows. Only the reference's sampling noise is lost, at a learning rate of `1e-5`. |
 
 No paper mechanic is intentionally omitted because of the current framework.
 The executor is fidelity-bearing and was added under `DESIGN.md` §11.2 rather
-than hiding the mechanic behind a `framework-limitation`.
+than hiding the mechanic behind a `framework-limitation`. One paper value is
+changed because of the framework: the fine-tuning batch (row 12).
 
 ### 5.1 Framework additions made for this card
 
@@ -341,6 +389,7 @@ they remain design checks rather than speculative implementations.
 | `meta_gradient` executor: two independently trainable role-tagged graphs, separate optimisers, an atomic one-step inner update, pre/post gradient probes, ordered outer update, stage-local scalar state, and role-tagged checkpoint output | fidelity-bearing, load-bearing vocabulary | this card | The validation-driven-weighting family named in `BACKLOG.md` §10.1, concretely Ren et al., *Learning to Reweight Examples for Robust Deep Learning* (2018): its clean validation loss is evaluated after a one-step weighted inner update and differentiated to the outer example weights. The checked common shape is explicit inner/outer parameter ownership, bounded unroll length, pre/post state, and an outer loss; the executor must not assume the outer parameters are a second neural network. One shape difference is not covered and review should settle it: Ren et al. differentiates with respect to a per-example weight vector and therefore needs per-example inner gradients, whereas step 2 here retains a single aggregate gradient. The contract below fixes the update order, not the arity of the retained probe. | Eq. (3) and appendix B require this ordering inside every iteration. Ordinary stages expose only completed checkpoints, and `TeacherSpec` is frozen EMA state. Hiding the loop in a recipe function would remove update order, gradient reach and optimiser ownership from the plan. |
 | `Realisation.role`: a named parameter set beyond the closed `params` literal, so one graph declaration can be evaluated under `outer_teacher` and `inner_student` weights in one step | fidelity-bearing, load-bearing vocabulary | this card | `BACKLOG.md` §11.2 and §15.6, concretely Lakshminarayanan et al., *Simple and Scalable Predictive Uncertainty Estimation using Deep Ensembles* (2017): "we train an ensemble of `M` networks independently, with random initialisation", which is `M` named parameter sets over one declaration with per-set initialisation seeds and no EMA relationship. The checked common shape is a named, independently initialised, independently optimised parameter set that the plan prints and the compiler sorts; what MPL adds beyond an ensemble is per-role optimisers, and an ensemble adds aggregation this card does not need. | `Realisation.params` is `Literal["student","teacher"]` and its own guard says a third parameter set "is a new realisation axis: it needs a reviewed card whose §4 checklist cannot be honoured without it". This is that card: §4 declares two optimisers, two learning rates and two initialisations, and `teacher` already means a non-trainable EMA copy. |
 | `Realisation.state`: a within-step position marker, here `post_update`, so the labelled gradient probe names the parameters it is evaluated at | fidelity-bearing, load-bearing vocabulary | this card | The same Ren et al. (2018) row below: its clean validation loss is evaluated strictly after the weighted inner step, so it needs the same pre/post distinction on one parameter set. Review may instead prefer to keep `state` out of the realisation key and carry the position in `meta_gradient`'s declared six-step order; the card asks for the axis because Tier 0 rule 13 requires the plan and digest to print which state each probe reads, and an executor-private position is not plan-visible. | Eq. (12) reads one parameter set at two states inside one iteration. Without a marker the two student gradients are indistinguishable in the plan, which is precisely the confusion rule 4 exists to catch. |
+| `Stage.initialise_role`, and `run_program` executing `meta_gradient` stages with explicit `MetaGradientSeeds` | fidelity-bearing, load-bearing vocabulary | this card's `finetune` stage | Ren et al. (2018), as in the first row: the classifier trained in the inner role of its bilevel loop is the model that is evaluated or trained further. The checked common shape is that the field selects one role's checkpoint and assumes nothing about the other role. The field is required when the source is a `meta_gradient` stage and rejected otherwise, so no consumer picks a role by default. | Paper §2 and §3.2 fine-tune the student after joint training. `initialise_from` read a stage's single checkpoint, a `meta_gradient` stage writes one per role (`DESIGN.md` §7.1), and `run_program` refused `meta_gradient` stages. Running the fine-tuning outside the program would remove it from the plan. |
 | `SampledTeacherTreatmentNLL`, `MetaPseudoLabelScore`, and `MetaFeedbackCoefficient` | fidelity-bearing, reversible | this card | not required (ordinary objective/executor helpers; no shared vocabulary) | Existing pseudo-label objectives use an argmax from the same graph. MPL requires a seeded categorical sample from one role, reused by the other role and by a score-function term, plus a gradient-alignment scalar. Keeping these small objects explicit makes the sampled target, detach points and coefficient visible to Tier 0. |
 
 The executor contract must remain narrower than a general differentiable
@@ -357,11 +406,11 @@ On 2026-10-22, commit `6494ee9b4227` produced a `deviating` result: This is the 
 ```yaml
 reproduction:
   dataset: project-local minority-trap XTY DGP (6 features, K=2): cluster_population(classes=3, groups=(2,1), within=0.6, noise=0.4, prior=(0.475,0.05,0.475)) relabelled by (0,1,1), specified in §6.1
-  variant: paired MPL (meta-score weight 1.0) versus the forced-zero-feedback arm, plus a declared weight-20 dose arm reported as information
-  metric: paired gain in inner-student accuracy on the held-out minority region (Bayes cluster posterior picks the minority cluster), MPL weight 1.0 minus h=0; h=0 minority accuracy as the fixture-validity guardrail; finiteness, outer-teacher NLL ratio and class-mass concentration as before; the dose arm's gains, both NLL ratios and the h diagnostics as information
+  variant: paired MPL (meta-score weight 1.0) versus the forced-zero-feedback arm, each followed by the paper's labelled fine-tuning of the student, plus a declared weight-20 dose arm and a declared fine-tuning learning rate of 1e-3, both reported as information
+  metric: paired gain in fine-tuned student accuracy on the held-out minority region (Bayes cluster posterior picks the minority cluster), MPL weight 1.0 minus h=0; fine-tuned h=0 minority accuracy as the fixture-validity guardrail; finiteness over both stages, outer-teacher NLL ratio and fine-tuned student class-mass concentration; the gains before fine-tuning, the dose arm, the 1e-3 fine-tuning stage, the NLL ratios and the h diagnostics as information
   published: none - no published number applies to this adaptation
   published_source: n/a
-  tolerance: minority-accuracy gain >= 0.10 in mean by at least one stderr; h=0 minority accuracy <= 0.60 (the trap binds); outer-teacher NLL <= 1.10x the zero-feedback arm; finite losses and gradients in every replicate; terminal student class-mass concentration < 0.95
+  tolerance: fine-tuned minority-accuracy gain >= 0.10 in mean by at least one stderr; fine-tuned h=0 minority accuracy <= 0.60 (the trap binds); outer-teacher NLL <= 1.10x the zero-feedback arm; finite losses and gradients in both stages of every replicate; fine-tuned student class-mass concentration < 0.95
   seeds: 100
   report: mean_and_stderr
 ```
@@ -373,6 +422,9 @@ values are identical only through the first pre-feedback step. Once MPL changes
 the teacher, later teacher probabilities, categorical samples, student updates,
 feedback and UDA/TSA terms may diverge by design. With a fixed state and sample,
 the zero-feedback teacher gradient is the same as deleting the meta-score term.
+Each arm then fine-tunes its own student (§3.2). The fine-tuning stage sees the
+same rows and views in every arm, because its batch is the whole labelled pool
+and its view stream comes from a stage seed the arms share.
 
 **Class-mass concentration.** Let
 `p_bar[k] = mean_i p(t=k | x_i)` on held-out rows under the terminal inner
@@ -408,6 +460,14 @@ posterior (`cluster_posterior`) picks cluster 1, about 4% of rows. The Bayes
 rule (`treatment_posterior`) is right on about `0.83` of it, and its treatment
 NLL is about `0.146` overall. View label-flip rates are reported against that
 Bayes rule.
+
+**Fine-tuning streams.** `run_program` runs `meta_train` at stage seed
+`s_r+10000`, the stream the one-stage protocol used, with the role and
+hard-label seeds above. `finetune` runs at `s_r+10000+1,000,000`
+(`STREAM_STRIDE`), and the declared `1e-3` fine-tuning stage of §6.6 at
+`s_r+10000+2,000,000`. Each spends one view key per step, so their keys lie
+above `1,000,000` and below `2,124,000`, clear of every other stream in this
+card.
 
 **Tier 1 fixture: unchanged.** Tier 1 keeps seed `94000` on `uda.md` §6.1's
 two-cluster draw, without changing a draw. It checks wiring, not the §6 claim.
@@ -478,6 +538,15 @@ The equations above the Tier 1 note describe the two-cluster draw only.
 13. The compiled plan and digest print both roles, both optimisers, the six-step
     order in §3.2, hard-sample temperature/RNG, gradient probe states, baseline
     lifecycle, and every non-`n/a` §4 key.
+14. `finetune` starts from the `inner_student` checkpoint: at a zero learning
+    rate its output equals that checkpoint and differs from `outer_teacher`'s,
+    and a non-zero rate moves it. `run_program` reproduces `run_meta_gradient`'s
+    role checkpoints at the same seeds.
+15. A stage that initialises from a `meta_gradient` stage must name one of its
+    roles; a role is rejected without `initialise_from`, against a non-meta
+    source, or on a stage without objectives. `run_program` requires
+    `MetaGradientSeeds` for exactly its meta-gradient stages. The plan prints
+    the role beside `initialise from`.
 
 **Tier 1 (one-seed smoke).**
 
@@ -520,12 +589,13 @@ coverage was `0.8839`, and TSA retained fraction was `1.0`. The paired weak and
 strong view label-flip rates were `2.15%` and `4.30%`, respectively. These are
 single-seed wiring measurements, not evidence for the Tier 2 claim.
 
-**Tier 2.** Run the three paired arms of §6.5 over all 100 replicates of the
-minority trap. Only the weight-1.0 arm's paired minority-accuracy gain, the
-`h=0` trap guardrail, the teacher NLL guardrail, finiteness and the class-mass
-concentration ceiling determine `reproduced` versus `deviating`. The dose arm,
-the student NLL ratio and the feedback diagnostics are reported, not chosen
-after the run.
+**Tier 2.** Run the three paired arms of §6.5, each followed by the paper's
+fine-tuning (§6.6), over all 100 replicates of the minority trap. Only the
+weight-1.0 arm's paired minority-accuracy gain after fine-tuning, the `h=0`
+trap guardrail, the teacher NLL guardrail, finiteness and the class-mass
+concentration ceiling determine `reproduced` versus `deviating`. The gains
+before fine-tuning, the dose arm, the `1e-3` fine-tuning stage, the student NLL
+ratios and the feedback diagnostics are reported, not chosen after the run.
 
 ### 6.3 Result ledger
 
@@ -772,14 +842,28 @@ The card's §2 question has a mechanism answer: the feedback carries the
 information MPL needs and corrects the error it was designed for, but at the
 paper's weight, on this fixture and budget, too weakly to change the student.
 
-### 6.6 Proposed amendment: the paper's labelled fine-tuning of the student — awaiting review
+### 6.6 Amendment: the paper's labelled fine-tuning of the student
 
-This section proposes withdrawing §5 row 5, which stops after joint MPL
-training. Nothing here is implemented. §3.2, §4, §5, the §6 YAML, the recipe
-and the benchmark module still describe the one-stage program. The screening
-numbers below come from a scratch script on one machine (Intel Xeon, four
-workers), seeds `s_r = 94000+100r` for `r = 0…7`, run against the committed
-`6494ee9b4227` protocol.
+**Approved on 2026-10-23 and implemented, except Tier 2, which §6.7 blocks.**
+Review settled the three questions
+at the end of this section. Fine-tuning uses plain SGD. The paper's stated rate
+of `1e-5` determines the status. Because that rate is not expected to move the
+student, a declared fine-tuning rate of `1e-3` runs beside it and is reported
+as information. The status metric moves to the fine-tuned student. §3, §4, §5
+rows 5 and 12, §5.1, the §6 YAML, §6.1, §6.2 and §7 now describe the two-stage
+program. The text below is the proposal as reviewed. The screening numbers come
+from a scratch script on one machine (Intel Xeon, four workers), seeds
+`s_r = 94000+100r` for `r = 0…7`, run against the committed `6494ee9b4227`
+protocol.
+
+**The `1e-3` information stage.** The benchmark adds a third stage to every
+arm, `finetune_information`, which is `finetune` with the learning rate
+`1e-3` and initialises from the same `inner_student` checkpoint. The recipe
+keeps `1e-5`, so `plan.hyperparameters` is unchanged, as with the dose arm.
+The value was chosen after the screen: it is the largest screened rate that did
+not raise the `h=0` NLL (`0.2379` against `0.2365`), while `0.03` overfitted.
+It answers whether a fine-tuning step that does move the student changes the
+paired gain. It does not determine the status.
 
 **What the sources specify.** The paper makes fine-tuning part of the method,
 not an evaluation option. §2, final paragraph: "as the student in Meta Pseudo
@@ -914,7 +998,7 @@ that it runs the two-stage program; and the benchmark module. Fine-tuning adds
 3,000 full-batch steps on 64 rows to each replicate, which is small against the
 9,000 joint steps.
 
-**Questions for review.**
+**Questions settled in review.**
 
 - Should plain SGD stand? The paper's "SGD" and the code's `optim_type='sgd'`
   both point to plain gradient descent, but the README's training commands
@@ -925,6 +1009,52 @@ that it runs the two-stage program; and the benchmark module. Fine-tuning adds
   inert.
 - Is moving the status metric to the fine-tuned student acceptable, given
   that the screen predicts the same verdict?
+
+### 6.7 Open question: each stage draws its own labelled set — awaiting review
+
+Implementing §6.6 exposed a framework behaviour that the approved card did not
+list. `run_program` builds each stage's training population from that stage's
+own seed, and the induced MCAR mask is a hash of `row_id` under that seed
+(`xty2/training/loading.py:196-232`). The two stages therefore see different
+labelled rows. For replicates 0–4, `finetune`'s 64 labelled rows share only 2–6
+rows with `meta_train`'s. As built, fine-tuning trains on about 60 labels that
+joint training treated as missing. That nearly doubles the label budget and
+contradicts paper §3.2, which fine-tunes on "the labeled dataset" the method
+was given. The benchmark's paired-rows guard caught it: the `finetune` and
+`finetune_information` stages of one arm fine-tuned on different rows.
+§6.6's screen is unaffected, because it fine-tuned on `meta_train`'s own
+labelled rows.
+
+No shipped recipe has met this, because none uses labels in two stages under
+an induced mask. PAWS, SCARF and VIME pre-train on unlabelled or all rows and
+use labels only in `joint_fit`; `tarnet`, `ssdml` and `cycle_dual` declare no
+induced mask. The behaviour still changes what those programs' earlier stages
+treat as unlabelled.
+
+**Options.**
+
+1. **Recommended: an opt-in data-policy field that draws the mask once per
+   program.** For example, `MissingnessSpec(..., drawn="per_program")` uses
+   stage 0's seed for every stage. The current behaviour stays the default
+   (`"per_stage"`), so no other recipe's draws change. The plan prints the
+   choice under `data.missingness_mechanism`, so it is a card key, and §4
+   would bind it. `meta_train` keeps its current mask, because it is stage 0,
+   so the pre-fine-tuning metrics stay comparable with the `6494ee9b4227`
+   row. Second consumer: the staged fine-tuning programs in `BACKLOG.md` §2.12
+   (SimCLRv2, Noisy Student), which fine-tune on the same labelled set the
+   earlier stage was given.
+2. A stage-level field that reuses an earlier stage's whole training
+   population, for example `Stage.population_from="meta_train"`. This is
+   equally opt-in, but it states a data-policy fact as a property of a stage.
+3. Draw the mask once per program for every recipe. This is arguably the right
+   default, but it changes the populations, and so the recorded Tier 2
+   results, of PAWS, SCARF and VIME. Each would need re-running in the same
+   change, which is outside this card.
+
+Until review chooses, the code on this branch implements §6.6 with the
+per-stage behaviour. Tier 0 and Tier 1 pass, but Tier 1's fine-tuning uses the
+wrong labelled set. The benchmark refuses to run: its paired-rows guard raises.
+No Tier 2 result is recorded.
 
 ## 7. Unknowns
 
@@ -940,7 +1070,12 @@ that it runs the two-stage program; and the benchmark module. Fine-tuning adds
 | Whether hard samples are sharpened or confidence-gated. | Neither; draw from the ordinary temperature-1 teacher distribution on every missing row. | Eq. (10)'s expectation under `T(x_u;theta_T)` and algorithm 1 line 5. UDA's gate and temperature govern only the teacher's auxiliary consistency term. |
 | Label smoothing in table 8 and the pinned CIFAR command. | None in this project-local card. | Controlled inheritance from `uda.md`; deviation 3 owns the departure. |
 | Does the student receive a labelled loss during joint training? | No. The labelled loss is a gradient probe only. | Appendix B prose and algorithm 1; the paper explicitly says the student learns only from teacher pseudo-labels in this phase. |
-| Does the student receive final labelled fine-tuning? | No in this card. | Deviation 5 isolates the meta-gradient mechanism. |
+| Does the student receive final labelled fine-tuning? | Yes: stage `finetune`, from the `inner_student` checkpoint, for 1,000 steps. | Paper §2, final paragraph, and §3.2; deviation 5 is withdrawn (§6.6). |
+| Fine-tuning optimiser: plain SGD or momentum? | Plain SGD, no momentum. | Paper §3.2 says "SGD", where appendix C.4 names "Nesterov Momentum" for training, and `common_utils.py:452-455` builds plain gradient descent for `optim_type='sgd'`. No published command shows fine-tuning; the README's training commands use `momentum`. Settled in review (§6.6). |
+| Is `10^-5` the effective rate, or a flag value the code scales by `train_batch_size/256` (`common_utils.py:402`)? | The effective rate, `1e-5`. | The paper states the rate, not the flag. A scaled `2e-5` would be equally inert: at `1e-5` the screen moved parameters by at most `0.008` (§6.6). |
+| Which fine-tuning step count? | 1,000. | §3.2 gives 1,000 for CIFAR-10 and SVHN, the benchmarks the low-label fixture stands in for, and 2,000 for ImageNet-10%. |
+| Weight decay and label smoothing during fine-tuning. | Weight decay `0.0005`; no label smoothing. | The reference's `Supervised` step adds its L2 term (`training_utils.py:147`); the value is §4's inherited one. Label smoothing follows deviation 3. |
+| Which view does fine-tuning read? | `weak_x`. | The reference's labelled CIFAR-10 stream applies a random flip and crop (`data_utils.py:472-481`, `:504-516`), which `uda.md` §3.2 maps to `weak_x`. |
 | Checkpoint/resume of the moving baseline and two optimisers. | Unsupported in the first implementation; runs are uninterrupted and reset from seed. | This card requires deterministic full executions, not bit-identical mid-stage resume. A future resume claim would engage `checkpointed-objective-state`. |
 
 ## 8. Review
