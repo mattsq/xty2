@@ -400,7 +400,7 @@ parameters. Widening any of those is a new card/design decision.
 
 ### Tier 2 outcome
 
-On 2026-10-22, commit `6494ee9b4227` produced a `deviating` result: This is the predeclared project-local Meta Pseudo Labels mechanism target of card section 6.5: whether appendix A's centred hard-label score-function feedback, at the section 4 meta-score weight, repairs a teacher that UDA's consistency leads to absorb a 5% minority cluster into its neighbour's class, measured as the student's paired accuracy gain on that region over the otherwise identical h=0 execution. A declared weight-20 dose arm is reported as information and does not determine the status. It is not a reproduction of a published image-accuracy number; the tabular DGP, views, architecture, and 3,000-step budget are the reviewed deviations listed in the card. Failed target(s): student_minority_accuracy_gain was 0.00551841 +/- 0.0065 against mean >= 0.1, by at least one stderr.
+On 2026-10-23, commit `0e1895d8d6ce` produced a `deviating` result: This is the predeclared project-local Meta Pseudo Labels mechanism target of card sections 6.5 and 6.6: whether appendix A's centred hard-label score-function feedback, at the section 4 meta-score weight, repairs a teacher that UDA's consistency leads to absorb a 5% minority cluster into its neighbour's class, measured as the paired accuracy gain on that region of the student after the paper's labelled fine-tuning (section 3.2), over the otherwise identical h=0 execution. A declared weight-20 dose arm and a declared fine-tuning rate of 1e-3 are reported as information and do not determine the status. It is not a reproduction of a published image-accuracy number; the tabular DGP, views, architecture, 3,000-step budget and the fine-tuning batch are the reviewed deviations listed in the card. Failed target(s): student_minority_accuracy_gain was 0.00552054 +/- 0.00656 against mean >= 0.1, by at least one stderr.
 
 ## 6. Reproduction target
 
@@ -615,6 +615,7 @@ ratios and the feedback diagnostics are reported, not chosen after the run.
 | 2026-10-21 | `52f645a7a619` | student_treatment_NLL_ratio<br>outer_teacher_treatment_NLL_ratio<br>all_losses_gradients_and_checkpoints_finite<br>terminal_student_class_mass_concentration | 0.997683 +/- 0.00994<br>1.01487 +/- 0.00424<br>1 +/- 0<br>0.521526 +/- 0.00638 | no |
 | 2026-10-21 | `c7921229b9fa` | student_treatment_NLL_ratio<br>outer_teacher_treatment_NLL_ratio<br>all_losses_gradients_and_checkpoints_finite<br>terminal_student_class_mass_concentration | 0.995541 +/- 0.00577<br>1.00832 +/- 0.00875<br>1 +/- 0<br>0.526084 +/- 0.00204 | no |
 | 2026-10-22 | `6494ee9b4227` | student_minority_accuracy_gain<br>zero_feedback_student_minority_accuracy<br>outer_teacher_treatment_NLL_ratio<br>all_losses_gradients_and_checkpoints_finite<br>terminal_student_class_mass_concentration | 0.00551841 +/- 0.0065<br>0.339695 +/- 0.0163<br>0.990021 +/- 0.0107<br>1 +/- 0<br>0.529258 +/- 0.00203 | no |
+| 2026-10-23 | `0e1895d8d6ce` | student_minority_accuracy_gain<br>zero_feedback_student_minority_accuracy<br>outer_teacher_treatment_NLL_ratio<br>all_losses_gradients_and_checkpoints_finite<br>terminal_student_class_mass_concentration | 0.00552054 +/- 0.00656<br>0.342977 +/- 0.0165<br>0.990021 +/- 0.0107<br>1 +/- 0<br>0.529393 +/- 0.00204 | no |
 
 ### 6.4 Amendment: the ten-seed verdict depends on the machine
 
@@ -1006,6 +1007,42 @@ the new stage-scoped keys that a two-stage program gives every existing key),
 that it runs the two-stage program; and the benchmark module. Fine-tuning adds
 3,000 full-batch steps on 64 rows to each replicate, which is small against the
 9,000 joint steps.
+
+**The 100-seed result (`0e1895d8d6ce`, 2026-10-23): `deviating`, as
+predicted.** The run took 1 h 38 min on four workers. The status-determining
+gain of the fine-tuned student is `0.0055 +/- 0.0066` (median `0`, 43 seeds up
+and 30 down). That is about 14 standard errors below the `0.10` bar. The trap
+binds: the fine-tuned `h=0` student is right on `0.343 +/- 0.017` of the
+minority region, against Bayes `0.835 +/- 0.004`. The teacher guardrail holds
+(`0.990 +/- 0.011`), every stage of every arm finished finite, and the
+class-mass concentration is `0.529`.
+
+The joint-training stage is unchanged. The pre-fine-tuning gain,
+`0.0055184 +/- 0.0065`, and the `h=0` minority accuracy, `0.33969`, equal the
+`6494ee9b4227` row to every printed digit. That confirms that drawing the mask
+once per program (§6.7) left stage 0's draws alone.
+
+| Student | Paired minority gain | Seeds up / down | `h=0` minority accuracy | Student NLL ratio | Parameter shift, median (L2) |
+|---|---|---|---|---|---|
+| before fine-tuning (information) | `+0.0055 +/- 0.0065` | 44 / 30 | `0.340` | `0.991 +/- 0.007` | — |
+| §3.2 fine-tuning, `1e-5` (status) | `+0.0055 +/- 0.0066` | 43 / 30 | `0.343` | `0.992 +/- 0.007` | `0.002` |
+| fine-tuning at `1e-3` (information) | `+0.0030 +/- 0.0082` | 31 / 44 | `0.399` | `0.988 +/- 0.007` | `0.09` |
+| dose arm, weight `20`, after `1e-5` fine-tuning (information) | `+0.066 +/- 0.014` | 66 / 24 | — | `0.941 +/- 0.013` | — |
+
+The paper's fine-tuning is inert on this fixture, as the screen predicted: it
+changes no conclusion of §6.5. Fine-tuning hard enough to move the student
+(`1e-3`) raises both arms' minority accuracy by about `0.06`, from `0.343` to
+`0.399` in the `h=0` arm, but not differentially. The labelled rows teach both
+students the same correction, and MPL's paired gain does not grow. The dose
+arm's advantage survives fine-tuning. So withdrawing deviation 5 removes the
+last omitted paper mechanic and leaves §6.5's mechanism answer standing.
+
+One replicate (`r=54`) is anomalous in the `1e-3` stage only. Both arms'
+students moved by `16,342` in L2 norm, identical to 12 digits, while staying
+finite. Their predictions match each other (NLL ratio `1.0002`), and the
+minority gain is `0`. The paper-rate stage of the same replicate moved by
+`7e-5`. Excluding it leaves the `1e-3` gain at `+0.0031`. The cause has not
+been investigated; the stage is information only.
 
 **Questions settled in review.**
 
